@@ -1,0 +1,8 @@
+{
+  "name": "SOL COMMANDER",
+  "description": "An immersive educational Mars exploration adventure game for junior astronauts aged 7–12.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
