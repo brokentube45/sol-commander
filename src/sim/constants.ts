@@ -143,8 +143,8 @@ export const PHYSICS_CONSTANTS = {
   CAPSULE_HALF_HEIGHT_M: 0.55,
   CAPSULE_TOTAL_HEIGHT_M: 1.8, // 2 * 0.55 + 2 * 0.35
   CONTROLLER_OFFSET_M: 0.02,
-  AUTOSTEP_MAX_HEIGHT_M: 0.25,
-  AUTOSTEP_MIN_WIDTH_M: 0.2,
+  AUTOSTEP_MAX_HEIGHT_M: 0.3,
+  AUTOSTEP_MIN_WIDTH_M: 0.12,
   SNAP_TO_GROUND_M: 0.2,
   /** [REAL] Regolith angle of repose / friction angle lower bound (~30° max climbable slope) */
   MAX_SLOPE_CLIMB_DEG: 30,
@@ -185,9 +185,9 @@ export const PHYSICS_CONSTANTS = {
   /** [SIM] Optional accessibility "Quick mode (×1.4 speed, simulation)" multiplier */
   QUICK_MODE_SPEED_MULT: 1.4,
 
-  /** [SIM] Gradual horizontal inertia response reflecting 160 kg suited mass (s) */
-  PLAYER_ACCEL_TIME_S: 0.32,
-  PLAYER_DECEL_TIME_S: 0.24,
+  /** [SIM] Responsive horizontal inertia response while preserving suited momentum (s) */
+  PLAYER_ACCEL_TIME_S: 0.14,
+  PLAYER_DECEL_TIME_S: 0.12,
 
   /** [SIM] Golombek rock sizing & streamed collider thresholds (m) */
   ROCK_VISUAL_MIN_DIAMETER_M: 0.1,
@@ -211,11 +211,11 @@ export const PHYSICS_CONSTANTS = {
   ROVER_GROUSERS_PER_WHEEL: 48,
   ROVER_REAL_TOP_SPEED_MS: 0.042, // 4.2 cm/s (152 m/h)
 
-  /** [SIM] Rover companion hysteresis, simulation drive speed, soft-sand sinkage & tilt limits */
+  /** [SIM] Rover companion hysteresis, simulation drive speed, soft-sand contact & tilt limits */
   ROVER_PARK_START_FOLLOW_M: 8.0,
   ROVER_PARK_STOP_FOLLOW_M: 4.0,
   ROVER_SIM_DRIVE_SPEED_MS: 1.0,
-  ROVER_SOFT_SAND_SINK_RATIO: 0.5, // ~50% wheel radius sinkage in soft sand pockets
+  ROVER_SOFT_SAND_SINK_RATIO: 0.0, // Keep wheels cleanly atop regolith & road surfaces without clipping
   ROVER_TILT_WARN_DEG: 30,
   ROVER_TILT_LIMIT_DEG: 45,
 

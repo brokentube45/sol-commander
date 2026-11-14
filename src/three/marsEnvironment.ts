@@ -4,6 +4,7 @@ import {
   OutpostLayoutConfig,
   SHOWCASE_CRATES,
   SHOWCASE_LAYOUT,
+  distanceToNearestRoadCenterline,
   isOnPavedSurface,
 } from '../sim/outpostLayout';
 import {
@@ -91,6 +92,42 @@ function buildMesaFormationGeometry(seed: number, width: number, height: number)
   return geo;
 }
 
+/** Sculpted natural Martian sandstone arch silhouette */
+function buildNaturalArchGeometry(spanRadius: number, tubeRadius: number, seed: number): THREE.BufferGeometry {
+  const geo = new THREE.TorusGeometry(spanRadius, tubeRadius, 10, 22, Math.PI * 1.08);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    const strata = Math.sin(v.y * 2.4 + seed) * 0.16;
+    const rugged =
+      Math.sin(v.x * 1.9 + v.z * 2.7 + seed) * 0.18 +
+      Math.cos(v.y * 3.3 - v.x * 1.4) * 0.12;
+    const baseBulge = v.y < spanRadius * 0.35 ? 1.28 : 0.92;
+    v.x *= 1.0 + strata * 0.35 + rugged * 0.12;
+    v.z *= baseBulge + rugged * 0.38;
+    v.y += rugged * 0.14;
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
+/** Small rounded desert pebble geometry for non-collidable ground scatter */
+function buildPebbleGeometry(): THREE.BufferGeometry {
+  const geo = new THREE.DodecahedronGeometry(0.11, 1);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const v = new THREE.Vector3();
+  for (let i = 0; i < pos.count; i++) {
+    v.fromBufferAttribute(pos, i);
+    v.y *= 0.52;
+    v.x *= 1.18 + Math.sin(v.z * 11.0) * 0.12;
+    pos.setXYZ(i, v.x, v.y, v.z);
+  }
+  geo.computeVertexNormals();
+  return geo;
+}
+
 export interface EnvironmentBuildResult {
   terrainGrid: TerrainHeightGrid;
   rockSpecs: RockColliderSpec[];
@@ -136,17 +173,17 @@ export function buildMarsEnvironment(
   const maxAniso = isSoftwareGl ? 1 : Math.min(renderer.capabilities.getMaxAnisotropy(), 8);
   const sunDirection = new THREE.Vector3(24, 9.5, -24).normalize();
 
-  // 1. Atmospheric Martian Sunset Sky Dome
-  const skyGeo = trackGeo(new THREE.SphereGeometry(125, 40, 26));
+  // 1. Vibrant Kid-Friendly Martian Sunset Sky Dome
+  const skyGeo = trackGeo(new THREE.SphereGeometry(132, 40, 26));
   const skyMat = trackMat(
     new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
       uniforms: {
-        uZenith: { value: new THREE.Color('#28212e') },
-        uMidSky: { value: new THREE.Color('#6f4938') },
-        uDuskBand: { value: new THREE.Color('#b66a41') },
-        uHorizon: { value: new THREE.Color('#e08b4f') },
+        uZenith: { value: new THREE.Color('#34568b') },
+        uMidSky: { value: new THREE.Color('#8e6ca8') },
+        uDuskBand: { value: new THREE.Color('#f07c4e') },
+        uHorizon: { value: new THREE.Color('#ffb36b') },
         uSunDir: { value: sunDirection },
         uDustTau: { value: 1.0 },
         uHgG: { value: MARS_FACTS.HG_ASYMMETRY_G },
@@ -179,25 +216,27 @@ export function buildMarsEnvironment(
           float stormShift = clamp((uDustTau - 0.8) / 2.8, 0.0, 1.0);
 
           vec3 sky = mix(uHorizon, uDuskBand, smoothstep(0.0, 0.16, h));
-          sky = mix(sky, uMidSky, smoothstep(0.14, 0.42, h));
-          sky = mix(sky, uZenith, smoothstep(0.36, 0.85, h));
-          sky = mix(sky, vec3(0.76, 0.41, 0.22), stormShift * 0.48);
+          sky = mix(sky, uMidSky, smoothstep(0.14, 0.44, h));
+          sky = mix(sky, uZenith, smoothstep(0.38, 0.86, h));
+          sky = mix(sky, vec3(0.84, 0.48, 0.28), stormShift * 0.45);
 
           float cosTheta = clamp(dot(normalize(vWorldDir), normalize(uSunDir)), -1.0, 1.0);
           float hgHalo = henyeyGreenstein(cosTheta, uHgG);
-          float hgWide = smoothstep(0.65, 0.995, cosTheta);
+          float hgWide = smoothstep(0.55, 0.995, cosTheta);
           float cosZenith = max(normalize(uSunDir).y, 0.05);
           float beerAtten = exp(-uDustTau * 0.35 / cosZenith);
 
-          vec3 blueSunsetTint = vec3(0.42, 0.64, 0.88) * clamp(hgHalo * 0.24, 0.0, 0.72) * (1.0 - stormShift * 0.55);
-          sky += blueSunsetTint * (0.55 + 0.45 * hgWide);
+          // Warm golden-coral solar glow plus subtle Martian forward blue-sunset scatter
+          vec3 warmSunGlow = vec3(1.0, 0.76, 0.44) * pow(max(0.0, cosTheta), 6.0) * 0.45;
+          vec3 blueSunsetTint = vec3(0.48, 0.72, 0.95) * clamp(hgHalo * 0.22, 0.0, 0.65) * (1.0 - stormShift * 0.55);
+          sky += warmSunGlow + blueSunsetTint * (0.45 + 0.45 * hgWide);
 
-          float sunDisc = smoothstep(0.99965, 0.99993, cosTheta);
-          sky += vec3(1.0, 0.96, 0.88) * sunDisc * 2.2 * max(0.25, beerAtten);
+          float sunDisc = smoothstep(0.99945, 0.99990, cosTheta);
+          sky += vec3(1.0, 0.97, 0.88) * sunDisc * 2.4 * max(0.3, beerAtten);
 
-          float wisp = sin(vWorldDir.x * 9.0 + vWorldDir.z * 5.0) * cos(vWorldDir.z * 7.0 - vWorldDir.x * 3.0);
-          float wispMask = smoothstep(0.06, 0.25, h) * (1.0 - smoothstep(0.25, 0.55, h));
-          sky += vec3(0.92, 0.62, 0.42) * max(wisp, 0.0) * wispMask * 0.09;
+          float wisp = sin(vWorldDir.x * 8.5 + vWorldDir.z * 4.5) * cos(vWorldDir.z * 6.5 - vWorldDir.x * 3.0);
+          float wispMask = smoothstep(0.06, 0.26, h) * (1.0 - smoothstep(0.26, 0.58, h));
+          sky += vec3(1.0, 0.76, 0.56) * max(wisp, 0.0) * wispMask * 0.14;
 
           gl_FragColor = vec4(sky, 1.0);
         }
@@ -305,7 +344,7 @@ export function buildMarsEnvironment(
   envScene.add(envSky);
   const envGround = new THREE.Mesh(
     trackGeo(new THREE.CircleGeometry(90, 24)),
-    trackMat(new THREE.MeshBasicMaterial({ color: '#7a2f1a', side: THREE.DoubleSide })),
+    trackMat(new THREE.MeshBasicMaterial({ color: '#d47040', side: THREE.DoubleSide })),
   );
   envGround.rotation.x = -Math.PI / 2;
   envGround.position.y = -2;
@@ -315,28 +354,28 @@ export function buildMarsEnvironment(
   const envTexture = pmrem.fromScene(envScene, 0.04).texture;
   pmrem.dispose();
   scene.environment = envTexture;
-  scene.environmentIntensity = 0.92;
+  scene.environmentIntensity = 1.05;
 
-  // Starfield
-  const starCount = quality === 'high' ? 360 : 180;
+  // High-altitude twilight stars
+  const starCount = quality === 'high' ? 280 : 140;
   const starPos = new Float32Array(starCount * 3);
   const randStars = seededRandom(2026);
   for (let i = 0; i < starCount; i++) {
     const theta = randStars() * Math.PI * 2;
-    const phi = randStars() * Math.PI * 0.38;
-    const r = 112;
+    const phi = randStars() * Math.PI * 0.28;
+    const r = 116;
     starPos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-    starPos[i * 3 + 1] = r * Math.cos(phi) + 8;
+    starPos[i * 3 + 1] = r * Math.cos(phi) + 10;
     starPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
   }
   const starGeo = trackGeo(new THREE.BufferGeometry());
   starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
   const starMat = trackMat(
     new THREE.PointsMaterial({
-      color: '#f8f9fa',
-      size: 0.42,
+      color: '#fff6e8',
+      size: 0.36,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.45,
       fog: false,
     }),
   );
@@ -368,12 +407,14 @@ export function buildMarsEnvironment(
 
   const normAttr = terrainGeo.attributes.normal as THREE.BufferAttribute;
   const vColors = new Float32Array(posAttr.count * 3);
-  const cDust = new THREE.Color('#f0c8b0');
-  const cSlope = new THREE.Color('#8e4838');
-  const cBasin = new THREE.Color('#c88266');
-  const cSoftSand = new THREE.Color('#e39c68');
-  const cRockyPatch = new THREE.Color('#6a4842');
-  const cCompactedPad = new THREE.Color('#854f3c');
+  const cDust = new THREE.Color('#ffd0a6');
+  const cOrangePlain = new THREE.Color('#f59256');
+  const cTerracotta = new THREE.Color('#dc643a');
+  const cSlope = new THREE.Color('#b64c34');
+  const cBasin = new THREE.Color('#eb8c58');
+  const cSoftSand = new THREE.Color('#ffbd7e');
+  const cRockyPatch = new THREE.Color('#a65440');
+  const cCompactedPad = new THREE.Color('#b87556');
   const tmpC = new THREE.Color();
 
   for (let i = 0; i < posAttr.count; i++) {
@@ -387,12 +428,22 @@ export function buildMarsEnvironment(
     const { k } = getLocalRockFractionK(vx, vz, layout.mode);
     const rockyFactor = THREE.MathUtils.clamp((k - 0.05) / 0.14, 0, 1);
 
+    // Rich non-repetitive macro soil variation across both flat colony interior & outer hills
+    const macroPatch =
+      0.5 +
+      0.28 * Math.sin(vx * 0.085 + 0.7) * Math.cos(vz * 0.075 - 0.4) +
+      0.22 * Math.sin((vx * 0.17 - vz * 0.14) + Math.cos(vx * 0.06) * 1.4);
+    const warmStreak =
+      0.5 + 0.5 * Math.sin(vx * 0.21 + vz * 0.12 + Math.sin(vz * 0.09) * 1.6);
+
     tmpC.copy(cBasin).lerp(cDust, heightFactor);
+    tmpC.lerp(cOrangePlain, THREE.MathUtils.clamp(macroPatch, 0, 1) * 0.55);
+    tmpC.lerp(cTerracotta, THREE.MathUtils.clamp(warmStreak, 0, 1) * 0.34);
     tmpC.lerp(cSlope, slopeFactor);
     if (softSand > 0.01) tmpC.lerp(cSoftSand, softSand * 0.72);
-    if (rockyFactor > 0.01) tmpC.lerp(cRockyPatch, rockyFactor * 0.55);
+    if (rockyFactor > 0.01) tmpC.lerp(cRockyPatch, rockyFactor * 0.48);
     if (layout.mode === 'gameplay' && isOnPavedSurface(vx, vz, layout)) {
-      tmpC.lerp(cCompactedPad, 0.55);
+      tmpC.lerp(cCompactedPad, 0.5);
     }
 
     vColors[i * 3] = tmpC.r;
@@ -405,20 +456,53 @@ export function buildMarsEnvironment(
     new THREE.MeshStandardMaterial({
       map: regolith.map,
       normalMap: regolith.normalMap,
-      normalScale: new THREE.Vector2(1.15, 1.15),
+      normalScale: new THREE.Vector2(1.05, 1.05),
       roughnessMap: regolith.roughnessMap,
-      roughness: 0.94,
+      roughness: 0.9,
       metalness: 0.03,
       aoMap: regolith.aoMap,
-      aoMapIntensity: 0.75,
+      aoMapIntensity: 0.55,
       vertexColors: true,
     }),
   );
+  // Break UV tiling repetition with smooth world-space multi-frequency color modulation
+  terrainMat.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vTerrainWorldPos;`,
+      )
+      .replace(
+        '#include <begin_vertex>',
+        `#include <begin_vertex>
+        vTerrainWorldPos = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+      );
+
+    shader.fragmentShader = shader.fragmentShader
+      .replace(
+        '#include <common>',
+        `#include <common>
+        varying vec3 vTerrainWorldPos;`,
+      )
+      .replace(
+        '#include <color_fragment>',
+        `#include <color_fragment>
+        float macroA = sin(vTerrainWorldPos.x * 0.13 + 0.5) * cos(vTerrainWorldPos.z * 0.11 - 0.3);
+        float macroB = sin(vTerrainWorldPos.x * 0.31 - vTerrainWorldPos.z * 0.27);
+        float rippleMod = sin(vTerrainWorldPos.x * 0.75 + vTerrainWorldPos.z * 0.35 + macroA * 1.4);
+        float soilTone = 1.0 + macroA * 0.09 + macroB * 0.05 + rippleMod * 0.03;
+        vec3 warmAccent = mix(vec3(1.03, 0.96, 0.91), vec3(1.08, 1.02, 0.94), clamp(0.5 + 0.5 * macroA, 0.0, 1.0));
+        diffuseColor.rgb *= soilTone * warmAccent;`,
+      );
+  };
+  terrainMat.customProgramCacheKey = () => 'mars-terrain-macro-v1';
+
   const terrainMesh = new THREE.Mesh(terrainGeo, terrainMat);
   terrainMesh.receiveShadow = true;
   scene.add(terrainMesh);
 
-  // 3. Continuous 360° Layered Martian Canyon Rim & Distant Mountain Range
+  // 3. Continuous 360° Multi-Tier Martian Canyon Rim, Distant Atmospheric Mountains & Rock Arches
   const rockTex = createMartianRockTextures(maxAniso);
   trackTex(rockTex.map);
   trackTex(rockTex.normalMap);
@@ -428,12 +512,24 @@ export function buildMarsEnvironment(
     new THREE.MeshStandardMaterial({
       map: rockTex.map,
       normalMap: rockTex.normalMap,
-      normalScale: new THREE.Vector2(1.2, 1.2),
+      normalScale: new THREE.Vector2(1.15, 1.15),
       roughnessMap: rockTex.roughnessMap,
-      color: '#a84c32',
-      roughness: 0.92,
+      color: '#d8724a',
+      roughness: 0.88,
       metalness: 0.04,
       side: THREE.DoubleSide,
+    }),
+  );
+
+  const archMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: rockTex.map,
+      normalMap: rockTex.normalMap,
+      normalScale: new THREE.Vector2(1.2, 1.2),
+      roughnessMap: rockTex.roughnessMap,
+      color: '#e07a4f',
+      roughness: 0.86,
+      metalness: 0.04,
     }),
   );
 
@@ -443,6 +539,7 @@ export function buildMarsEnvironment(
     baseHeight: number,
     peakAmp: number,
     seedOffset: number,
+    yBaseOffset: number,
     mat: THREE.Material,
   ) => {
     const radialSegs = 96;
@@ -470,53 +567,44 @@ export function buildMarsEnvironment(
     }
     geo.computeVertexNormals();
     const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.y = baseHeight * 0.36 - 2.5;
+    mesh.position.y = baseHeight * 0.36 + yBaseOffset;
     mesh.receiveShadow = true;
     scene.add(mesh);
   };
 
+  const midRidgeMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: '#bf5c44',
+      roughness: 0.94,
+      metalness: 0.02,
+      side: THREE.DoubleSide,
+    }),
+  );
+  const farHazeMountainMat = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: '#a35d64',
+      roughness: 0.98,
+      metalness: 0.01,
+      side: THREE.DoubleSide,
+    }),
+  );
+
   if (layout.mode === 'gameplay') {
-    buildContinuousRidgeRing(66, 78, 9.2, 5.0, 1.2, mesaMat);
-    buildContinuousRidgeRing(
-      82,
-      96,
-      15.0,
-      7.6,
-      3.7,
-      trackMat(
-        new THREE.MeshStandardMaterial({
-          color: '#6e2e24',
-          roughness: 0.96,
-          metalness: 0.02,
-          side: THREE.DoubleSide,
-        }),
-      ),
-    );
+    buildContinuousRidgeRing(64, 77, 10.2, 5.4, 1.2, -2.2, mesaMat);
+    buildContinuousRidgeRing(80, 95, 16.0, 8.2, 3.7, -2.5, midRidgeMat);
+    buildContinuousRidgeRing(98, 115, 22.5, 10.5, 6.1, -3.0, farHazeMountainMat);
   } else {
-    buildContinuousRidgeRing(58, 70, 8.2, 4.6, 1.2, mesaMat);
-    buildContinuousRidgeRing(
-      74,
-      88,
-      13.5,
-      7.2,
-      3.7,
-      trackMat(
-        new THREE.MeshStandardMaterial({
-          color: '#6e2e24',
-          roughness: 0.96,
-          metalness: 0.02,
-          side: THREE.DoubleSide,
-        }),
-      ),
-    );
+    buildContinuousRidgeRing(57, 69, 8.8, 4.8, 1.2, -2.2, mesaMat);
+    buildContinuousRidgeRing(73, 87, 14.5, 7.6, 3.7, -2.5, midRidgeMat);
+    buildContinuousRidgeRing(90, 106, 20.0, 9.5, 6.1, -3.0, farHazeMountainMat);
   }
 
   const randMesa = seededRandom(512);
-  const heroMesaAngles = [-1.9, -1.05, -0.35, 0.3, 2.5];
+  const heroMesaAngles = [-2.55, -1.9, -1.05, -0.35, 0.3, 1.35, 2.5];
   heroMesaAngles.forEach((angle, i) => {
     const dist = (layout.mode === 'gameplay' ? 58 : 46) + (i % 2) * 5;
-    const width = 6.8 + randMesa() * 3.8;
-    const height = 7.4 + randMesa() * 4.5;
+    const width = 6.5 + randMesa() * 3.8;
+    const height = 7.4 + randMesa() * 4.8;
     const mesaGeo = trackGeo(buildMesaFormationGeometry(i * 3.1, width, height));
     const mesa = new THREE.Mesh(mesaGeo, mesaMat);
     const mx = Math.cos(angle) * dist + 2;
@@ -527,9 +615,31 @@ export function buildMarsEnvironment(
     scene.add(mesa);
   });
 
-  // 4. Sculpted Rock Formations via InstancedMesh
+  // Two Dramatic Natural Sandstone Arches outside the playable base perimeter
+  const archConfigs =
+    layout.mode === 'gameplay'
+      ? [
+          { x: 46, z: -42, rotY: 0.65, span: 5.2, tube: 1.15 },
+          { x: -48, z: 36, rotY: -0.45, span: 4.6, tube: 1.0 },
+        ]
+      : [
+          { x: 30, z: -26, rotY: 0.65, span: 3.8, tube: 0.85 },
+          { x: -28, z: 22, rotY: -0.45, span: 3.4, tube: 0.78 },
+        ];
+  archConfigs.forEach((cfg, idx) => {
+    const aGeo = trackGeo(buildNaturalArchGeometry(cfg.span, cfg.tube, idx * 4.3 + 1.5));
+    const arch = new THREE.Mesh(aGeo, archMat);
+    arch.position.set(cfg.x, gAt(cfg.x, cfg.z) - 0.35, cfg.z);
+    arch.rotation.y = cfg.rotY;
+    arch.castShadow = !isSoftwareGl && quality === 'high';
+    arch.receiveShadow = true;
+    scene.add(arch);
+  });
+
+  // 4. Sculpted Rock Formations via InstancedMesh (Collidable Rocks + Non-Collidable Pebble Scatter)
   const outcropGeo = trackGeo(buildStratifiedRockGeometry());
   const basaltGeo = trackGeo(buildJaggedBasaltGeometry());
+  const pebbleGeo = trackGeo(buildPebbleGeometry());
 
   const rockMat = trackMat(
     new THREE.MeshStandardMaterial({
@@ -538,8 +648,8 @@ export function buildMarsEnvironment(
       normalScale: new THREE.Vector2(1.1, 1.1),
       roughnessMap: rockTex.roughnessMap,
       color: '#ffffff',
-      roughness: 0.9,
-      metalness: 0.05,
+      roughness: 0.86,
+      metalness: 0.04,
     }),
   );
 
@@ -556,7 +666,7 @@ export function buildMarsEnvironment(
 
   const dummy = new THREE.Object3D();
   const rockColor = new THREE.Color();
-  const tints = ['#d98462', '#b95f42', '#9c4b35', '#e49b72'];
+  const tints = ['#f09864', '#de6e44', '#c95a3a', '#f6b282', '#bd5d46'];
 
   outcropSpecs.forEach((spec, idx) => {
     dummy.position.set(spec.x, spec.y, spec.z);
@@ -588,18 +698,52 @@ export function buildMarsEnvironment(
   basaltInst.computeBoundingSphere();
   scene.add(basaltInst);
 
-  // 5. Environmental Storytelling Props & Comms/Weather Mast
+  // Small non-collidable pebble & sandstone chip scatter (zero Rapier overhead, strictly off roads/pads)
+  const pebbleBudget = quality === 'high' ? 240 : 110;
+  const pebbleMatrices: THREE.Matrix4[] = [];
+  const pebbleColors: THREE.Color[] = [];
+  const randPebble = seededRandom(8842);
+  const pMaxR = layout.mode === 'gameplay' ? 46 : 28;
+  for (let attempt = 0; attempt < 950 && pebbleMatrices.length < pebbleBudget; attempt++) {
+    const a = randPebble() * Math.PI * 2;
+    const r = 4.5 + Math.sqrt(randPebble()) * pMaxR;
+    const px = layout.walkableCenter.x + Math.cos(a) * r;
+    const pz = layout.walkableCenter.z + Math.sin(a) * r;
+    if (isOnPavedSurface(px, pz, layout)) continue;
+    if (layout.roads.length > 0 && distanceToNearestRoadCenterline(px, pz, layout) < 2.3) continue;
+    dummy.position.set(px, gAt(px, pz) + 0.025, pz);
+    dummy.rotation.set((randPebble() - 0.5) * 0.3, randPebble() * Math.PI * 2, (randPebble() - 0.5) * 0.3);
+    const s = 0.55 + randPebble() * 0.75;
+    dummy.scale.set(s * (0.9 + randPebble() * 0.4), s * 0.75, s);
+    dummy.updateMatrix();
+    pebbleMatrices.push(dummy.matrix.clone());
+    pebbleColors.push(new THREE.Color(tints[pebbleMatrices.length % tints.length]));
+  }
+  if (pebbleMatrices.length > 0) {
+    const pebbleInst = new THREE.InstancedMesh(pebbleGeo, rockMat, pebbleMatrices.length);
+    pebbleMatrices.forEach((mat4, idx) => {
+      pebbleInst.setMatrixAt(idx, mat4);
+      pebbleInst.setColorAt(idx, pebbleColors[idx]);
+    });
+    pebbleInst.instanceMatrix.needsUpdate = true;
+    if (pebbleInst.instanceColor) pebbleInst.instanceColor.needsUpdate = true;
+    pebbleInst.receiveShadow = true;
+    pebbleInst.computeBoundingSphere();
+    scene.add(pebbleInst);
+  }
+
+  // 5. Environmental Storytelling Props, Exploration Points of Interest & Comms/Weather Mast
   const matDarkMetal = trackMat(
-    new THREE.MeshStandardMaterial({ color: '#24364d', roughness: 0.45, metalness: 0.65 }),
+    new THREE.MeshStandardMaterial({ color: '#334d6e', roughness: 0.42, metalness: 0.55 }),
   );
   const matOrangeAccent = trackMat(
-    new THREE.MeshStandardMaterial({ color: '#e85d04', roughness: 0.42, metalness: 0.18 }),
+    new THREE.MeshStandardMaterial({ color: '#f26419', roughness: 0.40, metalness: 0.16 }),
   );
   const matAmberLens = trackMat(
     new THREE.MeshStandardMaterial({
       color: '#ffb703',
       emissive: '#ffb703',
-      emissiveIntensity: 1.8,
+      emissiveIntensity: 1.85,
       roughness: 0.2,
     }),
   );
@@ -723,6 +867,59 @@ export function buildMarsEnvironment(
     scene.add(gStake);
   });
 
+  // Two Kid-Friendly Off-Road Exploration Points of Interest (crystal mineral geo-site + crater sample site)
+  const matCrystalCyan = trackMat(
+    new THREE.MeshPhysicalMaterial({
+      color: '#38bdf8',
+      emissive: '#0ea5e9',
+      emissiveIntensity: 0.95,
+      roughness: 0.14,
+      metalness: 0.1,
+      clearcoat: 1.0,
+    }),
+  );
+  const matCrystalGold = trackMat(
+    new THREE.MeshPhysicalMaterial({
+      color: '#ffd166',
+      emissive: '#f59e0b',
+      emissiveIntensity: 0.85,
+      roughness: 0.16,
+      metalness: 0.1,
+      clearcoat: 1.0,
+    }),
+  );
+  const crystalGeo = trackGeo(new THREE.OctahedronGeometry(0.22, 0));
+  const poiSites =
+    layout.mode === 'gameplay'
+      ? [
+          { x: -24.0, z: 23.5, crystalMat: matCrystalCyan },
+          { x: 31.5, z: -28.5, crystalMat: matCrystalGold },
+        ]
+      : [
+          { x: -8.8, z: 8.6, crystalMat: matCrystalCyan },
+          { x: 17.5, z: -14.2, crystalMat: matCrystalGold },
+        ];
+  poiSites.forEach((site, sIdx) => {
+    const poiGroup = new THREE.Group();
+    poiGroup.position.set(site.x, gAt(site.x, site.z), site.z);
+    for (let c = 0; c < 4; c++) {
+      const ang = (c / 4) * Math.PI * 2 + sIdx * 0.7;
+      const crystal = new THREE.Mesh(crystalGeo, site.crystalMat);
+      crystal.scale.set(0.75, 1.55 + (c % 2) * 0.65, 0.75);
+      crystal.position.set(Math.cos(ang) * 0.42, 0.22, Math.sin(ang) * 0.42);
+      crystal.rotation.set((c % 2 === 0 ? 1 : -1) * 0.22, ang, 0.18);
+      poiGroup.add(crystal);
+    }
+    const probePole = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.03, 0.04, 0.85, 8)), matDarkMetal);
+    probePole.position.set(0.75, 0.425, 0.35);
+    poiGroup.add(probePole);
+    const probeOrb = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.085, 10, 8)), matSkyBeacon);
+    probeOrb.position.set(0.75, 0.88, 0.35);
+    beaconLights.push(probeOrb);
+    poiGroup.add(probeOrb);
+    scene.add(poiGroup);
+  });
+
   // Outpost Weather / Comms Sensor Mast (compact in Showcase, tall relay tower in Gameplay)
   const mastSpec = layout.modules.commsMast;
   const mastGroup = new THREE.Group();
@@ -812,10 +1009,10 @@ export function buildMarsEnvironment(
   const dustMat = trackMat(
     new THREE.PointsMaterial({
       map: dustTex,
-      color: '#ffd6a5',
-      size: 0.22,
+      color: '#ffe3bc',
+      size: 0.24,
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.72,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     }),

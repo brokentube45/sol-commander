@@ -958,11 +958,11 @@ export class MarsPhysicsWorld {
         this.addFixedCuboid(
           ub.id,
           rx,
-          uy + 0.045,
+          uy + 0.032,
           rz,
           ub.widthM * 0.48,
-          0.045,
-          0.26,
+          0.032,
+          0.28,
           yaw,
           0,
           0,
@@ -993,7 +993,7 @@ export class MarsPhysicsWorld {
     if (
       !force &&
       Number.isFinite(this.lastRockSyncX) &&
-      Math.hypot(playerX - this.lastRockSyncX, playerZ - this.lastRockSyncZ) < 1.0
+      Math.hypot(playerX - this.lastRockSyncX, playerZ - this.lastRockSyncZ) < 3.5
     ) {
       return this.activeRockColliders.size;
     }
@@ -1152,8 +1152,12 @@ export class MarsPhysicsWorld {
     return (Math.atan(grad) * 180) / Math.PI;
   }
 
-  private stepFixed(input: CharacterFrameInput, jumpPending: { value: boolean }): void {
-    const dt = PHYSICS_CONSTANTS.FIXED_DT_S;
+  private stepWithDt(
+    dt: number,
+    input: CharacterFrameInput,
+    jumpPending: { value: boolean },
+  ): void {
+    if (dt <= 0) return;
     const footOffset = PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M + PHYSICS_CONSTANTS.CAPSULE_RADIUS_M;
 
     const currentPos = this.playerBody.translation();
@@ -1226,7 +1230,7 @@ export class MarsPhysicsWorld {
     const nextZ = currentPos.z + corrected.z;
 
     const supportY = this.getGroundSupportHeightAt(nextX, nextZ);
-    const minCenterY = supportY + footOffset + PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M * 0.5;
+    const minCenterY = supportY + footOffset + 0.002;
     let clampedToFloor = false;
     if (nextY < minCenterY) {
       nextY = minCenterY;
@@ -1269,13 +1273,11 @@ export class MarsPhysicsWorld {
     }
 
     if (dt > 0) {
-      const actualVx = corrected.x / dt;
-      const actualVz = corrected.z / dt;
-      if (Math.abs(desiredMovement.x) > 1e-6 && Math.abs(corrected.x) < Math.abs(desiredMovement.x) * 0.25) {
-        this.vx = actualVx;
-      }
-      if (Math.abs(desiredMovement.z) > 1e-6 && Math.abs(corrected.z) < Math.abs(desiredMovement.z) * 0.25) {
-        this.vz = actualVz;
+      const desDist = Math.hypot(desiredMovement.x, desiredMovement.z);
+      const actDist = Math.hypot(corrected.x, corrected.z);
+      if (desDist > 1e-6 && actDist < desDist * 0.12) {
+        this.vx = corrected.x / dt;
+        this.vz = corrected.z / dt;
       }
     }
   }
@@ -1286,25 +1288,21 @@ export class MarsPhysicsWorld {
     }
     const t0 = performance.now();
     const clampedDt = Math.min(Math.max(frameDtS, 0), PHYSICS_CONSTANTS.MAX_FRAME_DT_S);
-    this.accumulatorS += clampedDt;
-
     const jumpPending = { value: input.jumpRequested };
-    const dt = PHYSICS_CONSTANTS.FIXED_DT_S;
-    let steps = 0;
-    const maxSteps = 16;
 
-    while (this.accumulatorS >= dt && steps < maxSteps) {
-      this.stepFixed(input, jumpPending);
-      this.accumulatorS -= dt;
-      steps++;
+    if (clampedDt > 0) {
+      const substeps = clampedDt > 0.024 ? Math.min(6, Math.ceil(clampedDt / 0.018)) : 1;
+      const subDt = clampedDt / substeps;
+      for (let i = 0; i < substeps; i++) {
+        this.stepWithDt(subDt, input, jumpPending);
+      }
     }
 
     this.syncStreamedRocks(this.currCenter.x, this.currCenter.z);
 
-    const alpha = Math.min(1, Math.max(0, this.accumulatorS / dt));
-    this.interpCenter.x = this.prevCenter.x + (this.currCenter.x - this.prevCenter.x) * alpha;
-    this.interpCenter.y = this.prevCenter.y + (this.currCenter.y - this.prevCenter.y) * alpha;
-    this.interpCenter.z = this.prevCenter.z + (this.currCenter.z - this.prevCenter.z) * alpha;
+    this.interpCenter.x = this.currCenter.x;
+    this.interpCenter.y = this.currCenter.y;
+    this.interpCenter.z = this.currCenter.z;
 
     this.lastStepDurationMs = performance.now() - t0;
     return this.getSnapshot();
@@ -1312,7 +1310,7 @@ export class MarsPhysicsWorld {
 
   public stepSingleFixed(input: CharacterFrameInput): PlayerStepSnapshot {
     const jumpPending = { value: input.jumpRequested };
-    this.stepFixed(input, jumpPending);
+    this.stepWithDt(PHYSICS_CONSTANTS.FIXED_DT_S, input, jumpPending);
     this.syncStreamedRocks(this.currCenter.x, this.currCenter.z);
     this.interpCenter.x = this.currCenter.x;
     this.interpCenter.y = this.currCenter.y;

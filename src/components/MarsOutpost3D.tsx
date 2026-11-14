@@ -1,4 +1,4 @@
-import { MutableRefObject, useEffect, useRef, useState } from 'react';
+import { MutableRefObject, memo, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -27,6 +27,7 @@ import {
   OutpostLayoutConfig,
   OutpostLayoutMode,
   SHOWCASE_LAYOUT,
+  isOnPavedSurface,
 } from '../sim/outpostLayout';
 import { getSoftSandFactorAt, groundHeightAt } from '../sim/terrainField';
 import { buildMarsEnvironment } from '../three/marsEnvironment';
@@ -224,7 +225,7 @@ function detectSoftwareGl(): boolean {
   }
 }
 
-export function MarsOutpost3D({
+export const MarsOutpost3D = memo(function MarsOutpost3D({
   gamePhase,
   selectedLandmark,
   onSelectLandmark,
@@ -417,7 +418,7 @@ export function MarsOutpost3D({
       }
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.06;
+      renderer.toneMappingExposure = 1.15;
       renderer.domElement.style.display = 'block';
       renderer.domElement.style.width = '100%';
       renderer.domElement.style.height = '100%';
@@ -438,7 +439,7 @@ export function MarsOutpost3D({
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
     const targetPixelRatio =
-      isSoftwareGl || quality === 'low' ? 1 : Math.min(window.devicePixelRatio || 1, 2);
+      isSoftwareGl || quality === 'low' ? 1 : Math.min(window.devicePixelRatio || 1, 1.5);
     renderer.setPixelRatio(targetPixelRatio);
     renderer.setSize(width, height);
     renderer.shadowMap.enabled = !isSoftwareGl && quality === 'high';
@@ -456,8 +457,8 @@ export function MarsOutpost3D({
     renderer.domElement.addEventListener('webglcontextrestored', handleContextRestored);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#241724');
-    scene.fog = new THREE.FogExp2('#5c2e26', 0.0115);
+    scene.background = new THREE.Color('#e08152');
+    scene.fog = new THREE.FogExp2('#d8784a', 0.0072);
 
     const camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 220);
     const currentCamPos = new THREE.Vector3(...CAMERA_PRESETS.overview.pos);
@@ -466,30 +467,32 @@ export function MarsOutpost3D({
     camera.lookAt(currentLookAt);
 
     // Cinematic Sunset Lighting Rig
-    const hemiLight = new THREE.HemisphereLight('#476ea8', '#9e4425', 0.85);
+    const hemiLight = new THREE.HemisphereLight('#8cb8f5', '#e67a44', 1.22);
     hemiLight.position.set(0, 35, 0);
     scene.add(hemiLight);
 
-    const sunLight = new THREE.DirectionalLight('#ffbe73', 2.65);
-    sunLight.position.set(24, 10.5, -22);
+    const sunLight = new THREE.DirectionalLight('#ffd08a', 3.05);
+    sunLight.position.set(26, 14.5, -24);
     sunLight.castShadow = !isSoftwareGl && quality === 'high';
-    sunLight.shadow.mapSize.width = 2048;
-    sunLight.shadow.mapSize.height = 2048;
+    sunLight.shadow.mapSize.width = 1536;
+    sunLight.shadow.mapSize.height = 1536;
     sunLight.shadow.camera.near = 4;
-    sunLight.shadow.camera.far = 75;
-    sunLight.shadow.camera.left = -20;
-    sunLight.shadow.camera.right = 20;
-    sunLight.shadow.camera.top = 18;
-    sunLight.shadow.camera.bottom = -16;
+    sunLight.shadow.camera.far = 110;
+    sunLight.shadow.camera.left = -36;
+    sunLight.shadow.camera.right = 36;
+    sunLight.shadow.camera.top = 32;
+    sunLight.shadow.camera.bottom = -32;
     sunLight.shadow.bias = -0.0004;
     sunLight.shadow.normalBias = 0.025;
+    sunLight.shadow.radius = 2.0;
     scene.add(sunLight);
+    scene.add(sunLight.target);
 
-    const skyFillLight = new THREE.DirectionalLight('#5c85c9', 0.65);
+    const skyFillLight = new THREE.DirectionalLight('#82aee8', 0.88);
     skyFillLight.position.set(-16, 10, 14);
     scene.add(skyFillLight);
 
-    const rimLight = new THREE.DirectionalLight('#ff8243', 0.45);
+    const rimLight = new THREE.DirectionalLight('#ff9654', 0.68);
     rimLight.position.set(12, 4, 16);
     scene.add(rimLight);
 
@@ -503,6 +506,9 @@ export function MarsOutpost3D({
     // Build Environment & Detailed Outpost Assets (single-source TerrainHeightGrid per layoutMode)
     const envBuild = buildMarsEnvironment(scene, renderer, quality, isSoftwareGl, activeLayout);
     const gAt = (x: number, z: number) => groundHeightAt(x, z, envBuild.terrainGrid);
+    const roverRockObstacles = envBuild.rockSpecs
+      .filter((r) => r.radiusXZ >= 0.22)
+      .map((r) => ({ x: r.x, z: r.z, radius: r.radiusXZ }));
     const outpost = buildOutpostAssets(
       scene,
       renderer,
@@ -513,7 +519,7 @@ export function MarsOutpost3D({
     );
 
     if (!isSoftwareGl) {
-      const msaaSamples = renderer.capabilities.isWebGL2 && quality === 'high' ? 4 : 0;
+      const msaaSamples = renderer.capabilities.isWebGL2 && quality === 'high' ? 2 : 0;
       composerTarget = new THREE.WebGLRenderTarget(width, height, {
         type: THREE.HalfFloatType,
         samples: msaaSamples,
@@ -579,6 +585,7 @@ export function MarsOutpost3D({
         extraMats.push(mat);
         const mesh = new THREE.Mesh(geo, mat);
         mesh.visible = false;
+        mesh.renderOrder = 8;
         scene.add(mesh);
         pool.push({ mesh, mat, age: maxAge, maxAge });
       }
@@ -599,7 +606,14 @@ export function MarsOutpost3D({
     ) => {
       const slot = pool[cursorRef.idx % pool.length];
       cursorRef.idx = (cursorRef.idx + 1) % pool.length;
-      slot.mesh.position.set(x, groundHeightAt(x, z, envBuild.terrainGrid) + 0.016, z);
+      const surfY = physicsWorld
+        ? physicsWorld.getGroundSupportHeightAt(x, z)
+        : groundHeightAt(x, z, envBuild.terrainGrid);
+      const rawGroundY = groundHeightAt(x, z, envBuild.terrainGrid);
+      const onRaisedPad = surfY - rawGroundY > 0.05;
+      const decalOffset =
+        !onRaisedPad && isOnPavedSurface(x, z, activeLayout) ? 0.044 : 0.018;
+      slot.mesh.position.set(x, surfY + decalOffset, z);
       slot.mesh.rotation.y = yaw;
       slot.mesh.visible = true;
       slot.age = 0;
@@ -666,19 +680,54 @@ export function MarsOutpost3D({
       activeLayout,
     );
     const mSpec = activeLayout.modules;
-    const outpostObstacles = [
-      { x: mSpec.habitat.x, z: mSpec.habitat.z, radius: mSpec.habitat.deckRadius + 0.25 },
-      { x: mSpec.chapea.x, z: mSpec.chapea.z, radius: mSpec.chapea.plinthHalfX + 0.35 },
-      { x: mSpec.greenhouse.x, z: mSpec.greenhouse.z, radius: mSpec.greenhouse.floorRadius + 0.35 },
-      { x: mSpec.recycler.x, z: mSpec.recycler.z, radius: 1.2 },
-      { x: mSpec.shelter.x, z: mSpec.shelter.z, radius: 1.7 },
-      { x: mSpec.tank2.x, z: mSpec.tank2.z, radius: 1.6 },
-      { x: outpost.stationInteractPoints.solar.x, z: outpost.stationInteractPoints.solar.z, radius: 2.2 },
-      { x: outpost.stationInteractPoints['ice-drill'].x, z: outpost.stationInteractPoints['ice-drill'].z, radius: 2.2 },
-      { x: outpost.stationInteractPoints.windmill.x, z: outpost.stationInteractPoints.windmill.z, radius: 1.8 },
-      { x: outpost.stationInteractPoints['power-console'].x, z: outpost.stationInteractPoints['power-console'].z, radius: 1.1 },
-      { x: mSpec.commsMast.x, z: mSpec.commsMast.z, radius: mSpec.commsMast.radiusM + 0.35 },
+    const outpostObstacles: Array<{ x: number; z: number; radius: number }> = [
+      { x: mSpec.habitat.x, z: mSpec.habitat.z, radius: mSpec.habitat.deckRadius + 0.35 },
+      {
+        x: mSpec.habitat.x + mSpec.airlockOffset.dx,
+        z: mSpec.habitat.z + mSpec.airlockOffset.dz,
+        radius: 1.5,
+      },
+      { x: mSpec.chapea.x, z: mSpec.chapea.z, radius: mSpec.chapea.plinthHalfX + 0.45 },
+      { x: mSpec.greenhouse.x, z: mSpec.greenhouse.z, radius: mSpec.greenhouse.floorRadius + 0.45 },
+      { x: mSpec.greenhouse.waterTankX, z: mSpec.greenhouse.waterTankZ, radius: 0.9 },
+      { x: mSpec.recycler.x, z: mSpec.recycler.z, radius: 1.3 },
+      { x: mSpec.shelter.x, z: mSpec.shelter.z, radius: 1.85 },
+      { x: mSpec.tank2.x, z: mSpec.tank2.z, radius: 1.8 },
+      ...mSpec.solarPanels.map(([sx, sz]) => ({ x: sx, z: sz, radius: 1.5 })),
+      { x: mSpec.batteryBank.x, z: mSpec.batteryBank.z, radius: 1.6 },
+      ...mSpec.windmills.map(([wx, wz]) => ({ x: wx, z: wz, radius: 1.6 })),
+      { x: mSpec.verticalTurbine.x, z: mSpec.verticalTurbine.z, radius: 1.1 },
+      { x: mSpec.iceDrill.x, z: mSpec.iceDrill.z, radius: 2.3 },
+      { x: mSpec.powerConsole.x, z: mSpec.powerConsole.z, radius: 1.15 },
+      { x: mSpec.commsMast.x, z: mSpec.commsMast.z, radius: mSpec.commsMast.radiusM + 0.45 },
+      { x: mSpec.landingPad.x + 4.6, z: mSpec.landingPad.z, radius: 2.4 },
     ];
+    if (mSpec.connHabGh.elevatedOverpass) {
+      for (const px of mSpec.connHabGh.pierXs) {
+        const t = (px - mSpec.connHabGh.startX) / (mSpec.connHabGh.endX - mSpec.connHabGh.startX);
+        const pz = mSpec.connHabGh.startZ + (mSpec.connHabGh.endZ - mSpec.connHabGh.startZ) * t;
+        outpostObstacles.push({ x: px, z: pz, radius: 0.75 });
+      }
+    }
+    if (mSpec.roverPad.enabled) {
+      outpostObstacles.push({
+        x: mSpec.roverPad.x - mSpec.roverPad.widthM * 0.5 + 0.55,
+        z: mSpec.roverPad.z - mSpec.roverPad.depthM * 0.5 + 0.55,
+        radius: 0.95,
+      });
+    }
+    for (const ub of activeLayout.utilityBridges) {
+      if (ub.kind === 'pipe-bridge') {
+        outpostObstacles.push({ x: ub.x1, z: ub.z1, radius: 0.65 });
+        outpostObstacles.push({ x: ub.x2, z: ub.z2, radius: 0.65 });
+      }
+    }
+    for (const sp of activeLayout.signposts) {
+      outpostObstacles.push({ x: sp.x, z: sp.z, radius: 0.48 });
+    }
+    for (const bol of activeLayout.bollards) {
+      outpostObstacles.push({ x: bol.x, z: bol.z, radius: 0.36 });
+    }
 
     // Initialize authoritative Rapier WASM physics world ONLY for Gameplay layout
     let physicsWorld: MarsPhysicsWorld | null = null;
@@ -719,6 +768,7 @@ export function MarsOutpost3D({
       layoutMode === 'gameplay' ? activeLayout.modules.astroSpawn.yaw : THIRD_PERSON_INIT_YAW;
     const playerPos = new THREE.Vector2(outpost.astroBasePos.x, outpost.astroBasePos.z);
     let playerFootY = gAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
+    let smoothFootY = playerFootY;
     let playerYaw = initPlayerYaw;
     let playerGrounded = true;
     let playerJumpQueued = false;
@@ -726,6 +776,8 @@ export function MarsOutpost3D({
     let camPitch = THIRD_PERSON_INIT_PITCH;
     let camDist = THIRD_PERSON_DIST;
     let walkPhase = 0;
+    let walkBlend = 0;
+    let visualHorizSpeed = 0;
     let lastStepHalfCycle = 0;
     let landingDipY = 0;
     let fpInteractPulse = 0;
@@ -744,6 +796,7 @@ export function MarsOutpost3D({
     let lastJumpTelemetry: MarsJumpTelemetry | null = null;
     let lastPhysicsPushMs = 0;
     let lastPoseTelemetryMs = 0;
+    let lastCompassEventMs = 0;
 
     // Optional zero-cost-when-off ?debug=1 diagnostics layer
     let debugSpeedMult = 1;
@@ -929,6 +982,32 @@ export function MarsOutpost3D({
 
     // Keyboard state for WASD / Arrow Keys / Shift Lope / Space Jump / V 1P-3P / F Lens / E Interact
     const keysDown = new Set<string>();
+    const normalizeMoveToken = (ev: KeyboardEvent): string | null => {
+      switch (ev.code) {
+        case 'KeyW':
+        case 'ArrowUp':
+          return ev.code === 'ArrowUp' ? 'arrowup' : 'w';
+        case 'KeyS':
+        case 'ArrowDown':
+          return ev.code === 'ArrowDown' ? 'arrowdown' : 's';
+        case 'KeyA':
+        case 'ArrowLeft':
+          return ev.code === 'ArrowLeft' ? 'arrowleft' : 'a';
+        case 'KeyD':
+        case 'ArrowRight':
+          return ev.code === 'ArrowRight' ? 'arrowright' : 'd';
+        case 'ShiftLeft':
+        case 'ShiftRight':
+          return 'shift';
+        default: {
+          const kl = ev.key.toLowerCase();
+          if (['w', 'a', 's', 'd', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(kl)) {
+            return kl;
+          }
+          return null;
+        }
+      }
+    };
     const handleKeyDown = (ev: KeyboardEvent) => {
       const target = ev.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
@@ -967,8 +1046,10 @@ export function MarsOutpost3D({
         return;
       }
       if (simState?.mapOpen) return;
-      if (['w', 'a', 's', 'd', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
-        keysDown.add(k);
+      const moveToken = normalizeMoveToken(ev);
+      if (moveToken) {
+        if (moveToken.startsWith('arrow')) ev.preventDefault();
+        keysDown.add(moveToken);
       } else if (k === ' ' && !ev.repeat) {
         ev.preventDefault();
         if (playerGrounded) {
@@ -1005,6 +1086,8 @@ export function MarsOutpost3D({
       }
     };
     const handleKeyUp = (ev: KeyboardEvent) => {
+      const moveToken = normalizeMoveToken(ev);
+      if (moveToken) keysDown.delete(moveToken);
       keysDown.delete(ev.key.toLowerCase());
     };
 
@@ -1324,8 +1407,8 @@ export function MarsOutpost3D({
     const _tpLook = new THREE.Vector3();
     const _introCamStart = new THREE.Vector3(0.0, 10.6, 22.5);
     const _introLookStart = new THREE.Vector3(0.0, 2.0, 1.5);
-    const _clearFogColor = new THREE.Color('#5c2e26');
-    const _stormFogColor = new THREE.Color('#8f4722');
+    const _clearFogColor = new THREE.Color('#d8784a');
+    const _stormFogColor = new THREE.Color('#a8522b');
     const _tintDustDevil = new THREE.Vector3(1.24, 0.78, 0.50);
     const _tintKatabatic = new THREE.Vector3(1.12, 0.84, 0.68);
     const _tintElectro = new THREE.Vector3(1.26, 0.72, 0.58);
@@ -1363,6 +1446,7 @@ export function MarsOutpost3D({
         if (phase === 'landing' || phase === 'prologue') {
           playerPos.set(outpost.astroBasePos.x, outpost.astroBasePos.z);
           playerFootY = gAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
+          smoothFootY = playerFootY;
           playerYaw = outpost.astroBasePos.yaw;
           camYaw = initPlayerYaw;
           camPitch = THIRD_PERSON_INIT_PITCH;
@@ -1371,6 +1455,7 @@ export function MarsOutpost3D({
           moveTutorialReported = false;
           lookTutorialReported = false;
           walkPhase = 0;
+          walkBlend = 0;
           physicsWorld?.teleportPlayer(outpost.astroBasePos.x, outpost.astroBasePos.z);
           if (document.pointerLockElement === renderer.domElement) {
             document.exitPointerLock?.();
@@ -1378,6 +1463,7 @@ export function MarsOutpost3D({
         } else if (phase === 'briefing') {
           playerPos.set(outpost.astroBasePos.x, outpost.astroBasePos.z);
           playerFootY = gAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
+          smoothFootY = playerFootY;
           playerYaw = initPlayerYaw;
           camYaw = initPlayerYaw;
           camPitch = THIRD_PERSON_INIT_PITCH;
@@ -1394,6 +1480,7 @@ export function MarsOutpost3D({
         } else if (phase === 'gameplay' && prevPhase !== 'briefing') {
           playerPos.set(outpost.astroBasePos.x, outpost.astroBasePos.z);
           playerFootY = gAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
+          smoothFootY = playerFootY;
           playerYaw = initPlayerYaw;
           camYaw = initPlayerYaw;
           camPitch = THIRD_PERSON_INIT_PITCH;
@@ -1459,22 +1546,34 @@ export function MarsOutpost3D({
       // Data-driven Dust Storm lighting (Opportunity curve + active localized weatherEvent surge)
       const wxActive = phase === 'gameplay' && Boolean(sim?.weatherEvent?.active);
       const targetDustFactor = phase === 'gameplay' && sim ? sim.dustFactor : 1.0;
-      const targetSunIntensity = 2.65 * Math.max(0.25, targetDustFactor) * (wxActive ? 0.78 : 1.0);
-      const targetHemiIntensity = 0.85 * (0.45 + targetDustFactor * 0.55);
+      const targetSunIntensity = 3.05 * Math.max(0.28, targetDustFactor) * (wxActive ? 0.78 : 1.0);
+      const targetHemiIntensity = 1.22 * (0.48 + targetDustFactor * 0.52);
       const stormSeverity = THREE.MathUtils.clamp(
         (1.0 - targetDustFactor) / 0.72 + (wxActive ? 0.35 : 0),
         0,
         1,
       );
-      const targetFogDensity = 0.0115 + stormSeverity * 0.038;
+      const targetFogDensity = 0.0072 + stormSeverity * 0.036;
 
       sunLight.intensity = THREE.MathUtils.damp(sunLight.intensity, targetSunIntensity, 3.0, delta);
+      if (phase === 'gameplay') {
+        const shadowTexel = 72 / 1536;
+        const sx = Math.round(playerPos.x / shadowTexel) * shadowTexel;
+        const sz = Math.round(playerPos.y / shadowTexel) * shadowTexel;
+        sunLight.target.position.set(sx, 0, sz);
+        sunLight.position.set(sx + 26, 14.5, sz - 24);
+      } else {
+        sunLight.target.position.set(0, 0, 0);
+        sunLight.position.set(26, 14.5, -24);
+      }
+      sunLight.target.updateMatrixWorld();
+
       hemiLight.intensity = THREE.MathUtils.damp(hemiLight.intensity, targetHemiIntensity, 3.0, delta);
       if (scene.fog instanceof THREE.FogExp2) {
         scene.fog.density = THREE.MathUtils.damp(scene.fog.density, targetFogDensity, 2.5, delta);
         scene.fog.color.lerpColors(_clearFogColor, _stormFogColor, stormSeverity);
       }
-      envBuild.dustMat.opacity = 0.65 + stormSeverity * 0.32;
+      envBuild.dustMat.opacity = 0.68 + stormSeverity * 0.3;
 
       // High-fidelity 'Dust Storm' shader pass (orange haze blend + grain + radial chromatic aberration)
       stormPassIntensity = THREE.MathUtils.damp(
@@ -1644,11 +1743,22 @@ export function MarsOutpost3D({
         delta,
       );
 
-      // Pulse walkway amber beacons brighter during Scene 4 or Radiation Alert
+      // Pulse walkway amber beacons brighter during Scene 4 or Radiation Alert + staggered colony lights
       envBuild.beaconLights.forEach((mesh) => {
         const mat = mesh.material as THREE.MeshStandardMaterial;
         if (mat && 'emissiveIntensity' in mat) {
-          mat.emissiveIntensity = auroraTarget > 0.15 ? 2.6 + Math.sin(elapsed * 6.0) * 0.8 : 1.7;
+          mat.emissiveIntensity = auroraTarget > 0.15 ? 2.6 + Math.sin(elapsed * 6.0) * 0.8 : 1.75;
+        }
+      });
+      outpost.colonyBlinkingLights.forEach((mesh, idx) => {
+        const mat = mesh.material as THREE.MeshStandardMaterial;
+        if (mat && 'emissiveIntensity' in mat) {
+          if (isStatic) {
+            mat.emissiveIntensity = 1.5;
+          } else {
+            const pulse = 0.5 + 0.5 * Math.sin(elapsed * 3.4 + idx * 1.15);
+            mat.emissiveIntensity = 0.55 + pulse * 1.65;
+          }
         }
       });
 
@@ -2015,6 +2125,40 @@ export function MarsOutpost3D({
         const isSprinting = keysDown.has('shift') || Boolean(uiInput?.sprint);
         let horizontalSpeed = 0;
 
+        if (!isStatic && simState) {
+          const roverActors: Array<{ x: number; z: number; radius: number }> = [
+            { x: playerPos.x, z: playerPos.y, radius: 0.5 },
+            ...crewAgents
+              .filter((ag) => {
+                const mem = simState.crew?.find((m) => m.id === ag.id);
+                return !mem || mem.alive;
+              })
+              .map((ag) => ({ x: ag.x, z: ag.z, radius: 0.45 })),
+          ];
+          const roverSubSteps = debugModeRef.current && debugSpeedMult > 1 ? Math.ceil(debugSpeedMult) : 1;
+          const roverDt = (delta * (debugModeRef.current ? debugSpeedMult : 1)) / roverSubSteps;
+          for (let sIdx = 0; sIdx < roverSubSteps; sIdx++) {
+            roverController = stepRoverController(roverController, roverDt, {
+              playerX: playerPos.x,
+              playerZ: playerPos.y,
+              playerYaw,
+              damaged: simState.roverDamaged,
+              holdPosition: isFrozenInCommandMode,
+              obstacles: outpostObstacles,
+              actors: roverActors,
+              rocks: roverRockObstacles,
+              grid: envBuild.terrainGrid,
+              layout: activeLayout,
+            });
+          }
+          physicsWorld?.updateRoverTransform(
+            roverController.x,
+            roverController.y,
+            roverController.z,
+            roverController.yaw,
+          );
+        }
+
         if (physicsWorld && !isFrozenInCommandMode) {
           const prevX = playerPos.x;
           const prevZ = playerPos.y;
@@ -2067,6 +2211,10 @@ export function MarsOutpost3D({
           playerFootY = snap.footY;
           playerGrounded = snap.grounded;
           horizontalSpeed = snap.horizontalSpeedMs;
+          smoothFootY =
+            isStatic || !snap.grounded
+              ? snap.footY
+              : THREE.MathUtils.damp(smoothFootY, snap.footY, 24, delta);
 
           const actualDist = Math.hypot(snap.x - prevX, snap.z - prevZ);
           totalDistanceMoved += actualDist;
@@ -2076,9 +2224,19 @@ export function MarsOutpost3D({
           }
         } else {
           playerFootY = gAt(playerPos.x, playerPos.y);
+          smoothFootY = playerFootY;
         }
 
+        visualHorizSpeed = isStatic
+          ? horizontalSpeed
+          : THREE.MathUtils.damp(visualHorizSpeed, horizontalSpeed, 14, delta);
+
         const isMoving = horizontalSpeed > 0.08 || moveFwd !== 0 || moveStrafe !== 0;
+        walkBlend = isStatic
+          ? isMoving && playerGrounded
+            ? 1
+            : 0
+          : THREE.MathUtils.damp(walkBlend, isMoving && playerGrounded ? 1 : 0, 14, delta);
         if (isMoving && !isFrozenInCommandMode) {
           if (moveFwd !== 0 || moveStrafe !== 0) {
             const fwdX = Math.sin(camYaw);
@@ -2093,7 +2251,7 @@ export function MarsOutpost3D({
             }
           }
 
-          const strideCadence = Math.max(2.5, horizontalSpeed * 3.8);
+          const strideCadence = Math.max(2.5, visualHorizSpeed * 3.8);
           walkPhase += delta * strideCadence;
 
           // Footstep bootprint decals, ballistic kicked dust & thin-CO2 footstep audio on half-cycle crossings
@@ -2153,7 +2311,7 @@ export function MarsOutpost3D({
           } else {
             const s = Math.sin(walkPhase);
             const c = Math.cos(walkPhase);
-            const strideAmp = THREE.MathUtils.clamp(horizontalSpeed / 1.4, 0.25, 1.0);
+            const strideAmp = THREE.MathUtils.clamp(visualHorizSpeed / 1.4, 0.25, 1.0) * walkBlend;
             const leftHip = s * 0.52 * strideAmp;
             const rightHip = -s * 0.52 * strideAmp;
             const leftSwing = Math.max(0, -c) * strideAmp;
@@ -2289,7 +2447,7 @@ export function MarsOutpost3D({
         }
 
         const baseGroundY = gAt(playerPos.x, playerPos.y);
-        outpost.astroGroup.position.set(playerPos.x, playerFootY, playerPos.y);
+        outpost.astroGroup.position.set(playerPos.x, smoothFootY, playerPos.y);
         outpost.astroGroup.rotation.y = playerYaw;
         outpost.astroHeadGroup.rotation.y = THREE.MathUtils.damp(
           outpost.astroHeadGroup.rotation.y,
@@ -2330,12 +2488,12 @@ export function MarsOutpost3D({
         }
 
         const headBobY =
-          !isStatic && playerGrounded && horizontalSpeed > 0.14
-            ? Math.sin(walkPhase * 2.0) * 0.026 * Math.min(1, horizontalSpeed / 1.4)
+          !isStatic && playerGrounded && visualHorizSpeed > 0.14
+            ? Math.sin(walkPhase * 2.0) * 0.026 * Math.min(1, visualHorizSpeed / 1.4)
             : 0;
 
         if (isFirstPerson) {
-          const strideAmp = THREE.MathUtils.clamp(horizontalSpeed / 1.4, 0, 1);
+          const strideAmp = THREE.MathUtils.clamp(visualHorizSpeed / 1.4, 0, 1);
           const armSwing = !isStatic && playerGrounded ? Math.sin(walkPhase) * 0.045 * strideAmp : 0;
           const jumpTuckY = !playerGrounded ? -0.055 : 0;
           const reachZ = -Math.sin(fpInteractPulse * Math.PI) * 0.14;
@@ -2358,7 +2516,7 @@ export function MarsOutpost3D({
         if (introGlideActive) {
           introGlideTimer += delta;
           const u = easeInOutCubic(introGlideTimer / INTRO_GLIDE_DURATION_S);
-          computeThirdPersonRig(playerPos.x, playerFootY, playerPos.y, camYaw, camPitch, _tpCam, _tpLook);
+          computeThirdPersonRig(playerPos.x, smoothFootY, playerPos.y, camYaw, camPitch, _tpCam, _tpLook);
           currentCamPos.lerpVectors(_introCamStart, _tpCam, u);
           currentLookAt.lerpVectors(_introLookStart, _tpLook, u);
           if (introGlideTimer >= INTRO_GLIDE_DURATION_S) {
@@ -2368,25 +2526,28 @@ export function MarsOutpost3D({
           const zp = outpost.zonePositions[simState.activeZoneId];
           _targetCam.set(zp.x - 2.6, zp.y + 2.35, zp.z + 3.85);
           _targetLook.set(zp.x, zp.y + 0.95, zp.z);
-          currentCamPos.lerp(_targetCam, isStatic ? 1 : Math.min(1, delta * 5.0));
-          currentLookAt.lerp(_targetLook, isStatic ? 1 : Math.min(1, delta * 5.0));
+          const cmdAlpha = isStatic ? 1 : 1 - Math.exp(-6 * delta);
+          currentCamPos.lerp(_targetCam, cmdAlpha);
+          currentLookAt.lerp(_targetLook, cmdAlpha);
         } else if (isFirstPerson) {
           const eyeY =
-            playerFootY + PHYSICS_CONSTANTS.FIRST_PERSON_EYE_HEIGHT_M + headBobY - landingDipY;
+            smoothFootY + PHYSICS_CONSTANTS.FIRST_PERSON_EYE_HEIGHT_M + headBobY - landingDipY;
           const cosP = Math.cos(camPitch);
           const fwdX = Math.sin(camYaw) * cosP;
           const fwdZ = Math.cos(camYaw) * cosP;
           const lookY = Math.sin(-camPitch);
           _tpCam.set(playerPos.x, eyeY, playerPos.y);
           _tpLook.set(playerPos.x + fwdX * 4.0, eyeY + lookY * 4.0, playerPos.y + fwdZ * 4.0);
-          currentCamPos.lerp(_tpCam, isStatic ? 1 : Math.min(1, delta * 24.0));
-          currentLookAt.lerp(_tpLook, isStatic ? 1 : Math.min(1, delta * 24.0));
+          const fpAlpha = isStatic ? 1 : 1 - Math.exp(-28 * delta);
+          currentCamPos.lerp(_tpCam, fpAlpha);
+          currentLookAt.lerp(_tpLook, fpAlpha);
         } else {
-          computeThirdPersonRig(playerPos.x, playerFootY, playerPos.y, camYaw, camPitch, _tpCam, _tpLook);
+          computeThirdPersonRig(playerPos.x, smoothFootY, playerPos.y, camYaw, camPitch, _tpCam, _tpLook);
           _tpCam.y -= landingDipY * 0.65;
           _tpLook.y -= landingDipY * 0.45;
-          currentCamPos.lerp(_tpCam, isStatic ? 1 : Math.min(1, delta * 18.0));
-          currentLookAt.lerp(_tpLook, isStatic ? 1 : Math.min(1, delta * 18.0));
+          const tpAlpha = isStatic ? 1 : 1 - Math.exp(-22 * delta);
+          currentCamPos.lerp(_tpCam, tpAlpha);
+          currentLookAt.lerp(_tpLook, tpAlpha);
         }
         if (debugModeRef.current && debugCamOverride) {
           camera.position.copy(debugCamOverride.pos);
@@ -2506,28 +2667,47 @@ export function MarsOutpost3D({
             ),
           );
         }
-        if (onPoseTelemetryRef.current && nowMs - lastPoseTelemetryMs > 95) {
-          lastPoseTelemetryMs = nowMs;
+        // Emit smooth high-rate CustomEvent for compass HUD + throttled React pose telemetry
+        const shouldPushCompass = nowMs - lastCompassEventMs > 40;
+        const appTelemetryInterval = simState?.mapOpen ? 105 : 480;
+        const shouldPushApp = Boolean(onPoseTelemetryRef.current) && nowMs - lastPoseTelemetryMs > appTelemetryInterval;
+        if (shouldPushCompass || shouldPushApp) {
           const headingDeg =
             ((Math.atan2(Math.sin(camYaw), -Math.cos(camYaw)) * 180) / Math.PI + 360) % 360;
-          onPoseTelemetryRef.current({
-            x: playerPos.x,
-            z: playerPos.y,
-            headingDeg,
-            speedMs: horizontalSpeed,
-            roverX: roverController.x,
-            roverZ: roverController.z,
-            crewDots: crewAgents.map((ag) => {
-              const prof = CREW_PROFILES.find((p) => p.id === ag.id);
-              return {
-                id: ag.id,
-                name: prof?.name ?? ag.id,
-                color: prof?.avatarColor ?? '#38BDF8',
-                x: ag.x,
-                z: ag.z,
-              };
-            }),
-          });
+          if (shouldPushCompass) {
+            lastCompassEventMs = nowMs;
+            window.dispatchEvent(
+              new CustomEvent('mars-pose-telemetry', {
+                detail: {
+                  x: playerPos.x,
+                  z: playerPos.y,
+                  headingDeg,
+                  speedMs: horizontalSpeed,
+                },
+              }),
+            );
+          }
+          if (shouldPushApp && onPoseTelemetryRef.current) {
+            lastPoseTelemetryMs = nowMs;
+            onPoseTelemetryRef.current({
+              x: playerPos.x,
+              z: playerPos.y,
+              headingDeg,
+              speedMs: horizontalSpeed,
+              roverX: roverController.x,
+              roverZ: roverController.z,
+              crewDots: crewAgents.map((ag) => {
+                const prof = CREW_PROFILES.find((p) => p.id === ag.id);
+                return {
+                  id: ag.id,
+                  name: prof?.name ?? ag.id,
+                  color: prof?.avatarColor ?? '#38BDF8',
+                  x: ag.x,
+                  z: ag.z,
+                };
+              }),
+            });
+          }
         }
       } else {
         if (fpRenderPass) fpRenderPass.enabled = false;
@@ -2626,22 +2806,22 @@ export function MarsOutpost3D({
         });
 
         if (phase === 'gameplay' && sim) {
-          const roverSubSteps = debugModeRef.current && debugSpeedMult > 1 ? Math.ceil(debugSpeedMult) : 1;
-          const roverDt = (delta * (debugModeRef.current ? debugSpeedMult : 1)) / roverSubSteps;
-          for (let sIdx = 0; sIdx < roverSubSteps; sIdx++) {
-            roverController = stepRoverController(roverController, roverDt, {
-              playerX: playerPos.x,
-              playerZ: playerPos.y,
-              playerYaw,
-              damaged: sim.roverDamaged,
-              holdPosition: Boolean(sim.commandModeOpen) || Boolean(sim.mapOpen) || pausedRef.current,
-              obstacles: outpostObstacles,
-              grid: envBuild.terrainGrid,
-              layout: activeLayout,
-            });
-          }
+          const rp = activeLayout.modules.roverPad;
+          const lp = activeLayout.modules.landingPad;
+          const gh = activeLayout.modules.greenhouse;
+          const onRaisedPad =
+            Math.hypot(roverController.x - lp.x, roverController.z - lp.z) <= lp.apronRadius ||
+            (rp.enabled &&
+              Math.abs(roverController.x - rp.x) <= rp.widthM * 0.5 &&
+              Math.abs(roverController.z - rp.z) <= rp.depthM * 0.5) ||
+            Math.hypot(roverController.x - gh.x, roverController.z - gh.z) <= gh.floorRadius;
+          const onRoadStrip =
+            activeLayout.mode === 'gameplay' &&
+            !onRaisedPad &&
+            isOnPavedSurface(roverController.x, roverController.z, activeLayout);
+          const roverVisY = roverController.y + (onRoadStrip ? 0.032 : 0);
 
-          outpost.roverGroup.position.set(roverController.x, roverController.y, roverController.z);
+          outpost.roverGroup.position.set(roverController.x, roverVisY, roverController.z);
           outpost.roverGroup.rotation.order = 'YXZ';
           outpost.roverGroup.rotation.set(
             roverController.pitchRad,
@@ -2654,18 +2834,13 @@ export function MarsOutpost3D({
             (roverController.leftRockerRad - roverController.rightRockerRad) * 0.5;
           roverController.wheelOffsetsM.forEach((off, idx) => {
             if (outpost.roverWheelOffsets[idx]) {
-              outpost.roverWheelOffsets[idx].position.y = off;
+              outpost.roverWheelOffsets[idx].position.y =
+                PHYSICS_CONSTANTS.ROVER_WHEEL_RADIUS_M + 0.012 + off;
             }
           });
           outpost.roverWheels.forEach((w) => {
             w.rotation.x = roverController.wheelSpinRad;
           });
-          physicsWorld?.updateRoverTransform(
-            roverController.x,
-            roverController.y,
-            roverController.z,
-            roverController.yaw,
-          );
 
           if (roverController.tiltWarning !== lastRoverTiltWarn) {
             lastRoverTiltWarn = roverController.tiltWarning;
@@ -2695,17 +2870,17 @@ export function MarsOutpost3D({
                 roverController.z + rz,
                 roverController.yaw,
               );
-              spawnBallisticDust(roverController.x - rx, roverController.y, roverController.z - rz, 1, 0.7);
-              spawnBallisticDust(roverController.x + rx, roverController.y, roverController.z + rz, 1, 0.7);
+              spawnBallisticDust(roverController.x - rx, roverVisY, roverController.z - rz, 1, 0.7);
+              spawnBallisticDust(roverController.x + rx, roverVisY, roverController.z + rz, 1, 0.7);
             }
           }
 
           soundEngine.updateRoverSpatialAudio(
             roverController.x,
-            roverController.y,
+            roverVisY,
             roverController.z,
             playerPos.x,
-            playerFootY + 1.5,
+            smoothFootY + 1.5,
             playerPos.y,
             camYaw,
             roverController.isDriving,
@@ -2738,12 +2913,40 @@ export function MarsOutpost3D({
           outpost.roverGroup.position.set(rx, ry, rz);
           outpost.roverGroup.rotation.order = 'YXZ';
           outpost.roverGroup.rotation.set(0, activeLayout.modules.roverSpawn.yaw, 0);
+          outpost.roverWheelOffsets.forEach((wg) => {
+            wg.position.y = PHYSICS_CONSTANTS.ROVER_WHEEL_RADIUS_M + 0.012;
+          });
           physicsWorld?.updateRoverTransform(rx, ry, rz, activeLayout.modules.roverSpawn.yaw);
           outpost.roverHead.rotation.y = Math.sin(elapsed * 0.85) * 0.42;
           outpost.roverHead.rotation.x = Math.sin(elapsed * 1.15) * 0.09;
           const wheelSpin = Math.cos(elapsed * 0.34) * 0.9;
           outpost.roverWheels.forEach((w) => {
             w.rotation.x += wheelSpin * delta;
+          });
+        }
+
+        if (outpost.distantRover) {
+          const drR = activeLayout.mode === 'gameplay' ? 55 : 37;
+          const drAng = elapsed * 0.048;
+          const drX = Math.cos(drAng) * drR;
+          const drZ = Math.sin(drAng) * drR;
+          const drYaw = Math.atan2(-Math.sin(drAng), Math.cos(drAng));
+          const sinD = Math.sin(drYaw);
+          const cosD = Math.cos(drYaw);
+          const hF = gAt(drX + sinD * 0.46, drZ + cosD * 0.46);
+          const hB = gAt(drX - sinD * 0.46, drZ - cosD * 0.46);
+          const hL = gAt(drX + cosD * 0.56, drZ - sinD * 0.56);
+          const hR = gAt(drX - cosD * 0.56, drZ + sinD * 0.56);
+          const drY = (hF + hB + hL + hR) * 0.25 + 0.02;
+          outpost.distantRover.group.position.set(drX, drY, drZ);
+          outpost.distantRover.group.rotation.order = 'YXZ';
+          outpost.distantRover.group.rotation.set(
+            Math.atan2(hB - hF, 0.92),
+            drYaw,
+            Math.atan2(hL - hR, 1.12),
+          );
+          outpost.distantRover.wheels.forEach((w) => {
+            w.rotation.x += delta * 2.4;
           });
         }
 
@@ -2754,6 +2957,8 @@ export function MarsOutpost3D({
           let x = dAttr.getX(i) + delta * dustWind;
           if (x > dustSpan) x = -dustSpan;
           dAttr.setX(i, x);
+          const yBob = Math.sin(elapsed * 1.35 + i * 0.37) * delta * 0.16;
+          dAttr.setY(i, Math.max(0.25, dAttr.getY(i) + yBob));
         }
         dAttr.needsUpdate = true;
       }
@@ -2766,16 +2971,18 @@ export function MarsOutpost3D({
         overlayMgr.update(physicsWorld, crewAgents);
       }
 
-      if (composer) {
-        composer.render();
-      } else {
-        renderer.render(scene, camera);
-        if (phase === 'gameplay' && simVisualsRef.current?.cameraMode === '1p' && !Boolean(simVisualsRef.current?.commandModeOpen || pausedRef.current)) {
-          const prevAutoClear = renderer.autoClear;
-          renderer.autoClear = false;
-          renderer.clearDepth();
-          renderer.render(outpost.fpScene, outpost.fpCamera);
-          renderer.autoClear = prevAutoClear;
+      if (phase !== 'prologue') {
+        if (composer) {
+          composer.render();
+        } else {
+          renderer.render(scene, camera);
+          if (phase === 'gameplay' && simVisualsRef.current?.cameraMode === '1p' && !Boolean(simVisualsRef.current?.commandModeOpen || pausedRef.current)) {
+            const prevAutoClear = renderer.autoClear;
+            renderer.autoClear = false;
+            renderer.clearDepth();
+            renderer.render(outpost.fpScene, outpost.fpCamera);
+            renderer.autoClear = prevAutoClear;
+          }
         }
       }
 
@@ -2860,4 +3067,4 @@ export function MarsOutpost3D({
       </div>
     </div>
   );
-}
+});

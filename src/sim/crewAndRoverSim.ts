@@ -603,6 +603,12 @@ export interface RoverControllerState {
   tiltDeg: number;
   tiltWarning: boolean;
   isDriving: boolean;
+  avoidTurnSign?: 1 | -1;
+  recoverTimerS?: number;
+  recoverDirSign?: 1 | -1;
+  lastProgressX?: number;
+  lastProgressZ?: number;
+  progressTimerS?: number;
 }
 
 export function createInitialRoverController(
@@ -635,6 +641,12 @@ export function createInitialRoverController(
     tiltDeg: 0,
     tiltWarning: false,
     isDriving: false,
+    avoidTurnSign: 1,
+    recoverTimerS: 0,
+    recoverDirSign: 1,
+    lastProgressX: startX,
+    lastProgressZ: startZ,
+    progressTimerS: 0,
   };
 }
 
@@ -645,6 +657,8 @@ export interface RoverStepOptions {
   damaged: boolean;
   holdPosition?: boolean;
   obstacles: Array<{ x: number; z: number; radius: number }>;
+  actors?: Array<{ x: number; z: number; radius: number }>;
+  rocks?: Array<{ x: number; z: number; radius: number }>;
   grid?: TerrainHeightGrid;
   layout?: OutpostLayoutConfig;
 }
@@ -675,6 +689,12 @@ export function stepRoverController(
       number,
       number,
     ],
+    avoidTurnSign: prev.avoidTurnSign ?? 1,
+    recoverTimerS: prev.recoverTimerS ?? 0,
+    recoverDirSign: prev.recoverDirSign ?? 1,
+    lastProgressX: prev.lastProgressX ?? prev.x,
+    lastProgressZ: prev.lastProgressZ ?? prev.z,
+    progressTimerS: prev.progressTimerS ?? 0,
   };
 
   const distToPlayer = Math.hypot(opts.playerX - next.x, opts.playerZ - next.z);
@@ -684,81 +704,339 @@ export function stepRoverController(
   } else if (next.state === 'PARKED') {
     if (distToPlayer > PHYSICS_CONSTANTS.ROVER_PARK_START_FOLLOW_M) {
       next.state = 'FOLLOWING';
+      next.lastProgressX = next.x;
+      next.lastProgressZ = next.z;
+      next.progressTimerS = 0;
     }
   } else if (distToPlayer <= PHYSICS_CONSTANTS.ROVER_PARK_STOP_FOLLOW_M) {
     next.state = 'PARKED';
   }
 
   let movedDist = 0;
+  let wheelSign = 1;
+  const maxR = layout.walkableRadiusM - 2.0;
 
-  if (next.state === 'FOLLOWING' && safeDt > 0) {
-    const stopTargetX = opts.playerX - Math.sin(opts.playerYaw + 0.55) * 3.1;
-    const stopTargetZ = opts.playerZ - Math.cos(opts.playerYaw + 0.55) * 3.1;
+  if (next.state === 'PARKED') {
+    next.recoverTimerS = 0;
+    next.progressTimerS = 0;
+    next.lastProgressX = next.x;
+    next.lastProgressZ = next.z;
+  } else if (next.state === 'FOLLOWING' && safeDt > 0) {
+    // Build local avoidance list (static obstacles + nearby actors + nearby collidable rocks)
+    interface LocalBlock {
+      x: number;
+      z: number;
+      softR: number;
+      hardR: number;
+    }
+    const localBlocks: LocalBlock[] = [];
+    for (const obs of opts.obstacles) {
+      if (Math.hypot(obs.x - next.x, obs.z - next.z) <= obs.radius + 9.0) {
+        localBlocks.push({
+          x: obs.x,
+          z: obs.z,
+          softR: obs.radius + 1.08,
+          hardR: obs.radius + 0.86,
+        });
+      }
+    }
+    if (opts.actors) {
+      for (const act of opts.actors) {
+        const dAct = Math.hypot(act.x - next.x, act.z - next.z);
+        if (dAct <= 7.5 && dAct > 0.05) {
+          localBlocks.push({
+            x: act.x,
+            z: act.z,
+            softR: act.radius + 0.85,
+            hardR: act.radius + 0.62,
+          });
+        }
+      }
+    }
+    if (opts.rocks) {
+      for (const rk of opts.rocks) {
+        if (Math.hypot(rk.x - next.x, rk.z - next.z) <= rk.radius + 6.0) {
+          localBlocks.push({
+            x: rk.x,
+            z: rk.z,
+            softR: rk.radius + 0.72,
+            hardR: rk.radius + 0.48,
+          });
+        }
+      }
+    }
 
-    // Follow road network when far (> 7.5 m) on gameplay base; cut direct when close
-    let steerX = stopTargetX;
-    let steerZ = stopTargetZ;
-    if (distToPlayer > 7.5 && layout.roads.length > 0) {
-      const roadPath = computeLayoutNavPath(next.x, next.z, stopTargetX, stopTargetZ, layout);
-      for (const wp of roadPath) {
-        if (Math.hypot(wp.x - next.x, wp.z - next.z) > 1.4) {
+    const gh = layout.modules.greenhouse;
+    const isRayClear = (dirX: number, dirZ: number): { minClear: number; blockedAtFirst: boolean } => {
+      const probeDists = [0.85, 1.7, 2.55];
+      let minClear = 4.0;
+      let blockedAtFirst = false;
+
+      for (let pi = 0; pi < probeDists.length; pi++) {
+        const pd = probeDists[pi];
+        const px = next.x + dirX * pd;
+        const pz = next.z + dirZ * pd;
+
+        const radDist = Math.hypot(px - layout.walkableCenter.x, pz - layout.walkableCenter.z);
+        if (radDist > maxR - 0.35) {
+          minClear = Math.min(minClear, -0.8);
+          if (pi === 0) blockedAtFirst = true;
+          continue;
+        }
+        if (computeTerrainSlopeDeg(px, pz, opts.grid) >= PHYSICS_CONSTANTS.ROVER_TILT_LIMIT_DEG) {
+          minClear = Math.min(minClear, -0.7);
+          if (pi === 0) blockedAtFirst = true;
+          continue;
+        }
+        const ghD = Math.hypot(px - gh.x, pz - gh.z);
+        if (ghD < gh.floorRadius + 0.95) {
+          const curGhD = Math.hypot(next.x - gh.x, next.z - gh.z);
+          if (ghD <= curGhD) {
+            minClear = Math.min(minClear, ghD - (gh.floorRadius + 0.95));
+            if (pi === 0) blockedAtFirst = true;
+          }
+        }
+
+        for (const blk of localBlocks) {
+          const curDist = Math.hypot(next.x - blk.x, next.z - blk.z);
+          const dObs = Math.hypot(px - blk.x, pz - blk.z);
+          const margin = dObs - blk.softR;
+          // If already inside soft clearance, don't penalize directions moving strictly outward
+          if (curDist < blk.softR && dObs > curDist + 0.08) {
+            continue;
+          }
+          if (margin < minClear) {
+            minClear = margin;
+          }
+          if (pi === 0 && margin < -0.05) {
+            blockedAtFirst = true;
+          }
+        }
+      }
+      return { minClear, blockedAtFirst };
+    };
+
+    const sandFactor = getSoftSandFactorAt(next.x, next.z, layout.mode);
+    const sandSpeedMult = 1 - sandFactor * 0.22;
+    const baseSpeed = opts.damaged
+      ? PHYSICS_CONSTANTS.ROVER_SIM_DRIVE_SPEED_MS * 0.65
+      : PHYSICS_CONSTANTS.ROVER_SIM_DRIVE_SPEED_MS;
+    const driveSpeed = baseSpeed * sandSpeedMult;
+
+    let stopTargetX = opts.playerX - Math.sin(opts.playerYaw + 0.55) * 3.1;
+    let stopTargetZ = opts.playerZ - Math.cos(opts.playerYaw + 0.55) * 3.1;
+
+    const ghDistTarget = Math.hypot(stopTargetX - gh.x, stopTargetZ - gh.z);
+    if (ghDistTarget < gh.floorRadius + 1.0) {
+      const ang = Math.atan2(stopTargetZ - gh.z, stopTargetX - gh.x);
+      stopTargetX = gh.x + Math.cos(ang) * (gh.floorRadius + 1.15);
+      stopTargetZ = gh.z + Math.sin(ang) * (gh.floorRadius + 1.15);
+    }
+    for (const obs of opts.obstacles) {
+      const ox = stopTargetX - obs.x;
+      const oz = stopTargetZ - obs.z;
+      const od = Math.hypot(ox, oz);
+      const minTargetR = obs.radius + 1.25;
+      if (od < minTargetR) {
+        const inv = od > 0.001 ? 1 / od : 1;
+        stopTargetX = obs.x + (od > 0.001 ? ox * inv : 1) * minTargetR;
+        stopTargetZ = obs.z + (od > 0.001 ? oz * inv : 0) * minTargetR;
+      }
+    }
+
+    // Reverse Back-Out Recovery if blocked or stalled
+    if ((next.recoverTimerS ?? 0) > 0) {
+      next.recoverTimerS = Math.max(0, (next.recoverTimerS ?? 0) - safeDt);
+      const fwdX = Math.sin(next.yaw);
+      const fwdZ = Math.cos(next.yaw);
+      const rSign = next.recoverDirSign ?? 1;
+      const rearOffsets = [
+        Math.PI,
+        Math.PI + 0.52 * rSign,
+        Math.PI - 0.52 * rSign,
+        Math.PI + 1.05 * rSign,
+        Math.PI - 1.05 * rSign,
+        Math.PI + 1.48 * rSign,
+        Math.PI - 1.48 * rSign,
+      ];
+      let bestRx = -fwdX;
+      let bestRz = -fwdZ;
+      let bestScore = -Infinity;
+      for (const angOff of rearOffsets) {
+        const ca = Math.cos(angOff);
+        const sa = Math.sin(angOff);
+        const tx = fwdX * ca - fwdZ * sa;
+        const tz = fwdX * sa + fwdZ * ca;
+        const probe = isRayClear(tx, tz);
+        const straightBias = Math.abs(angOff - Math.PI) < 0.05 ? 0.35 : 0;
+        const score = Math.min(1.5, probe.minClear) + straightBias - (probe.blockedAtFirst ? 4.0 : 0);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRx = tx;
+          bestRz = tz;
+        }
+      }
+
+      const revStep = driveSpeed * 0.78 * safeDt;
+      const candX = next.x + bestRx * revStep;
+      const candZ = next.z + bestRz * revStep;
+      if (computeTerrainSlopeDeg(candX, candZ, opts.grid) < PHYSICS_CONSTANTS.ROVER_TILT_LIMIT_DEG) {
+        next.x = candX;
+        next.z = candZ;
+        movedDist = revStep;
+        wheelSign = -1;
+      }
+      // Swing nose slightly toward free side while reversing so exit faces open space
+      next.yaw += rSign * safeDt * 1.45;
+      if (next.recoverTimerS <= 0) {
+        next.lastProgressX = next.x;
+        next.lastProgressZ = next.z;
+        next.progressTimerS = 0;
+      }
+    } else {
+      // Forward Smart Path + 9-Ray Free-Space Avoidance
+      let steerX = stopTargetX;
+      let steerZ = stopTargetZ;
+      if (distToPlayer > 7.5 && layout.roads.length > 0) {
+        const roadPath = computeLayoutNavPath(next.x, next.z, stopTargetX, stopTargetZ, layout).filter(
+          (wp) => Math.hypot(wp.x - gh.x, wp.z - gh.z) > gh.wallMidRadius + 0.3,
+        );
+        for (let wi = 0; wi < roadPath.length; wi++) {
+          const wp = roadPath[wi];
+          const dWp = Math.hypot(wp.x - next.x, wp.z - next.z);
+          if (dWp <= 1.75) continue;
+          const nextWp = roadPath[wi + 1] ?? { x: stopTargetX, z: stopTargetZ };
+          const segDx = nextWp.x - wp.x;
+          const segDz = nextWp.z - wp.z;
+          const passedByProjection =
+            (next.x - wp.x) * segDx + (next.z - wp.z) * segDz > 0;
+          if (wi < roadPath.length - 1 && passedByProjection) continue;
           steerX = wp.x;
           steerZ = wp.z;
           break;
         }
       }
-    }
 
-    const dx = steerX - next.x;
-    const dz = steerZ - next.z;
-    const dTarget = Math.hypot(dx, dz);
+      const dx = steerX - next.x;
+      const dz = steerZ - next.z;
+      const dTarget = Math.hypot(dx, dz);
 
-    if (dTarget > 0.25) {
-      let dirX = dx / dTarget;
-      let dirZ = dz / dTarget;
+      if (dTarget > 0.25) {
+        const baseDirX = dx / dTarget;
+        const baseDirZ = dz / dTarget;
+        const tSign = next.avoidTurnSign ?? 1;
 
-      for (const obs of opts.obstacles) {
-        const ox = next.x - obs.x;
-        const oz = next.z - obs.z;
-        const od = Math.hypot(ox, oz);
-        const minR = obs.radius + 1.05;
-        if (od > 0.001 && od < minR) {
-          const push = ((minR - od) / minR) * 1.85;
-          dirX += (ox / od) * push;
-          dirZ += (oz / od) * push;
+        // Track forward progress to detect stalls & trigger back-out recovery
+        next.progressTimerS = (next.progressTimerS ?? 0) + safeDt;
+        const progDist = Math.hypot(
+          next.x - (next.lastProgressX ?? next.x),
+          next.z - (next.lastProgressZ ?? next.z),
+        );
+        if (progDist >= 0.22) {
+          next.lastProgressX = next.x;
+          next.lastProgressZ = next.z;
+          next.progressTimerS = 0;
+        } else if (next.progressTimerS >= 0.55 && dTarget > 0.75) {
+          next.recoverTimerS = 0.85;
+          next.avoidTurnSign = tSign === 1 ? -1 : 1;
+          next.recoverDirSign = next.avoidTurnSign;
+          next.progressTimerS = 0;
+          next.lastProgressX = next.x;
+          next.lastProgressZ = next.z;
+        }
+
+        if ((next.recoverTimerS ?? 0) <= 0) {
+          const probeOffsets = [
+            0,
+            0.36 * tSign,
+            -0.36 * tSign,
+            0.75 * tSign,
+            -0.75 * tSign,
+            1.18 * tSign,
+            -1.18 * tSign,
+            1.62 * tSign,
+            -1.62 * tSign,
+          ];
+
+          let chosenX = baseDirX;
+          let chosenZ = baseDirZ;
+          let bestScore = -Infinity;
+          let bestBlocked = true;
+          let bestAngOff = 0;
+
+          for (const angOff of probeOffsets) {
+            const ca = Math.cos(angOff);
+            const sa = Math.sin(angOff);
+            const tx = baseDirX * ca - baseDirZ * sa;
+            const tz = baseDirX * sa + baseDirZ * ca;
+            const probe = isRayClear(tx, tz);
+
+            const candYaw = Math.atan2(tx, tz);
+            const yawSmooth = Math.cos(wrapAngleDiff(next.yaw, candYaw));
+            const targetAlign = Math.cos(angOff);
+            const sideBias = angOff === 0 ? 0.12 : angOff * tSign > 0 ? 0.22 : 0;
+            const obstructionPenalty =
+              probe.minClear >= 0.25 ? 0 : (0.25 - probe.minClear) * 4.2;
+            const score =
+              targetAlign * 2.4 +
+              yawSmooth * 0.45 +
+              sideBias -
+              obstructionPenalty -
+              (probe.blockedAtFirst ? 6.0 : 0);
+
+            if (score > bestScore) {
+              bestScore = score;
+              chosenX = tx;
+              chosenZ = tz;
+              bestBlocked = probe.blockedAtFirst && probe.minClear < -0.15;
+              bestAngOff = angOff;
+            }
+          }
+
+          if (Math.abs(bestAngOff) > 0.15) {
+            next.avoidTurnSign = bestAngOff > 0 ? 1 : -1;
+          }
+
+          if (bestBlocked) {
+            // Completely walled in ahead: back out rather than pushing into obstacle
+            next.recoverTimerS = 0.85;
+            next.avoidTurnSign = tSign === 1 ? -1 : 1;
+            next.recoverDirSign = next.avoidTurnSign;
+            next.progressTimerS = 0;
+          } else {
+            const desiredYaw = Math.atan2(chosenX, chosenZ);
+            const yawDiff = wrapAngleDiff(next.yaw, desiredYaw);
+            next.yaw += yawDiff * Math.min(1, safeDt * 6.0);
+
+            const turnThrottle = 0.48 + 0.52 * Math.max(0, Math.cos(yawDiff));
+            const stepLen = Math.min(dTarget, driveSpeed * turnThrottle * safeDt);
+            const candX = next.x + chosenX * stepLen;
+            const candZ = next.z + chosenZ * stepLen;
+            if (computeTerrainSlopeDeg(candX, candZ, opts.grid) < PHYSICS_CONSTANTS.ROVER_TILT_LIMIT_DEG) {
+              next.x = candX;
+              next.z = candZ;
+              movedDist = stepLen;
+            }
+          }
         }
       }
+    }
 
-      const norm = Math.hypot(dirX, dirZ) || 1;
-      dirX /= norm;
-      dirZ /= norm;
-
-      const sandFactor = getSoftSandFactorAt(next.x, next.z, layout.mode);
-      const sandSpeedMult = 1 - sandFactor * 0.28;
-      const baseSpeed = opts.damaged
-        ? PHYSICS_CONSTANTS.ROVER_SIM_DRIVE_SPEED_MS * 0.65
-        : PHYSICS_CONSTANTS.ROVER_SIM_DRIVE_SPEED_MS;
-      const driveSpeed = baseSpeed * sandSpeedMult;
-      const candidateStep = Math.min(dTarget, driveSpeed * safeDt);
-      const candX = next.x + dirX * candidateStep;
-      const candZ = next.z + dirZ * candidateStep;
-
-      const candSlope = computeTerrainSlopeDeg(candX, candZ, opts.grid);
-      if (candSlope < PHYSICS_CONSTANTS.ROVER_TILT_LIMIT_DEG) {
-        next.x = candX;
-        next.z = candZ;
-        movedDist = candidateStep;
+    // Hard depenetration guard against static obstacles, actors, and collidable rocks
+    for (const blk of localBlocks) {
+      const ox = next.x - blk.x;
+      const oz = next.z - blk.z;
+      const od = Math.hypot(ox, oz);
+      if (od > 0.001 && od < blk.hardR) {
+        next.x = blk.x + (ox / od) * blk.hardR;
+        next.z = blk.z + (oz / od) * blk.hardR;
       }
-
-      const desiredYaw = Math.atan2(dirX, dirZ);
-      next.yaw += wrapAngleDiff(next.yaw, desiredYaw) * Math.min(1, safeDt * 4.5);
     }
   }
 
   const relX = next.x - layout.walkableCenter.x;
   const relZ = next.z - layout.walkableCenter.z;
   const radial = Math.hypot(relX, relZ);
-  const maxR = layout.walkableRadiusM - 2.0;
   if (radial > maxR) {
     next.x = layout.walkableCenter.x + (relX / radial) * maxR;
     next.z = layout.walkableCenter.z + (relZ / radial) * maxR;
@@ -766,7 +1044,7 @@ export function stepRoverController(
 
   next.speedMs = safeDt > 0 ? movedDist / safeDt : 0;
   next.isDriving = movedDist > 0.0005;
-  next.wheelSpinRad += movedDist / PHYSICS_CONSTANTS.ROVER_WHEEL_RADIUS_M;
+  next.wheelSpinRad += (wheelSign * movedDist) / PHYSICS_CONSTANTS.ROVER_WHEEL_RADIUS_M;
 
   // Compute 6-wheel contact atop both terrain and elevated Landing/Rover Pads (0 sinkage on paved pads)
   const sinY = Math.sin(next.yaw);

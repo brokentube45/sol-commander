@@ -126,12 +126,12 @@ export function createMarsRegolithTextures(maxAniso: number, repeat = 14): PBRTe
       const h = broad * 0.48 + ripple * 0.24 + grain * 0.18 + pebbleMask * 0.28;
       heights[y * size + x] = h;
 
-      // Rich iron-oxide & ochre regolith palette
+      // Vibrant kid-friendly Martian orange, terracotta, and golden ochre regolith palette
       const idx = (y * size + x) * 4;
-      const shade = 0.72 + h * 0.52;
-      const r = Math.min(255, Math.round((168 + ripple * 28 - pebbleMask * 36) * shade));
-      const g = Math.min(255, Math.round((72 + broad * 26 - pebbleMask * 18) * shade));
-      const b = Math.min(255, Math.round((38 + broad * 14 - pebbleMask * 10) * shade));
+      const shade = 0.78 + h * 0.44;
+      const r = Math.min(255, Math.round((212 + ripple * 26 - pebbleMask * 28) * shade));
+      const g = Math.min(255, Math.round((104 + broad * 28 + ripple * 8 - pebbleMask * 16) * shade));
+      const b = Math.min(255, Math.round((56 + broad * 16 - pebbleMask * 10) * shade));
 
       aImg.data[idx] = r;
       aImg.data[idx + 1] = g;
@@ -207,10 +207,10 @@ export function createMartianRockTextures(maxAniso: number): PBRTextureSet {
       heights[y * size + x] = h;
 
       const idx = (y * size + x) * 4;
-      const bandTone = 0.65 + strata * 0.38;
-      aImg.data[idx] = Math.min(255, Math.round(145 * bandTone + n * 28));
-      aImg.data[idx + 1] = Math.min(255, Math.round(62 * bandTone + n * 16));
-      aImg.data[idx + 2] = Math.min(255, Math.round(42 * bandTone + n * 10));
+      const bandTone = 0.72 + strata * 0.36;
+      aImg.data[idx] = Math.min(255, Math.round(186 * bandTone + n * 34));
+      aImg.data[idx + 1] = Math.min(255, Math.round(86 * bandTone + n * 24));
+      aImg.data[idx + 2] = Math.min(255, Math.round(52 * bandTone + n * 14));
       aImg.data[idx + 3] = 255;
 
       const rough = Math.min(255, Math.max(165, Math.round((0.84 + (1 - strata) * 0.1) * 255)));
@@ -252,28 +252,28 @@ export function createHullPanelTextures(maxAniso: number, repeatX = 3, repeatY =
   roughCanvas.height = size;
   const rCtx = roughCanvas.getContext('2d')!;
 
-  // Base composite white-titanium surface
-  aCtx.fillStyle = '#e7ecf2';
+  // Base composite bright aerospace ceramic-white surface
+  aCtx.fillStyle = '#f2f6fb';
   aCtx.fillRect(0, 0, size, size);
-  rCtx.fillStyle = '#707070'; // ~0.44 roughness
+  rCtx.fillStyle = '#6c6c6c'; // ~0.42 roughness
   rCtx.fillRect(0, 0, size, size);
 
   // Subtle brushed grain & panel tonal variation
   const panels = [
-    [0, 0, 256, 256, '#eef2f6'],
-    [256, 0, 256, 256, '#e2e8f0'],
-    [0, 256, 256, 256, '#e4eaf1'],
-    [256, 256, 256, 256, '#edf1f6'],
+    [0, 0, 256, 256, '#f6f9fd'],
+    [256, 0, 256, 256, '#ebf1f8'],
+    [0, 256, 256, 256, '#edf2f9'],
+    [256, 256, 256, 256, '#f4f8fc'],
   ] as const;
   panels.forEach(([px, py, pw, ph, col]) => {
     aCtx.fillStyle = col;
     aCtx.fillRect(px + 3, py + 3, pw - 6, ph - 6);
   });
 
-  // Martian dust gradient near lower panel edges
-  const dustGrad = aCtx.createLinearGradient(0, size * 0.68, 0, size);
-  dustGrad.addColorStop(0, 'rgba(180, 82, 42, 0)');
-  dustGrad.addColorStop(1, 'rgba(176, 76, 36, 0.28)');
+  // Warm sunlit Martian ochre dust gradient near lower panel edges
+  const dustGrad = aCtx.createLinearGradient(0, size * 0.72, 0, size);
+  dustGrad.addColorStop(0, 'rgba(220, 110, 54, 0)');
+  dustGrad.addColorStop(1, 'rgba(218, 108, 52, 0.20)');
   aCtx.fillStyle = dustGrad;
   aCtx.fillRect(0, 0, size, size);
 
@@ -394,18 +394,18 @@ export function createSolarWaferTextures(maxAniso: number): PBRTextureSet {
       const cy = r * cellH;
       const pad = 6;
       const grad = aCtx.createLinearGradient(cx, cy, cx + cellW, cy + cellH);
-      grad.addColorStop(0, '#0d2654');
-      grad.addColorStop(0.5, '#19458f');
-      grad.addColorStop(1, '#0b1e44');
+      grad.addColorStop(0, '#123878');
+      grad.addColorStop(0.5, '#2563eb');
+      grad.addColorStop(1, '#0e2d63');
       aCtx.fillStyle = grad;
       aCtx.fillRect(cx + pad, cy + pad, cellW - pad * 2, cellH - pad * 2);
 
       // Glossy silicon cell roughness
-      rCtx.fillStyle = '#282828';
+      rCtx.fillStyle = '#202020';
       rCtx.fillRect(cx + pad, cy + pad, cellW - pad * 2, cellH - pad * 2);
 
       // Fine silver busbars
-      aCtx.strokeStyle = 'rgba(186, 218, 255, 0.55)';
+      aCtx.strokeStyle = 'rgba(206, 232, 255, 0.65)';
       aCtx.lineWidth = 2;
       aCtx.beginPath();
       aCtx.moveTo(cx + cellW * 0.35, cy + pad);
@@ -902,7 +902,7 @@ export function createOutpostSignTexture(
   return tex;
 }
 
-/** Compacted dark basalt regolith road surface texture + micro-roughness variation */
+/** Compacted futuristic colony pathway surface texture + micro-roughness variation */
 export function createRoadSurfaceTextures(maxAniso: number): {
   map: THREE.CanvasTexture;
   roughnessMap: THREE.CanvasTexture;
@@ -918,9 +918,9 @@ export function createRoadSurfaceTextures(maxAniso: number): {
   cRough.height = size;
   const rCtx = cRough.getContext('2d')!;
 
-  mCtx.fillStyle = '#4f3b36';
+  mCtx.fillStyle = '#75574f';
   mCtx.fillRect(0, 0, size, size);
-  rCtx.fillStyle = '#cfcfcf';
+  rCtx.fillStyle = '#c8c8c8';
   rCtx.fillRect(0, 0, size, size);
 
   let seed = 7919;
@@ -932,19 +932,23 @@ export function createRoadSurfaceTextures(maxAniso: number): {
   for (let i = 0; i < 2400; i++) {
     const x = rnd() * size;
     const y = rnd() * size;
-    const s = 1 + rnd() * 2.5;
-    const v = Math.floor(64 + rnd() * 34);
-    mCtx.fillStyle = `rgb(${v + 12}, ${v}, ${v - 4})`;
+    const s = 1 + rnd() * 2.4;
+    const v = Math.floor(96 + rnd() * 38);
+    mCtx.fillStyle = `rgb(${v + 18}, ${v + 2}, ${v - 6})`;
     mCtx.fillRect(x, y, s, s);
-    const rv = Math.floor(175 + rnd() * 65);
+    const rv = Math.floor(170 + rnd() * 62);
     rCtx.fillStyle = `rgb(${rv}, ${rv}, ${rv})`;
     rCtx.fillRect(x, y, s, s);
   }
 
-  // Subtle compacted tire track streaks along longitudinal U/V axis
-  mCtx.fillStyle = 'rgba(42, 30, 26, 0.25)';
-  mCtx.fillRect(size * 0.22, 0, size * 0.14, size);
-  mCtx.fillRect(size * 0.64, 0, size * 0.14, size);
+  // Subtle compacted tire track streaks & crisp pathway edge guide stripes
+  mCtx.fillStyle = 'rgba(62, 44, 38, 0.20)';
+  mCtx.fillRect(size * 0.24, 0, size * 0.13, size);
+  mCtx.fillRect(size * 0.63, 0, size * 0.13, size);
+
+  mCtx.fillStyle = 'rgba(244, 178, 102, 0.42)';
+  mCtx.fillRect(6, 0, 5, size);
+  mCtx.fillRect(size - 11, 0, 5, size);
 
   const map = new THREE.CanvasTexture(cMap);
   map.colorSpace = THREE.SRGBColorSpace;
@@ -961,4 +965,81 @@ export function createRoadSurfaceTextures(maxAniso: number): {
 
   return { map, roughnessMap };
 }
+
+/** Procedural Ares Heavy Landing Pad apron markings (zero agency logos or flags) */
+export function createLandingPadDecalTexture(maxAniso: number): THREE.CanvasTexture {
+  const size = 512;
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d')!;
+  const cx = size * 0.5;
+  const cy = size * 0.5;
+
+  // Slate-cobalt composite blast deck
+  ctx.fillStyle = '#384c63';
+  ctx.fillRect(0, 0, size, size);
+
+  // Radial panel seams
+  ctx.strokeStyle = 'rgba(148, 174, 206, 0.25)';
+  ctx.lineWidth = 3;
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * 68, cy + Math.sin(a) * 68);
+    ctx.lineTo(cx + Math.cos(a) * 244, cy + Math.sin(a) * 244);
+    ctx.stroke();
+  }
+
+  // Outer dashed hazard ring
+  ctx.strokeStyle = '#ffb703';
+  ctx.lineWidth = 16;
+  ctx.setLineDash([28, 16]);
+  ctx.beginPath();
+  ctx.arc(cx, cy, 224, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Inner solid Mars-orange & gold guidance rings
+  ctx.setLineDash([]);
+  ctx.strokeStyle = '#f26419';
+  ctx.lineWidth = 10;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 152, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = '#ffd166';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 114, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Four approach chevron arrows
+  ctx.fillStyle = '#ffb703';
+  for (let i = 0; i < 4; i++) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate((i * Math.PI) / 2);
+    ctx.beginPath();
+    ctx.moveTo(0, -170);
+    ctx.lineTo(18, -196);
+    ctx.lineTo(0, -186);
+    ctx.lineTo(-18, -196);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // Bold geometric center H-frame / PAD 01 mark
+  ctx.fillStyle = '#ffd166';
+  ctx.font = 'bold 54px Orbitron, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('PAD 01', cx, cy);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = maxAniso;
+  return tex;
+}
+
 

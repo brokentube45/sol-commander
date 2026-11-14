@@ -20,8 +20,6 @@ import {
   COMMANDER_CALLSIGNS,
   GamePhase,
   OutpostLandmarkId,
-  PROLOGUE_DURATION_SEC,
-  PROLOGUE_SCENES,
   PowerAllocation,
 } from './data/missionData';
 import { CREW_PROFILES, CrewMemberId, SIM_CONSTANTS } from './sim/constants';
@@ -64,6 +62,7 @@ export default function App() {
   const [gamePhase, setGamePhase] = useState<GamePhase>('landing');
   const [engineReady, setEngineReady] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
+  const soundTouchedRef = useRef(false);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
   const [quality, setQuality] = useState<GraphicsQuality>('high');
   const [hudHidden, setHudHidden] = useState(false);
@@ -74,10 +73,9 @@ export default function App() {
   >(null);
   const [reducedMotion, setReducedMotion] = useState(false);
 
-  // Prologue Clock
-  const [prologueElapsed, setPrologueElapsed] = useState(0);
+  // Intro Video Playback State
   const [prologuePaused, setProloguePaused] = useState(false);
-  const lastCueSceneRef = useRef<number>(-1);
+  const [prologueReplayToken, setPrologueReplayToken] = useState(0);
 
   // Campaign Setup & Live NASA DONKI Weather
   const [callsign, setCallsign] = useState(COMMANDER_CALLSIGNS[0]);
@@ -177,48 +175,7 @@ export default function App() {
     return () => mq.removeEventListener('change', onChange);
   }, []);
 
-  // Deterministic Prologue Playback Clock (0 -> 34s)
-  useEffect(() => {
-    if (gamePhase !== 'prologue' || prologuePaused) return;
-
-    let rafId = 0;
-    let lastTs = performance.now();
-
-    const step = (now: number) => {
-      const dt = Math.min((now - lastTs) / 1000, 0.1);
-      lastTs = now;
-
-      setPrologueElapsed((prev) => {
-        const next = prev + dt;
-        if (next >= PROLOGUE_DURATION_SEC) {
-          setGamePhase('briefing');
-          return PROLOGUE_DURATION_SEC;
-        }
-        return next;
-      });
-
-      rafId = requestAnimationFrame(step);
-    };
-
-    rafId = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(rafId);
-  }, [gamePhase, prologuePaused]);
-
-  // Trigger procedural musical cues on each Prologue scene boundary
-  useEffect(() => {
-    if (gamePhase !== 'prologue') {
-      lastCueSceneRef.current = -1;
-      return;
-    }
-
-    const sceneIdx = PROLOGUE_SCENES.findIndex(
-      (s) => prologueElapsed >= s.startSec && prologueElapsed < s.endSec,
-    );
-    if (sceneIdx !== -1 && sceneIdx !== lastCueSceneRef.current) {
-      lastCueSceneRef.current = sceneIdx;
-      soundEngine.playSceneCue(sceneIdx);
-    }
-  }, [gamePhase, prologueElapsed]);
+  // Intro video playback timing & audio are driven natively by PrologueHUD's <video> element.
 
   // Auto-dismiss Mars vs Earth jump/drop comparison toast cleanly
   useEffect(() => {
@@ -267,6 +224,7 @@ export default function App() {
   ]);
 
   const handleToggleSound = () => {
+    soundTouchedRef.current = true;
     const next = soundEngine.setEnabled(!soundEnabled);
     setSoundEnabled(next);
     if (next && gamePhase === 'gameplay' && simState.activeWeatherEvent) {
@@ -294,15 +252,18 @@ export default function App() {
     setSelectedLandmark(id);
   };
 
-  // Landing -> Cinematic Prologue
+  // Landing -> 29s Cinematic Intro Video
   const handleStartMission = () => {
+    if (!soundTouchedRef.current && !soundEnabled) {
+      const enabled = soundEngine.setEnabled(true);
+      setSoundEnabled(enabled);
+    }
     soundEngine.playMissionStart();
     setActiveModal(null);
     setSelectedLandmark(null);
     setHudHidden(false);
-    setPrologueElapsed(0);
     setProloguePaused(false);
-    lastCueSceneRef.current = -1;
+    setPrologueReplayToken((t) => t + 1);
     setGamePhase('prologue');
   };
 
@@ -314,9 +275,8 @@ export default function App() {
     setCommandModeOpen(false);
     setLogOpen(false);
     setCreditsOpen(false);
-    setPrologueElapsed(0);
     setProloguePaused(false);
-    lastCueSceneRef.current = -1;
+    setPrologueReplayToken((t) => t + 1);
     setGamePhase('prologue');
   };
 
@@ -324,6 +284,10 @@ export default function App() {
     soundEngine.playClick();
     setGamePhase('briefing');
   };
+
+  const handleCompletePrologue = useCallback(() => {
+    setGamePhase('briefing');
+  }, []);
 
   // Briefing -> Start 88-Sol Campaign at Critical Sol 1 (Sol 21)
   const startNewCampaignWithSeed = useCallback(
@@ -657,7 +621,7 @@ export default function App() {
           gamePhase={gamePhase}
           selectedLandmark={selectedLandmark}
           onSelectLandmark={handleSelectLandmark}
-          prologueElapsed={prologueElapsed}
+          prologueElapsed={0}
           tutorialStep="complete"
           powerAllocation={dynamicPowerAlloc}
           simVisuals={simVisuals}
@@ -761,17 +725,18 @@ export default function App() {
         </>
       )}
 
-      {/* PHASE 2A: Deterministic 5-Scene Cinematic Prologue */}
+      {/* PHASE 2A: 29s Cinematic Intro Video (Earth -> Mars Launch & Crew Intro) */}
       {gamePhase === 'prologue' && (
         <PrologueHUD
-          elapsed={prologueElapsed}
           paused={prologuePaused}
+          replayToken={prologueReplayToken}
           onTogglePause={() => {
             soundEngine.playClick();
             setProloguePaused((prev) => !prev);
           }}
           onReplay={handleReplayPrologue}
           onSkip={handleSkipPrologue}
+          onComplete={handleCompletePrologue}
           soundEnabled={soundEnabled}
           onToggleSound={handleToggleSound}
           subtitlesEnabled={subtitlesEnabled}

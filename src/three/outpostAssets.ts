@@ -24,6 +24,7 @@ import {
   createDustSpriteTexture,
   createExplorerEmblemTexture,
   createHullPanelTextures,
+  createLandingPadDecalTexture,
   createOutpostSignTexture,
   createRoadSurfaceTextures,
   createRoverNameplateTexture,
@@ -121,6 +122,8 @@ export interface OutpostRig {
   landmarkCenters: Record<OutpostLandmarkId, THREE.Vector3>;
   zonePositions: Record<MissionZoneId, THREE.Vector3>;
   moduleRoots: Record<string, THREE.Object3D>;
+  colonyBlinkingLights: THREE.Mesh[];
+  distantRover: { group: THREE.Group; wheels: THREE.Group[] } | null;
   dispose: () => void;
 }
 
@@ -278,23 +281,62 @@ export function buildOutpostAssets(
   );
   const matDarkSteel = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#3c536e',
-      roughness: 0.44,
-      metalness: 0.52,
+      color: '#4a6788',
+      roughness: 0.42,
+      metalness: 0.48,
     }),
   );
   const matBrushedAlum = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#b8c4d4',
-      roughness: 0.26,
-      metalness: 0.86,
+      color: '#cad6e4',
+      roughness: 0.24,
+      metalness: 0.85,
     }),
   );
   const matMarsOrange = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#e85d04',
-      roughness: 0.44,
-      metalness: 0.16,
+      color: '#f26419',
+      roughness: 0.4,
+      metalness: 0.14,
+    }),
+  );
+  const matScienceTeal = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: '#2ec4b6',
+      roughness: 0.34,
+      metalness: 0.22,
+    }),
+  );
+  const matCyanGlow = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: '#7dd3fc',
+      emissive: '#0ea5e9',
+      emissiveIntensity: 1.45,
+      roughness: 0.2,
+    }),
+  );
+  const matGreenGlow = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: '#86efac',
+      emissive: '#22c55e',
+      emissiveIntensity: 1.45,
+      roughness: 0.2,
+    }),
+  );
+  const matCoralBloom = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: '#fb7185',
+      emissive: '#be123c',
+      emissiveIntensity: 0.18,
+      roughness: 0.45,
+    }),
+  );
+  const matYellowBloom = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: '#fde047',
+      emissive: '#ca8a04',
+      emissiveIntensity: 0.18,
+      roughness: 0.45,
     }),
   );
   const matThermalFoil = trackMat(
@@ -330,18 +372,21 @@ export function buildOutpostAssets(
     }),
   );
   const matSolarWafer = trackMat(
-    new THREE.MeshStandardMaterial({
+    new THREE.MeshPhysicalMaterial({
       map: solarTex.map,
       normalMap: solarTex.normalMap,
       normalScale: new THREE.Vector2(0.75, 0.75),
       roughnessMap: solarTex.roughnessMap,
-      roughness: 0.25,
-      metalness: 0.68,
+      roughness: 0.22,
+      metalness: 0.65,
+      clearcoat: 0.92,
+      clearcoatRoughness: 0.1,
+      envMapIntensity: 1.55,
     }),
   );
   const matWarmWindow = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#ffe08a',
+      color: '#ffe599',
       emissive: '#ffb703',
       emissiveIntensity: 1.45,
       roughness: 0.15,
@@ -365,31 +410,31 @@ export function buildOutpostAssets(
   );
   const matGreenhouseGlass = trackMat(
     new THREE.MeshPhysicalMaterial({
-      color: '#d4f1ff',
-      roughness: 0.08,
+      color: '#dcf5ff',
+      roughness: 0.07,
       metalness: 0.08,
       clearcoat: 1.0,
-      clearcoatRoughness: 0.08,
+      clearcoatRoughness: 0.06,
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.3,
       depthWrite: false,
     }),
   );
   const matPlantLeaf = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#22c55e',
-      roughness: 0.58,
+      color: '#2dd468',
+      roughness: 0.54,
       metalness: 0.04,
-      emissive: '#14532d',
-      emissiveIntensity: 0.22,
+      emissive: '#15803d',
+      emissiveIntensity: 0.26,
       side: THREE.DoubleSide,
     }),
   );
   const matCopperPipe = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#c87544',
-      roughness: 0.32,
-      metalness: 0.82,
+      color: '#d9844e',
+      roughness: 0.3,
+      metalness: 0.8,
     }),
   );
 
@@ -401,16 +446,21 @@ export function buildOutpostAssets(
           map: shadowTex,
           transparent: true,
           depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: 2,
+          polygonOffsetUnits: 2,
           opacity,
         }),
       ),
     );
     plane.rotation.x = -Math.PI / 2;
-    plane.position.y = 0.03;
+    plane.position.y = 0.005;
+    plane.renderOrder = 1;
     parent.add(plane);
   };
 
   const interactiveTargets: THREE.Object3D[] = [];
+  const colonyBlinkingLights: THREE.Mesh[] = [];
   const registerInteractive = (group: THREE.Group, id: OutpostLandmarkId) => {
     group.traverse((child) => {
       if ((child as THREE.Mesh).isMesh) {
@@ -727,14 +777,28 @@ export function buildOutpostAssets(
   const whip = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.014, 0.028, 0.95, 6)), matBrushedAlum);
   whip.position.set(-0.62, 3.68, -0.35);
   habGroup.add(whip);
-  const beaconTip = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.05, 8, 8)), matWarmWindow);
+  const beaconTip = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.06, 8, 8)), trackMat(matCyanGlow.clone()));
   beaconTip.position.set(-0.62, 4.18, -0.35);
+  beaconTip.userData.nonPhysicalMarker = true;
   habGroup.add(beaconTip);
+  colonyBlinkingLights.push(beaconTip);
 
-  // Exterior airlock floodlights, safety chevron trim & radiator louvers on Habitat 01
+  // Futuristic teal telemetry band near upper turret collar
+  const habTealCollar = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(1.24, 1.24, 0.08, 20)), matScienceTeal);
+  habTealCollar.position.y = 3.16;
+  habTealCollar.userData.nonPhysicalMarker = true;
+  habGroup.add(habTealCollar);
+
+  // Exterior airlock floodlights, glowing teal entry beacon, safety chevron trim & radiator louvers on Habitat 01
   const floodLamp = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(0.36, 0.12, 0.09, 0.015)), matWarmWindow);
   floodLamp.position.set(0, 2.08, 0.8);
   airlockGroup.add(floodLamp);
+
+  const airlockStatusBeacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.055, 8, 8)), trackMat(matGreenGlow.clone()));
+  airlockStatusBeacon.position.set(0.48, 2.02, 0.78);
+  airlockStatusBeacon.userData.nonPhysicalMarker = true;
+  airlockGroup.add(airlockStatusBeacon);
+  colonyBlinkingLights.push(airlockStatusBeacon);
 
   const louverBarGeo = trackGeo(new THREE.BoxGeometry(0.68, 0.045, 0.14));
   for (let l = 0; l < 4; l++) {
@@ -791,6 +855,17 @@ export function buildOutpostAssets(
   const cupolaCap = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.55, 1.0, 0.24, 14)), matHullPanel);
   cupolaCap.position.set(0, 2.78, 0.15);
   chapeaWing.add(cupolaCap);
+
+  const chapeaLabBeacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.06, 8, 8)), trackMat(matCyanGlow.clone()));
+  chapeaLabBeacon.position.set(0, 2.94, 0.15);
+  chapeaLabBeacon.userData.nonPhysicalMarker = true;
+  chapeaWing.add(chapeaLabBeacon);
+  colonyBlinkingLights.push(chapeaLabBeacon);
+
+  const chapeaLabBand = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(4.28, 0.09, 3.08)), matScienceTeal);
+  chapeaLabBand.position.set(0, 1.98, 0);
+  chapeaLabBand.userData.nonPhysicalMarker = true;
+  chapeaWing.add(chapeaLabBand);
 
   [-1.35, 1.35].forEach((sx) => {
     const scrubber = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.28, 0.28, 1.55, 12)), matBrushedAlum);
@@ -1068,6 +1143,13 @@ export function buildOutpostAssets(
           const veg = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.048, 8, 6)), matTomato);
           veg.position.set(tx + 0.12, 0.68, 0.14);
           pGroup.add(veg);
+          const bloom = new THREE.Mesh(
+            trackGeo(new THREE.SphereGeometry(0.042, 7, 5)),
+            idx % 2 === 0 ? matYellowBloom : matCoralBloom,
+          );
+          bloom.position.set(tx - 0.1, 0.78, -0.09);
+          bloom.userData.nonPhysicalMarker = true;
+          pGroup.add(bloom);
         });
       } else if (prop.kind === 'mist-tower') {
         const baseTank = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.4, 0.42, 0.42, 14)), bedMat);
@@ -1084,6 +1166,13 @@ export function buildOutpostAssets(
           pod.rotation.y = -ang;
           pod.scale.setScalar(0.95);
           pGroup.add(pod);
+          const blossom = new THREE.Mesh(
+            trackGeo(new THREE.SphereGeometry(0.038, 6, 5)),
+            r % 2 === 0 ? matCoralBloom : matYellowBloom,
+          );
+          blossom.position.set(Math.cos(ang) * 0.3, 0.72 + r * 0.25, Math.sin(ang) * 0.3);
+          blossom.userData.nonPhysicalMarker = true;
+          pGroup.add(blossom);
         }
       } else if (prop.kind === 'workbench') {
         const table = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(1.18, 0.08, 0.66, 0.02)), matBrushedAlum);
@@ -1102,13 +1191,13 @@ export function buildOutpostAssets(
     }
   } else {
     const planterAngles = [-0.55, 0.35, 3.35, 4.35];
-    planterAngles.forEach((a) => {
+    planterAngles.forEach((a, pIdx) => {
       const rack = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(0.68, 0.22, 0.34, 0.02)), bedMat);
       rack.position.set(Math.cos(a) * 1.48, 0.33, Math.sin(a) * 1.48);
       rack.rotation.y = -a + Math.PI / 2;
       ghGroup.add(rack);
 
-      [-0.18, 0, 0.18].forEach((offset) => {
+      [-0.18, 0, 0.18].forEach((offset, oIdx) => {
         const px = Math.cos(a) * 1.48 - Math.sin(a) * offset;
         const pz = Math.sin(a) * 1.48 + Math.cos(a) * offset;
         for (let l = 0; l < 4; l++) {
@@ -1118,6 +1207,13 @@ export function buildOutpostAssets(
           leaf.scale.setScalar(0.82 + (l % 2) * 0.22);
           ghGroup.add(leaf);
         }
+        const flower = new THREE.Mesh(
+          trackGeo(new THREE.SphereGeometry(0.044, 6, 5)),
+          (pIdx + oIdx) % 2 === 0 ? matCoralBloom : matYellowBloom,
+        );
+        flower.position.set(px, 0.62, pz);
+        flower.userData.nonPhysicalMarker = true;
+        ghGroup.add(flower);
       });
     });
 
@@ -1149,6 +1245,11 @@ export function buildOutpostAssets(
   waterTank.position.set(wtLocalX, 0.0, wtLocalZ);
   waterTank.castShadow = castShadow;
   ghGroup.add(waterTank);
+
+  const waterGauge = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.08, 0.72, 0.06)), matCyanGlow);
+  waterGauge.position.set(wtLocalX, 0.62, wtLocalZ + 0.44);
+  waterGauge.userData.nonPhysicalMarker = true;
+  ghGroup.add(waterGauge);
 
   const wtDist = Math.hypot(wtLocalX, wtLocalZ) || 1;
   const wallInX = (wtLocalX / wtDist) * (ghSpec.floorRadius - 0.35);
@@ -1355,9 +1456,11 @@ export function buildOutpostAssets(
     bus.position.set(b * 0.52, 1.48, 0);
     batBank.add(bus);
   }
-  const batStatusLed = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.38, 0.12, 0.05)), matWarmWindow);
+  const batStatusLed = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.44, 0.14, 0.06)), trackMat(matGreenGlow.clone()));
   batStatusLed.position.set(0, 0.86, 0.59);
+  batStatusLed.userData.nonPhysicalMarker = true;
   batBank.add(batStatusLed);
+  colonyBlinkingLights.push(batStatusLed);
   solarGroup.add(batBank);
 
   registerInteractive(solarGroup, 'solar');
@@ -1538,7 +1641,7 @@ export function buildOutpostAssets(
     // 3 detailed wheels per side (suspension offset group + inner spin group)
     wheelZList.forEach((wz) => {
       const offsetGroup = new THREE.Group();
-      offsetGroup.position.set(sx, wheelRadius, wz);
+      offsetGroup.position.set(sx, wheelRadius + 0.012, wz);
 
       const spinGroup = new THREE.Group();
       offsetGroup.add(spinGroup);
@@ -1652,17 +1755,17 @@ export function buildOutpostAssets(
     new THREE.MeshBasicMaterial({
       color: '#FFB703',
       transparent: true,
-      opacity: 0.14,
+      opacity: 0.1,
       depthWrite: false,
       blending: THREE.AdditiveBlending,
       side: THREE.DoubleSide,
     }),
   );
-  const beamGeo = trackGeo(new THREE.ConeGeometry(0.45, 3.6, 14, 1, true));
-  beamGeo.translate(0, -1.8, 0);
+  const beamGeo = trackGeo(new THREE.CylinderGeometry(0.05, 0.24, 2.0, 16, 1, true));
+  beamGeo.translate(0, -1.0, 0);
   beamGeo.rotateX(-Math.PI / 2);
   const roverGuideBeam = new THREE.Mesh(beamGeo, roverGuideBeamMat);
-  roverGuideBeam.position.set(0, 0.0, 0.25);
+  roverGuideBeam.position.set(0, 0.0, 0.22);
   roverGuideBeam.visible = false;
   roverHead.add(roverGuideBeam);
 
@@ -2504,6 +2607,11 @@ export function buildOutpostAssets(
   tank2Band.position.set(0.42, 1.15, 0);
   tank2Group.add(tank2Band);
 
+  const tank1TealBand = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.35, 0.35, 0.14, 16)), matScienceTeal);
+  tank1TealBand.position.set(-0.42, 1.15, 0);
+  tank1TealBand.userData.nonPhysicalMarker = true;
+  tank2Group.add(tank1TealBand);
+
   if (m.tank2.hasIsruUnit) {
     const isruGroup = new THREE.Group();
     isruGroup.position.set(m.tank2.isruOffsetX, 0, m.tank2.isruOffsetZ);
@@ -2894,9 +3002,11 @@ export function buildOutpostAssets(
     nacelle.castShadow = castShadow;
     turbine.add(nacelle);
 
-    const nacelleBeacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.075, 10, 8)), matWarmWindow);
+    const nacelleBeacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.085, 10, 8)), trackMat(matWarmWindow.clone()));
     nacelleBeacon.position.set(0, 7.12, -0.45);
+    nacelleBeacon.userData.nonPhysicalMarker = true;
     turbine.add(nacelleBeacon);
+    colonyBlinkingLights.push(nacelleBeacon);
 
     // 3-blade wide-chord rotor assembly (spins around local Z)
     const rotorHub = new THREE.Group();
@@ -2912,6 +3022,10 @@ export function buildOutpostAssets(
       const blade = new THREE.Mesh(windBladeGeo, matBrushedAlum);
       blade.rotation.y = 0.22; // wide-chord pitch angle for thin 0.02 kg/m3 Mars air
       blade.castShadow = castShadow;
+      const tipStripe = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.14, 0.38, 0.065)), matMarsOrange);
+      tipStripe.position.set(0.04, 2.5, 0);
+      tipStripe.userData.nonPhysicalMarker = true;
+      blade.add(tipStripe);
       bWrap.add(blade);
       rotorHub.add(bWrap);
     }
@@ -3022,9 +3136,11 @@ export function buildOutpostAssets(
   meltTank.castShadow = castShadow;
   iceDrillGroup.add(meltTank);
 
-  const drillBeacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.09, 10, 8)), matWarmWindow);
+  const drillBeacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.095, 10, 8)), trackMat(matCyanGlow.clone()));
   drillBeacon.position.set(0, 3.75, 0);
+  drillBeacon.userData.nonPhysicalMarker = true;
   iceDrillGroup.add(drillBeacon);
+  colonyBlinkingLights.push(drillBeacon);
 
   registerInteractive(iceDrillGroup, 'ice-drill');
   scene.add(iceDrillGroup);
@@ -3047,19 +3163,27 @@ export function buildOutpostAssets(
   apronSlab.receiveShadow = true;
   landingPadGroup.add(apronSlab);
 
-  const padRingMat = trackMat(
+  const landingPadDecalTex = trackTex(createLandingPadDecalTexture(maxAniso));
+  const landingPadDecalMat = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#ffb703',
-      roughness: 0.6,
+      map: landingPadDecalTex,
+      roughness: 0.62,
+      metalness: 0.12,
       polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
     }),
   );
-  const padCircle = new THREE.Mesh(trackGeo(new THREE.RingGeometry(2.6, 2.95, 32)), padRingMat);
-  padCircle.rotation.x = -Math.PI / 2;
-  padCircle.position.y = 0.23;
-  landingPadGroup.add(padCircle);
+  const padDecalMesh = new THREE.Mesh(
+    trackGeo(new THREE.CircleGeometry(m.landingPad.apronRadius - 0.16, 48)),
+    landingPadDecalMat,
+  );
+  padDecalMesh.rotation.x = -Math.PI / 2;
+  padDecalMesh.position.y = 0.232;
+  padDecalMesh.renderOrder = 5;
+  padDecalMesh.receiveShadow = true;
+  padDecalMesh.userData.nonPhysicalMarker = true;
+  landingPadGroup.add(padDecalMesh);
 
   for (let c = 0; c < 4; c++) {
     const a = (c / 4) * Math.PI * 2 + Math.PI / 4;
@@ -3067,9 +3191,11 @@ export function buildOutpostAssets(
     post.position.set(Math.cos(a) * 4.45, 0.42, Math.sin(a) * 4.45);
     landingPadGroup.add(post);
 
-    const lamp = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.085, 8, 8)), matWarmWindow);
+    const lamp = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.095, 8, 8)), trackMat(matWarmWindow.clone()));
     lamp.position.set(Math.cos(a) * 4.45, 0.78, Math.sin(a) * 4.45);
+    lamp.userData.nonPhysicalMarker = true;
     landingPadGroup.add(lamp);
+    colonyBlinkingLights.push(lamp);
   }
 
   [-1.2, 1.2].forEach((cz, idx) => {
@@ -3091,6 +3217,12 @@ export function buildOutpostAssets(
   cargoPod.rotation.y = 0.22;
   cargoPod.castShadow = castShadow;
   landingPadGroup.add(cargoPod);
+
+  const cargoTealStripe = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.94, 0.14, 1.19)), matScienceTeal);
+  cargoTealStripe.position.set(4.4, 0.92, -3.1);
+  cargoTealStripe.rotation.y = 0.22;
+  cargoTealStripe.userData.nonPhysicalMarker = true;
+  landingPadGroup.add(cargoTealStripe);
 
   registerInteractive(landingPadGroup, 'landing-pad');
   scene.add(landingPadGroup);
@@ -3118,13 +3250,15 @@ export function buildOutpostAssets(
         color: '#f59e0b',
         roughness: 0.55,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
       }),
     );
     const bayBox = new THREE.Mesh(trackGeo(new THREE.RingGeometry(2.1, 2.32, 4)), bayStripeMat);
     bayBox.rotation.x = -Math.PI / 2;
     bayBox.rotation.z = Math.PI / 4;
-    bayBox.position.y = rp.topOffset + 0.01;
+    bayBox.position.y = rp.topOffset + 0.012;
+    bayBox.renderOrder = 5;
     roverPadGroup.add(bayBox);
 
     // Corner charging pylon clear of rover parking bay
@@ -3138,9 +3272,28 @@ export function buildOutpostAssets(
     pylonBody.position.y = 0.66;
     pylonBody.castShadow = castShadow;
     pylonGroup.add(pylonBody);
-    const pylonLed = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.42, 0.14, 0.06)), matWarmWindow);
+    const pylonLed = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.42, 0.14, 0.06)), trackMat(matCyanGlow.clone()));
     pylonLed.position.set(0, 1.05, 0.33);
+    pylonLed.userData.nonPhysicalMarker = true;
     pylonGroup.add(pylonLed);
+
+    const pylonMast = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.04, 0.05, 1.1, 8)), matBrushedAlum);
+    pylonMast.position.set(0, 1.75, 0);
+    pylonMast.userData.nonPhysicalMarker = true;
+    pylonGroup.add(pylonMast);
+
+    const pylonSolar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.75, 0.04, 0.55)), matSolarWafer);
+    pylonSolar.position.set(0, 2.32, 0);
+    pylonSolar.rotation.x = 0.28;
+    pylonSolar.userData.nonPhysicalMarker = true;
+    pylonGroup.add(pylonSolar);
+
+    const pylonBeacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.065, 8, 8)), trackMat(matGreenGlow.clone()));
+    pylonBeacon.position.set(0.28, 2.4, 0);
+    pylonBeacon.userData.nonPhysicalMarker = true;
+    pylonGroup.add(pylonBeacon);
+    colonyBlinkingLights.push(pylonBeacon);
+
     roverPadGroup.add(pylonGroup);
 
     registerInteractive(roverPadGroup, 'rover');
@@ -3152,52 +3305,83 @@ export function buildOutpostAssets(
     trackTex(roadTex.map);
     trackTex(roadTex.roughnessMap);
 
+    roadTex.map.repeat.set(1, 1);
+    roadTex.roughnessMap.repeat.set(1, 1);
+
     const matMainRoad = trackMat(
       new THREE.MeshStandardMaterial({
         map: roadTex.map,
         roughnessMap: roadTex.roughnessMap,
-        color: '#6b4f48',
-        roughness: 0.92,
-        metalness: 0.03,
+        color: '#b58d7f',
+        roughness: 0.88,
+        metalness: 0.04,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -2,
+        polygonOffsetFactor: -3,
+        polygonOffsetUnits: -3,
       }),
     );
     const matFootpath = trackMat(
       new THREE.MeshStandardMaterial({
-        color: '#7d5b50',
-        roughness: 0.94,
-        metalness: 0.02,
+        color: '#b88874',
+        roughness: 0.9,
+        metalness: 0.03,
         polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
       }),
     );
     const matKerb = trackMat(
       new THREE.MeshStandardMaterial({
-        color: '#52403c',
-        roughness: 0.85,
-        metalness: 0.12,
+        color: '#64748b',
+        roughness: 0.72,
+        metalness: 0.25,
       }),
     );
 
-    // Compacted Courtyard Plaza
+    const buildRoadStadiumGeometry = (widthM: number, lenM: number): THREE.ShapeGeometry => {
+      const halfW = widthM * 0.5;
+      const halfL = lenM * 0.5;
+      const shape = new THREE.Shape();
+      shape.moveTo(halfW, -halfL);
+      shape.lineTo(halfW, halfL);
+      shape.absarc(0, halfL, halfW, 0, Math.PI, false);
+      shape.lineTo(-halfW, -halfL);
+      shape.absarc(0, -halfL, halfW, Math.PI, Math.PI * 2, false);
+      const geo = new THREE.ShapeGeometry(shape, 12);
+      const pos = geo.attributes.position as THREE.BufferAttribute;
+      const uvs = new Float32Array(pos.count * 2);
+      for (let i = 0; i < pos.count; i++) {
+        const px = pos.getX(i);
+        const py = pos.getY(i);
+        uvs[i * 2] = px / widthM + 0.5;
+        uvs[i * 2 + 1] = py / 3.4;
+      }
+      geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+      geo.rotateX(-Math.PI / 2);
+      return geo;
+    };
+
+    // Compacted Courtyard Plaza (base layer below footpaths & ring spokes so zero Z-fighting)
     const courtyard = layout.pads.find((p) => p.id === 'airlock-courtyard');
     if (courtyard && courtyard.halfX && courtyard.halfZ) {
-      const courtMesh = new THREE.Mesh(
-        trackGeo(new THREE.PlaneGeometry(courtyard.halfX * 2, courtyard.halfZ * 2)),
-        matMainRoad,
-      );
+      const courtGeo = trackGeo(new THREE.PlaneGeometry(courtyard.halfX * 2, courtyard.halfZ * 2));
+      const courtUv = courtGeo.attributes.uv as THREE.BufferAttribute;
+      for (let i = 0; i < courtUv.count; i++) {
+        courtUv.setXY(i, courtUv.getX(i) * 1.5, courtUv.getY(i) * 1.2);
+      }
+      const courtMesh = new THREE.Mesh(courtGeo, matFootpath);
       courtMesh.rotation.x = -Math.PI / 2;
-      courtMesh.position.set(courtyard.x, gAt(courtyard.x, courtyard.z) + 0.018, courtyard.z);
+      courtMesh.position.set(courtyard.x, gAt(courtyard.x, courtyard.z) + 0.01, courtyard.z);
+      courtMesh.renderOrder = 2;
       courtMesh.receiveShadow = true;
       scene.add(courtMesh);
     }
 
-    // Road strips & kerb instance transforms
+    // Road strips & kerb instance transforms (unique staggered Y per segment eliminates all junction Z-fighting)
     const kerbMatrices: THREE.Matrix4[] = [];
     const kDummy = new THREE.Object3D();
+    let footpathLayer = 0;
+    let mainRoadLayer = 0;
 
     for (const seg of layout.roads) {
       const dx = seg.x2 - seg.x1;
@@ -3206,17 +3390,20 @@ export function buildOutpostAssets(
       if (len < 0.2) continue;
       const cx = (seg.x1 + seg.x2) * 0.5;
       const cz = (seg.z1 + seg.z2) * 0.5;
-      const cy = gAt(cx, cz) + (seg.category === 'footpath' ? 0.016 : 0.02);
+      const isFootpath = seg.category === 'footpath';
+      const yOff = isFootpath
+        ? 0.014 + footpathLayer++ * 0.0008
+        : 0.025 + mainRoadLayer++ * 0.0008;
+      const cy = gAt(cx, cz) + yOff;
       const yaw = Math.atan2(dx, dz);
 
       const strip = new THREE.Mesh(
-        trackGeo(new THREE.PlaneGeometry(seg.widthM, len + 0.65)),
-        seg.category === 'footpath' ? matFootpath : matMainRoad,
+        trackGeo(buildRoadStadiumGeometry(seg.widthM, len)),
+        isFootpath ? matFootpath : matMainRoad,
       );
-      strip.rotation.order = 'YXZ';
       strip.rotation.y = yaw;
-      strip.rotation.x = -Math.PI / 2;
       strip.position.set(cx, cy, cz);
+      strip.renderOrder = isFootpath ? 3 : 4;
       strip.receiveShadow = true;
       scene.add(strip);
 
@@ -3249,6 +3436,7 @@ export function buildOutpostAssets(
       kerbMatrices.forEach((mat4, idx) => kerbInst.setMatrixAt(idx, mat4));
       kerbInst.instanceMatrix.needsUpdate = true;
       kerbInst.receiveShadow = true;
+      kerbInst.computeBoundingSphere();
       scene.add(kerbInst);
     }
 
@@ -3256,9 +3444,9 @@ export function buildOutpostAssets(
     if (layout.bollards.length > 0) {
       bollardLampMat = trackMat(
         new THREE.MeshStandardMaterial({
-          color: '#ffb703',
+          color: '#ffd166',
           emissive: '#ffb703',
-          emissiveIntensity: 1.45,
+          emissiveIntensity: 1.75,
           roughness: 0.2,
         }),
       );
@@ -3279,6 +3467,8 @@ export function buildOutpostAssets(
       });
       postInst.instanceMatrix.needsUpdate = true;
       lensInst.instanceMatrix.needsUpdate = true;
+      postInst.computeBoundingSphere();
+      lensInst.computeBoundingSphere();
       postInst.castShadow = castShadow;
       scene.add(postInst);
       scene.add(lensInst);
@@ -3353,15 +3543,80 @@ export function buildOutpostAssets(
         const rz = (ub.z1 + ub.z2) * 0.5;
         const yaw = Math.atan2(ub.x2 - ub.x1, ub.z2 - ub.z1);
         const ramp = new THREE.Mesh(
-          trackGeo(createBeveledPanelGeometry(ub.widthM * 0.96, 0.09, 0.46, 0.025)),
+          trackGeo(createBeveledPanelGeometry(ub.widthM * 0.96, 0.064, 0.48, 0.02)),
           matMarsOrange,
         );
-        ramp.position.set(rx, cyBase + 0.04, rz);
+        ramp.position.set(rx, cyBase + 0.036, rz);
         ramp.rotation.y = yaw;
         ramp.receiveShadow = true;
         scene.add(ramp);
       }
     }
+  }
+
+  // ============================================================================
+  // 15. DISTANT AUTONOMOUS SCOUT ROVER (Animated Patrol Outside Colony Perimeter)
+  // ============================================================================
+  let distantRover: { group: THREE.Group; wheels: THREE.Group[] } | null = null;
+  {
+    const drGroup = new THREE.Group();
+    const drR = layout.mode === 'gameplay' ? 55 : 37;
+    drGroup.position.set(drR, gAt(drR, 0), 0);
+
+    const drBody = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(0.95, 0.34, 1.35, 0.03)), matHullPanel);
+    drBody.position.y = 0.44;
+    drBody.castShadow = castShadow;
+    drGroup.add(drBody);
+
+    const drTrim = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.98, 0.1, 1.2)), matMarsOrange);
+    drTrim.position.y = 0.56;
+    drGroup.add(drTrim);
+
+    const drSolar = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.86, 0.04, 0.75)), matSolarWafer);
+    drSolar.position.set(0, 0.63, -0.22);
+    drGroup.add(drSolar);
+
+    const drMast = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.035, 0.04, 0.58, 8)), matBrushedAlum);
+    drMast.position.set(0, 0.85, 0.38);
+    drGroup.add(drMast);
+
+    const drHead = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.28, 0.14, 0.16)), matDarkSteel);
+    drHead.position.set(0, 1.15, 0.42);
+    drGroup.add(drHead);
+
+    const drVisor = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.22, 0.06, 0.03)), matCyanGlow);
+    drVisor.position.set(0, 1.15, 0.51);
+    drGroup.add(drVisor);
+
+    const drBeacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.055, 8, 8)), trackMat(matGreenGlow.clone()));
+    drBeacon.position.set(-0.34, 0.92, -0.48);
+    drGroup.add(drBeacon);
+    colonyBlinkingLights.push(drBeacon);
+
+    const drWheels: THREE.Group[] = [];
+    const drWheelGeo = trackGeo(new THREE.CylinderGeometry(0.22, 0.22, 0.16, 12));
+    drWheelGeo.rotateZ(Math.PI / 2);
+    const drHubGeo = trackGeo(new THREE.CylinderGeometry(0.11, 0.11, 0.18, 8));
+    drHubGeo.rotateZ(Math.PI / 2);
+    [
+      [-0.56, 0.22, 0.46],
+      [0.56, 0.22, 0.46],
+      [-0.56, 0.22, -0.46],
+      [0.56, 0.22, -0.46],
+    ].forEach(([wx, wy, wz]) => {
+      const wPivot = new THREE.Group();
+      wPivot.position.set(wx, wy, wz);
+      const tire = new THREE.Mesh(drWheelGeo, matTireRubber);
+      tire.castShadow = castShadow;
+      wPivot.add(tire);
+      const hub = new THREE.Mesh(drHubGeo, matMarsOrange);
+      wPivot.add(hub);
+      drGroup.add(wPivot);
+      drWheels.push(wPivot);
+    });
+
+    scene.add(drGroup);
+    distantRover = { group: drGroup, wheels: drWheels };
   }
 
   const buildPoint = (spec: { x: number; z: number; yOffset?: number }) =>
@@ -3491,6 +3746,8 @@ export function buildOutpostAssets(
     landmarkCenters,
     zonePositions,
     moduleRoots,
+    colonyBlinkingLights,
+    distantRover,
     dispose: () => {
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());

@@ -1,4 +1,4 @@
-import { MutableRefObject, useState } from 'react';
+import { MutableRefObject, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Compass,
@@ -28,6 +28,8 @@ import {
   Gauge,
   ChevronDown,
   ChevronUp,
+  ChevronLeft,
+  ChevronRight,
   Gamepad2,
   Droplets,
   Sprout,
@@ -36,6 +38,7 @@ import {
   Users,
   Map as MapIcon,
   MapPin,
+  Navigation,
 } from 'lucide-react';
 import { OUTPOST_LANDMARKS, OutpostLandmarkId } from '../data/missionData';
 import {
@@ -111,6 +114,208 @@ function ResourceAlertIcon({ status }: { status: ResourceStatus }) {
     return <AlertTriangle className="h-3.5 w-3.5 text-[#FFB703]" aria-label="Warning" />;
   }
   return <CheckCircle2 className="h-3 w-3 text-[#22C55E]/85" aria-label="OK" />;
+}
+
+interface CompassPoseDetail {
+  x: number;
+  z: number;
+  headingDeg: number;
+  speedMs: number;
+}
+
+const COMPASS_POINTS: ReadonlyArray<{ deg: number; label?: string; major?: boolean }> = Array.from(
+  { length: 24 },
+  (_, idx) => {
+    const deg = idx * 15;
+    const labels: Record<number, { label: string; major: boolean }> = {
+      0: { label: 'N', major: true },
+      45: { label: 'NE', major: false },
+      90: { label: 'E', major: true },
+      135: { label: 'SE', major: false },
+      180: { label: 'S', major: true },
+      225: { label: 'SW', major: false },
+      270: { label: 'W', major: true },
+      315: { label: 'NW', major: false },
+    };
+    const match = labels[deg];
+    return match ? { deg, label: match.label, major: match.major } : { deg };
+  },
+);
+
+function formatCardinal(deg: number): string {
+  const dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
+
+function TopCompassNav({
+  activeGoal,
+  weatherActive,
+  quickMode,
+  initialPose,
+}: {
+  activeGoal: { label: string; x: number; z: number };
+  weatherActive: boolean;
+  quickMode: boolean;
+  initialPose?: GameplayPoseTelemetry;
+}) {
+  const [pose, setPose] = useState<CompassPoseDetail>(() => ({
+    x: initialPose?.x ?? GAMEPLAY_LAYOUT.modules.astroSpawn.x,
+    z: initialPose?.z ?? GAMEPLAY_LAYOUT.modules.astroSpawn.z,
+    headingDeg: initialPose?.headingDeg ?? 180,
+    speedMs: initialPose?.speedMs ?? 0,
+  }));
+
+  useEffect(() => {
+    const onTelemetry = (ev: Event) => {
+      const detail = (ev as CustomEvent<CompassPoseDetail>).detail;
+      if (detail) setPose(detail);
+    };
+    window.addEventListener('mars-pose-telemetry', onTelemetry);
+    return () => window.removeEventListener('mars-pose-telemetry', onTelemetry);
+  }, []);
+
+  const waypointDistM = Math.max(0, Math.round(Math.hypot(activeGoal.x - pose.x, activeGoal.z - pose.z)));
+  const baselineWalkMs =
+    PHYSICS_CONSTANTS.MARS_WALK_SPEED_MS * (quickMode ? PHYSICS_CONSTANTS.QUICK_MODE_SPEED_MULT : 1);
+  const effectiveSpeedMs = Math.max(pose.speedMs, baselineWalkMs);
+  const waypointEtaS = waypointDistM <= 2 ? 0 : Math.max(1, Math.round(waypointDistM / effectiveSpeedMs));
+  const targetBearingDeg =
+    ((Math.atan2(activeGoal.x - pose.x, -(activeGoal.z - pose.z)) * 180) / Math.PI + 360) % 360;
+
+  const wrapRelDeg = (deg: number) => {
+    let d = ((deg - pose.headingDeg + 540) % 360) - 180;
+    if (d < -180) d += 360;
+    return d;
+  };
+
+  const goalRelDeg = wrapRelDeg(targetBearingDeg);
+  const offLeft = goalRelDeg < -82;
+  const offRight = goalRelDeg > 82;
+  const clampedGoalRelDeg = Math.max(-84, Math.min(84, goalRelDeg));
+  const accentHex = weatherActive ? '#22C55E' : '#FFB703';
+  const roundedHeading = Math.round(((pose.headingDeg % 360) + 360) % 360) % 360;
+
+  return (
+    <div className="pointer-events-none fixed left-1/2 top-3 z-20 hidden -translate-x-1/2 flex-col items-center md:flex">
+      <div className="w-[348px] overflow-hidden rounded-xl border border-white/15 bg-[#071324]/92 shadow-[0_8px_24px_rgba(0,0,0,0.48)]">
+        {/* Top visor hairline accent */}
+        <div
+          aria-hidden="true"
+          className="h-[2px] w-full"
+          style={{
+            background: `linear-gradient(90deg, transparent 0%, ${accentHex} 50%, transparent 100%)`,
+          }}
+        />
+
+        {/* Sliding degree & cardinal tape */}
+        <div className="relative h-7 w-full overflow-hidden">
+          <div
+            className="absolute inset-0"
+            style={{
+              maskImage: 'linear-gradient(90deg, transparent 0%, black 14%, black 86%, transparent 100%)',
+              WebkitMaskImage: 'linear-gradient(90deg, transparent 0%, black 14%, black 86%, transparent 100%)',
+            }}
+          >
+            {COMPASS_POINTS.map((pt) => {
+              const rel = wrapRelDeg(pt.deg);
+              if (Math.abs(rel) > 95) return null;
+              const leftPct = 50 + (rel / 90) * 50;
+              return (
+                <div
+                  key={pt.deg}
+                  style={{ left: `${leftPct}%` }}
+                  className="absolute inset-y-0 -translate-x-1/2 flex flex-col items-center"
+                >
+                  <span
+                    className={
+                      pt.label
+                        ? pt.major
+                          ? 'mt-0.5 h-1.5 w-[1.5px] bg-white/55'
+                          : 'mt-0.5 h-1 w-px bg-white/30'
+                        : 'mt-0.5 h-1 w-px bg-white/20'
+                    }
+                  />
+                  {pt.label && (
+                    <span
+                      className={`mt-0.5 text-[10px] leading-none tracking-wider tabular-nums ${
+                        pt.label === 'N'
+                          ? 'font-black text-[#FFB703]'
+                          : pt.major
+                            ? 'font-extrabold text-[#F8F9FA]'
+                            : 'font-semibold text-[#F8F9FA]/55'
+                      }`}
+                    >
+                      {pt.label}
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Waypoint diamond beacon */}
+            {!offLeft && !offRight && (
+              <div
+                title={`${activeGoal.label} (${Math.round(targetBearingDeg)}°)`}
+                style={{ left: `${50 + (clampedGoalRelDeg / 90) * 50}%` }}
+                className="absolute bottom-0.5 -translate-x-1/2 flex flex-col items-center"
+              >
+                <span
+                  className="block h-2 w-2 rotate-45 border border-[#071324]"
+                  style={{
+                    backgroundColor: accentHex,
+                    boxShadow: `0 0 8px ${accentHex}`,
+                  }}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Center fixed heading reticle */}
+          <div
+            aria-hidden="true"
+            className="absolute left-1/2 top-0 bottom-0 -translate-x-1/2 flex flex-col items-center justify-between"
+          >
+            <span className="h-2.5 w-[2px]" style={{ backgroundColor: accentHex }} />
+          </div>
+
+          {/* Off-axis directional cues */}
+          {offLeft && (
+            <div className="absolute left-1.5 top-1/2 -translate-y-1/2 flex items-center text-[10px] font-black" style={{ color: accentHex }}>
+              <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
+            </div>
+          )}
+          {offRight && (
+            <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center text-[10px] font-black" style={{ color: accentHex }}>
+              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+            </div>
+          )}
+        </div>
+
+        {/* Cohesive docked telemetry footer */}
+        <div className="flex items-center justify-between border-t border-white/10 bg-[#040B16]/75 px-3 py-1 text-[11px] font-bold tabular-nums">
+          <div className="flex items-center gap-1.5 text-[#F8F9FA]/80">
+            <Navigation className="h-3 w-3 shrink-0" style={{ color: accentHex }} aria-hidden="true" />
+            <span>
+              {String(roundedHeading).padStart(3, '0')}° {formatCardinal(roundedHeading)}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-1.5 text-[#F8F9FA]">
+            {weatherActive ? (
+              <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" aria-hidden="true" />
+            ) : (
+              <MapPin className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+            )}
+            <span className="font-extrabold">{activeGoal.label}</span>
+            <span className="text-white/30" aria-hidden="true">·</span>
+            <span className="text-[#F8F9FA]/85">{waypointDistM} m</span>
+            <span className="text-white/30" aria-hidden="true">·</span>
+            <span style={{ color: accentHex }}>{waypointEtaS}s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export function GameplayHUD({
@@ -227,37 +432,9 @@ export function GameplayHUD({
     shelter: 'Storm Shelter',
   };
 
-  // Top-center Compass Strip + Diegetic Visor Waypoint calculation
-  const px = poseTelemetry?.x ?? GAMEPLAY_LAYOUT.modules.astroSpawn.x;
-  const pz = poseTelemetry?.z ?? GAMEPLAY_LAYOUT.modules.astroSpawn.z;
-  const headingDeg = poseTelemetry?.headingDeg ?? 180;
   const activeGoal = simState.activeWeatherEvent
     ? { label: 'Habitat Shelter', x: GAMEPLAY_LAYOUT.destinationWaypoints.airlock.x, z: GAMEPLAY_LAYOUT.destinationWaypoints.airlock.z }
     : { label: zoneTitleMap[activeMission.zoneId], x: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].x, z: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].z };
-  const waypointDistM = Math.max(0, Math.round(Math.hypot(activeGoal.x - px, activeGoal.z - pz)));
-  const baselineWalkMs =
-    PHYSICS_CONSTANTS.MARS_WALK_SPEED_MS * (quickMode ? PHYSICS_CONSTANTS.QUICK_MODE_SPEED_MULT : 1);
-  const effectiveSpeedMs = Math.max(poseTelemetry?.speedMs ?? 0, baselineWalkMs);
-  const waypointEtaS = waypointDistM <= 2 ? 0 : Math.max(1, Math.round(waypointDistM / effectiveSpeedMs));
-  const targetBearingDeg =
-    ((Math.atan2(activeGoal.x - px, -(activeGoal.z - pz)) * 180) / Math.PI + 360) % 360;
-  const wrapRelDeg = (deg: number) => {
-    let d = ((deg - headingDeg + 540) % 360) - 180;
-    if (d < -180) d += 360;
-    return d;
-  };
-  const compassTicks: Array<{ label: string; deg: number }> = [
-    { label: 'N', deg: 0 },
-    { label: 'NE', deg: 45 },
-    { label: 'E', deg: 90 },
-    { label: 'SE', deg: 135 },
-    { label: 'S', deg: 180 },
-    { label: 'SW', deg: 225 },
-    { label: 'W', deg: 270 },
-    { label: 'NW', deg: 315 },
-  ];
-  const goalRelDeg = wrapRelDeg(targetBearingDeg);
-  const clampedGoalRelDeg = Math.max(-72, Math.min(72, goalRelDeg));
 
   return (
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-4 font-[family-name:var(--font-game)]">
@@ -275,56 +452,13 @@ export function GameplayHUD({
         </div>
       )}
 
-      {/* TOP-CENTER COMPASS STRIP + DIEGETIC VISOR WAYPOINT */}
-      <div className="pointer-events-none fixed left-1/2 top-3 z-20 hidden -translate-x-1/2 flex-col items-center gap-1 md:flex">
-        <div className="relative h-6 w-[236px] overflow-hidden rounded-lg border border-[#E85D04]/45 bg-[#071324]/82 shadow-[0_0_16px_rgba(7,19,36,0.55)]">
-          {/* Center hairline */}
-          <span
-            aria-hidden="true"
-            className="absolute left-1/2 top-0 h-2 w-0.5 -translate-x-1/2 bg-[#FFB703]"
-          />
-          {compassTicks.map((tick) => {
-            const rel = wrapRelDeg(tick.deg);
-            if (Math.abs(rel) > 78) return null;
-            const leftPct = 50 + (rel / 80) * 50;
-            const isMajor = tick.label.length === 1;
-            return (
-              <span
-                key={tick.label}
-                style={{ left: `${leftPct}%` }}
-                className={`absolute top-1.5 -translate-x-1/2 text-[10px] font-extrabold tabular-nums ${
-                  tick.label === 'N'
-                    ? 'text-[#FFB703]'
-                    : isMajor
-                      ? 'text-[#F8F9FA]/90'
-                      : 'text-[#F8F9FA]/55'
-                }`}
-              >
-                {tick.label}
-              </span>
-            );
-          })}
-          {/* Active Mission / Shelter Target Chevron on Compass */}
-          <span
-            title={`${activeGoal.label} (${Math.round(targetBearingDeg)}°)`}
-            style={{ left: `${50 + (clampedGoalRelDeg / 80) * 50}%` }}
-            className={`absolute bottom-0.5 h-2 w-2 -translate-x-1/2 rotate-45 ${
-              simState.activeWeatherEvent
-                ? 'bg-[#22C55E] shadow-[0_0_8px_#22C55E]'
-                : 'bg-[#FFB703] shadow-[0_0_8px_#FFB703]'
-            }`}
-          />
-        </div>
-        <div className="inline-flex items-center gap-1.5 text-[11px] font-extrabold tracking-wide text-[#F8F9FA] drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)] tabular-nums">
-          <MapPin
-            className={`h-3.5 w-3.5 ${simState.activeWeatherEvent ? 'text-[#22C55E]' : 'text-[#FFB703]'}`}
-            aria-hidden="true"
-          />
-          <span>
-            {activeGoal.label} · {waypointDistM} m · {waypointEtaS}s ETA
-          </span>
-        </div>
-      </div>
+      {/* TOP-CENTER VISOR COMPASS NAVIGATION HUD */}
+      <TopCompassNav
+        activeGoal={activeGoal}
+        weatherActive={Boolean(simState.activeWeatherEvent)}
+        quickMode={quickMode}
+        initialPose={poseTelemetry}
+      />
 
       {/* TOP HUD ROW: Minecraft-Style Resource Bars (Left) + Compact Objective Card (Right) */}
       <div className="flex flex-col items-start justify-between gap-2.5 lg:flex-row">
