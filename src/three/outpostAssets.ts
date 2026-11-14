@@ -1,18 +1,55 @@
 import * as THREE from 'three';
 import { OutpostLandmarkId } from '../data/missionData';
-import { groundHeightAt } from '../sim/terrainField';
+import { CREW_PROFILES, CrewMemberId, PHYSICS_CONSTANTS } from '../sim/constants';
+import {
+  GAMEPLAY_GREENHOUSE_PROPS,
+  OutpostLayoutConfig,
+  SHOWCASE_LAYOUT,
+  computeCorridorTransform,
+  getAirlockWorldPose,
+  getGreenhouseDoorwaySpec,
+  getGreenhouseWallSegments,
+  getOutpostSupportHeightAt,
+} from '../sim/outpostLayout';
+import {
+  TerrainHeightGrid,
+  getDefaultTerrainGrid,
+  groundHeightAt,
+} from '../sim/terrainField';
 import { MissionZoneId } from '../sim/missionsData';
 import {
   createAstronautChestDisplayTexture,
   createContactShadowTexture,
+  createCrewBadgeTexture,
   createDustSpriteTexture,
   createExplorerEmblemTexture,
   createHullPanelTextures,
+  createOutpostSignTexture,
+  createRoadSurfaceTextures,
   createRoverNameplateTexture,
+  createRoverWheelTextures,
   createSolarWaferTextures,
   createSuitFabricTextures,
   createThermalFoilTextures,
 } from './proceduralTextures';
+
+export interface CrewAvatarRig {
+  id: CrewMemberId;
+  group: THREE.Group;
+  pelvis: THREE.Group;
+  torso: THREE.Group;
+  head: THREE.Group;
+  leftArm: THREE.Group;
+  rightArm: THREE.Group;
+  leftElbow: THREE.Group;
+  rightElbow: THREE.Group;
+  leftLeg: THREE.Group;
+  rightLeg: THREE.Group;
+  leftKnee: THREE.Group;
+  rightKnee: THREE.Group;
+  leftAnkle: THREE.Group;
+  rightAnkle: THREE.Group;
+}
 
 export interface OutpostRig {
   interactiveTargets: THREE.Object3D[];
@@ -23,6 +60,10 @@ export interface OutpostRig {
   windmillVerticalRotors: THREE.Group[];
   roverGroup: THREE.Group;
   roverHead: THREE.Group;
+  roverLeftRockerPivot: THREE.Group;
+  roverRightRockerPivot: THREE.Group;
+  roverDiffBar: THREE.Mesh;
+  roverWheelOffsets: THREE.Group[];
   roverWheels: THREE.Group[];
   roverEyeMat: THREE.MeshStandardMaterial;
   roverGuideBeam: THREE.Mesh;
@@ -42,6 +83,12 @@ export interface OutpostRig {
   astroRightKneePivot: THREE.Group;
   astroLeftAnklePivot: THREE.Group;
   astroRightAnklePivot: THREE.Group;
+  crewRigs: CrewAvatarRig[];
+  fpScene: THREE.Scene;
+  fpCamera: THREE.PerspectiveCamera;
+  fpArmsGroup: THREE.Group;
+  fpLeftArm: THREE.Group;
+  fpRightArm: THREE.Group;
   powerConsoleGroup: THREE.Group;
   powerBeaconRing: THREE.Mesh;
   powerBeaconDiamond: THREE.Mesh;
@@ -65,6 +112,7 @@ export interface OutpostRig {
   ghFrostMat: THREE.MeshPhysicalMaterial;
   matWarmWindow: THREE.MeshStandardMaterial;
   matConsoleScreen: THREE.MeshStandardMaterial;
+  bollardLampMat: THREE.MeshStandardMaterial | null;
   habWindowGlow: THREE.PointLight | null;
   ghLight: THREE.PointLight;
   roverBasePos: { x: number; z: number };
@@ -72,6 +120,7 @@ export interface OutpostRig {
   stationInteractPoints: Record<OutpostLandmarkId, THREE.Vector3>;
   landmarkCenters: Record<OutpostLandmarkId, THREE.Vector3>;
   zonePositions: Record<MissionZoneId, THREE.Vector3>;
+  moduleRoots: Record<string, THREE.Object3D>;
   dispose: () => void;
 }
 
@@ -81,10 +130,11 @@ function createBeveledPanelGeometry(
   h: number,
   depth: number,
   bevel = 0.04,
+  cornerRatio = 0.035,
 ): THREE.ExtrudeGeometry {
   const hw = w * 0.5;
   const hh = h * 0.5;
-  const r = Math.min(w, h) * 0.12;
+  const r = Math.min(w, h) * cornerRatio;
   const shape = new THREE.Shape();
   shape.moveTo(-hw + r, -hh);
   shape.lineTo(hw - r, -hh);
@@ -159,7 +209,12 @@ export function buildOutpostAssets(
   renderer: THREE.WebGLRenderer,
   quality: 'high' | 'low',
   isSoftwareGl: boolean,
+  layout: OutpostLayoutConfig = SHOWCASE_LAYOUT,
+  terrainGrid?: TerrainHeightGrid,
 ): OutpostRig {
+  const m = layout.modules;
+  const resolvedTerrainGrid = terrainGrid ?? getDefaultTerrainGrid(layout.mode);
+  const gAt = (x: number, z: number) => groundHeightAt(x, z, resolvedTerrainGrid);
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
   const textures: THREE.Texture[] = [];
@@ -205,7 +260,10 @@ export function buildOutpostAssets(
   const roverNameTex = trackTex(createRoverNameplateTexture(maxAniso));
   const chestDcmTex = trackTex(createAstronautChestDisplayTexture(maxAniso));
   const explorerEmblemTex = trackTex(createExplorerEmblemTexture(maxAniso));
-  void chestDcmTex;
+  const wheelTex = createRoverWheelTextures(maxAniso);
+  trackTex(wheelTex.treadMap);
+  trackTex(wheelTex.treadBump);
+  trackTex(wheelTex.spokeAlpha);
 
   // Calibrated PBR Materials
   const matHullPanel = trackMat(
@@ -261,15 +319,14 @@ export function buildOutpostAssets(
   );
   const matGoldVisor = trackMat(
     new THREE.MeshPhysicalMaterial({
-      color: '#ffcf72',
-      metalness: 0.34,
-      roughness: 0.06,
+      color: '#eab354',
+      emissive: '#382108',
+      emissiveIntensity: 0.14,
+      metalness: 0.92,
+      roughness: 0.08,
       clearcoat: 1.0,
       clearcoatRoughness: 0.04,
-      envMapIntensity: 1.75,
-      transparent: true,
-      opacity: isSoftwareGl ? 0.54 : 0.42,
-      depthWrite: false,
+      envMapIntensity: 1.85,
     }),
   );
   const matSolarWafer = trackMat(
@@ -367,24 +424,27 @@ export function buildOutpostAssets(
   // 1. MARS HABITAT (Modular Pressurized Outpost Base)
   // ============================================================================
   const habGroup = new THREE.Group();
-  const habX = 4.4;
-  const habZ = -3.4;
-  const habY = groundHeightAt(habX, habZ);
+  const habX = m.habitat.x;
+  const habZ = m.habitat.z;
+  const habY = gAt(habX, habZ);
   habGroup.position.set(habX, habY, habZ);
-  habGroup.rotation.y = -0.34;
+  habGroup.rotation.y = m.habitat.yaw;
   addContactShadow(habGroup, 3.8, 3.5, 0.72);
 
   // Heavy structural sub-frame & 6 hydraulic landing legs
-  const deckTruss = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(2.68, 2.86, 0.32, 8)), matDarkSteel);
-  deckTruss.position.y = 0.52;
+  const deckTruss = new THREE.Mesh(
+    trackGeo(new THREE.CylinderGeometry(m.habitat.deckRadius, m.habitat.deckRadius, 0.68, 32)),
+    matDarkSteel,
+  );
+  deckTruss.position.y = 0.34;
   deckTruss.castShadow = castShadow;
   deckTruss.receiveShadow = true;
   habGroup.add(deckTruss);
 
   const legProfile = [
     new THREE.Vector2(0.0, 0.0),
-    new THREE.Vector2(0.36, 0.0),
-    new THREE.Vector2(0.32, 0.09),
+    new THREE.Vector2(0.32, 0.0),
+    new THREE.Vector2(0.28, 0.09),
     new THREE.Vector2(0.16, 0.14),
     new THREE.Vector2(0.13, 0.58),
     new THREE.Vector2(0.18, 0.64),
@@ -394,24 +454,23 @@ export function buildOutpostAssets(
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
     const leg = new THREE.Mesh(legGeo, matBrushedAlum);
-    leg.position.set(Math.cos(a) * 2.48, 0.0, Math.sin(a) * 2.48);
+    leg.position.set(Math.cos(a) * 2.40, 0.0, Math.sin(a) * 2.40);
     leg.castShadow = castShadow;
     habGroup.add(leg);
   }
 
-  // Modular main hull using LatheGeometry stepped pressure shell + modular armored wall panels
+  // Modular main hull in crisp tiered cylindrical bands matching Rapier cylinder colliders
   const habHullProfile = [
     new THREE.Vector2(0.0, 0.66),
-    new THREE.Vector2(2.45, 0.66),
-    new THREE.Vector2(2.48, 0.85),
-    new THREE.Vector2(2.38, 2.25),
-    new THREE.Vector2(2.15, 2.45),
-    new THREE.Vector2(1.85, 2.75),
-    new THREE.Vector2(1.25, 3.08),
-    new THREE.Vector2(0.55, 3.24),
+    new THREE.Vector2(2.48, 0.66),
+    new THREE.Vector2(2.48, 2.45),
+    new THREE.Vector2(1.92, 2.45),
+    new THREE.Vector2(1.92, 2.90),
+    new THREE.Vector2(1.22, 2.90),
+    new THREE.Vector2(1.22, 3.26),
     new THREE.Vector2(0.0, 3.26),
   ];
-  const habShell = new THREE.Mesh(trackGeo(new THREE.LatheGeometry(habHullProfile, 16)), matHullPanel);
+  const habShell = new THREE.Mesh(trackGeo(new THREE.LatheGeometry(habHullProfile, 128)), matHullPanel);
   habShell.castShadow = castShadow;
   habShell.receiveShadow = true;
   habGroup.add(habShell);
@@ -421,18 +480,18 @@ export function buildOutpostAssets(
   foilSkirt.position.y = 0.78;
   habGroup.add(foilSkirt);
 
-  const orangeBand = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(2.26, 2.38, 0.18, 16)), matMarsOrange);
+  const orangeBand = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(2.44, 2.48, 0.18, 16)), matMarsOrange);
   orangeBand.position.y = 2.32;
   habGroup.add(orangeBand);
 
-  // 8 Curved structural exterior buttress ribs (ExtrudeGeometry)
+  // 8 Curved structural exterior buttress ribs recessed flush within hab-shell radius
   const ribShape = new THREE.Shape();
   ribShape.moveTo(0, 0);
-  ribShape.lineTo(0.26, 0);
-  ribShape.lineTo(0.2, 1.45);
-  ribShape.quadraticCurveTo(0.12, 1.95, -0.32, 2.25);
-  ribShape.lineTo(-0.42, 2.12);
-  ribShape.quadraticCurveTo(-0.02, 1.82, 0.02, 1.38);
+  ribShape.lineTo(0.24, 0);
+  ribShape.lineTo(0.20, 1.45);
+  ribShape.quadraticCurveTo(0.12, 1.85, -0.28, 2.15);
+  ribShape.lineTo(-0.38, 2.04);
+  ribShape.quadraticCurveTo(-0.02, 1.76, 0.02, 1.38);
   ribShape.closePath();
   const ribGeo = trackGeo(
     new THREE.ExtrudeGeometry(ribShape, {
@@ -449,7 +508,7 @@ export function buildOutpostAssets(
     // Leave front-left bay clear for airlock module
     if (Math.abs(Math.sin(a - 2.1)) < 0.28 && Math.cos(a - 2.1) > 0) continue;
     const rib = new THREE.Mesh(ribGeo, matDarkSteel);
-    rib.position.set(Math.cos(a) * 2.35, 0.68, Math.sin(a) * 2.35);
+    rib.position.set(Math.cos(a) * 2.22, 0.68, Math.sin(a) * 2.22);
     rib.rotation.y = -a;
     rib.castShadow = castShadow;
     habGroup.add(rib);
@@ -509,10 +568,45 @@ export function buildOutpostAssets(
     habGroup.add(habWindowGlow);
   }
 
-  // Detailed Forward Airlock Vestibule + Mechanical Bulkhead Door + Grounded Steps + Handrails
+  // Detailed Forward Airlock Vestibule (+ optional Suit Vestibule link in Gameplay)
+  let suitVestibuleGroup: THREE.Group | null = null;
+  if (m.airlockOffset.hasSuitVestibule) {
+    suitVestibuleGroup = new THREE.Group();
+    suitVestibuleGroup.position.set(habX, habY, habZ + 3.85);
+    const vestPlinth = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(1.76, 0.58, 3.04)),
+      matDarkSteel,
+    );
+    vestPlinth.position.y = 0.29;
+    vestPlinth.castShadow = castShadow;
+    vestPlinth.receiveShadow = true;
+    suitVestibuleGroup.add(vestPlinth);
+
+    const vestBody = new THREE.Mesh(
+      trackGeo(createBeveledPanelGeometry(1.68, 1.72, 2.96, 0.05)),
+      matHullPanel,
+    );
+    vestBody.position.y = 1.38;
+    vestBody.castShadow = castShadow;
+    vestBody.receiveShadow = true;
+    suitVestibuleGroup.add(vestBody);
+
+    [-0.95, 0, 0.95].forEach((rz) => {
+      const rib = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.78, 1.78, 0.09)), matDarkSteel);
+      rib.position.set(0, 1.38, rz);
+      suitVestibuleGroup!.add(rib);
+    });
+    const vestStripe = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.72, 0.14, 2.88)), matMarsOrange);
+    vestStripe.position.y = 1.98;
+    suitVestibuleGroup.add(vestStripe);
+    registerInteractive(suitVestibuleGroup, 'habitat');
+    scene.add(suitVestibuleGroup);
+  }
+
+  const airPose = getAirlockWorldPose(layout);
   const airlockGroup = new THREE.Group();
-  airlockGroup.position.set(-1.55, 0.0, 1.85);
-  airlockGroup.rotation.y = -0.62;
+  airlockGroup.position.set(airPose.x, habY, airPose.z);
+  airlockGroup.rotation.y = airPose.yawRad;
 
   const airlockBody = new THREE.Mesh(
     trackGeo(createBeveledPanelGeometry(1.36, 1.48, 1.45, 0.06)),
@@ -524,7 +618,7 @@ export function buildOutpostAssets(
   airlockGroup.add(airlockBody);
 
   // Solid airlock support plinth grounded deep into Martian terrain
-  const airlockPlinth = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.26, 0.95, 1.38)), matDarkSteel);
+  const airlockPlinth = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.36, 0.92, 1.48)), matDarkSteel);
   airlockPlinth.position.set(0, 0.22, 0.02);
   airlockPlinth.castShadow = castShadow;
   airlockPlinth.receiveShadow = true;
@@ -554,63 +648,64 @@ export function buildOutpostAssets(
   lockWheel.position.set(0.18, 1.24, 0.86);
   airlockGroup.add(lockWheel);
 
-  // Grounded entry steps & twin tubular handrails
-  const stepFoundation = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.02, 0.5, 0.92)), matDarkSteel);
-  stepFoundation.position.set(0, -0.08, 1.15);
+  // Grounded entry steps & compact step guardrails aligned to step bounds
+  const stepFoundation = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.04, 0.44, 0.86)), matDarkSteel);
+  stepFoundation.position.set(0, -0.02, 1.10);
   stepFoundation.receiveShadow = true;
   airlockGroup.add(stepFoundation);
 
   for (let s = 0; s < 3; s++) {
-    const step = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.98, 0.16, 0.3)), matBrushedAlum);
-    step.position.set(0, 0.14 + s * 0.22, 1.34 - s * 0.24);
+    const step = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.98, 0.14, 0.28)), matBrushedAlum);
+    step.position.set(0, 0.12 + s * 0.14, 1.34 - s * 0.24);
     step.castShadow = castShadow;
     airlockGroup.add(step);
   }
-  [-0.5, 0.5].forEach((hx) => {
+  [-0.48, 0.48].forEach((hx) => {
     const railCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(hx, 0.05, 1.48),
-      new THREE.Vector3(hx, 0.68, 1.46),
-      new THREE.Vector3(hx, 1.15, 0.84),
+      new THREE.Vector3(hx, 0.06, 1.44),
+      new THREE.Vector3(hx, 0.24, 1.44),
+      new THREE.Vector3(hx, 0.56, 0.84),
     ]);
-    const rail = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(railCurve, 10, 0.025, 6, false)), matBrushedAlum);
+    const rail = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(railCurve, 10, 0.022, 6, false)), matBrushedAlum);
     airlockGroup.add(rail);
   });
-  habGroup.add(airlockGroup);
+  registerInteractive(airlockGroup, 'habitat');
+  scene.add(airlockGroup);
 
-  // Exterior HVAC Ventilation & Coolant Pipes on right flank
-  const hvacBox = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(0.85, 0.55, 0.55, 0.04)), matDarkSteel);
-  hvacBox.position.set(2.35, 1.42, -0.45);
+  // Exterior HVAC Ventilation & Coolant Pipes recessed flush on right flank
+  const hvacBox = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(0.60, 0.55, 0.40, 0.04)), matDarkSteel);
+  hvacBox.position.set(1.98, 1.42, -0.45);
   hvacBox.rotation.y = 0.2;
   hvacBox.castShadow = castShadow;
   habGroup.add(hvacBox);
 
   const pipeCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(2.35, 1.7, -0.45),
-    new THREE.Vector3(2.55, 2.35, -0.45),
-    new THREE.Vector3(1.9, 2.85, -0.4),
+    new THREE.Vector3(1.98, 1.7, -0.45),
+    new THREE.Vector3(2.12, 2.35, -0.45),
+    new THREE.Vector3(1.85, 2.85, -0.4),
   ]);
   const habPipe = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(pipeCurve, 12, 0.06, 8, false)), matCopperPipe);
   habGroup.add(habPipe);
 
-  // Rooftop High-Gain Parabolic Communications Dish + Lattice Mast
+  // Rooftop High-Gain Parabolic Communications Dish + Compact Whip (within hab-dish collider band)
   const dishMast = new THREE.Group();
-  dishMast.position.set(0.55, 3.2, -0.3);
+  dishMast.position.set(0.35, 3.2, -0.2);
 
   const turretBase = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.28, 0.36, 0.25, 10)), matDarkSteel);
   turretBase.position.y = 0.12;
   dishMast.add(turretBase);
 
-  const mastCol = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.07, 0.1, 0.92, 10)), matBrushedAlum);
-  mastCol.position.y = 0.65;
+  const mastCol = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.07, 0.1, 0.62, 10)), matBrushedAlum);
+  mastCol.position.y = 0.48;
   mastCol.castShadow = castShadow;
   dishMast.add(mastCol);
 
   const dishHolder = new THREE.Group();
-  dishHolder.position.set(0, 1.12, 0.05);
-  dishHolder.rotation.x = 0.72;
+  dishHolder.position.set(0, 0.78, 0.04);
+  dishHolder.rotation.x = 0.65;
 
   const parabolicDish = new THREE.Mesh(
-    trackGeo(createParabolicDishGeometry(0.72, 0.26)),
+    trackGeo(createParabolicDishGeometry(0.62, 0.22)),
     trackMat(
       new THREE.MeshStandardMaterial({
         color: '#f2f5f9',
@@ -622,18 +717,18 @@ export function buildOutpostAssets(
   );
   dishHolder.add(parabolicDish);
 
-  const feedHorn = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.04, 0.07, 0.42, 8)), matMarsOrange);
-  feedHorn.position.y = 0.28;
+  const feedHorn = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.04, 0.07, 0.36, 8)), matMarsOrange);
+  feedHorn.position.y = 0.24;
   dishHolder.add(feedHorn);
   dishMast.add(dishHolder);
   habGroup.add(dishMast);
 
-  // Secondary telemetry whip antenna
-  const whip = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.014, 0.028, 1.45, 6)), matBrushedAlum);
-  whip.position.set(-0.95, 3.7, -0.5);
+  // Secondary telemetry whip antenna kept compact inside upper turret cylinder
+  const whip = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.014, 0.028, 0.95, 6)), matBrushedAlum);
+  whip.position.set(-0.62, 3.68, -0.35);
   habGroup.add(whip);
   const beaconTip = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.05, 8, 8)), matWarmWindow);
-  beaconTip.position.set(-0.95, 4.44, -0.5);
+  beaconTip.position.set(-0.62, 4.18, -0.35);
   habGroup.add(beaconTip);
 
   // Exterior airlock floodlights, safety chevron trim & radiator louvers on Habitat 01
@@ -658,24 +753,24 @@ export function buildOutpostAssets(
     }),
   );
   const chapeaWing = new THREE.Group();
-  const cwX = 4.4;
-  const cwZ = -8.0;
-  const cwY = groundHeightAt(cwX, cwZ);
+  const cwX = m.chapea.x;
+  const cwZ = m.chapea.z;
+  const cwY = gAt(cwX, cwZ);
   chapeaWing.position.set(cwX, cwY, cwZ);
+  chapeaWing.rotation.y = m.chapea.yaw;
   addContactShadow(chapeaWing, 3.6, 3.0, 0.65);
 
-  const chapeaPlinth = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(4.6, 0.34, 3.4, 0.05)), matDarkSteel);
-  chapeaPlinth.position.y = 0.17;
+  const chapeaPlinth = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(4.6, 0.64, 3.4, 0.05)), matDarkSteel);
+  chapeaPlinth.position.y = 0.02;
   chapeaPlinth.castShadow = castShadow;
   chapeaPlinth.receiveShadow = true;
   chapeaWing.add(chapeaPlinth);
 
-  // Layered 3D-printed regolith shell ribs for GCR radiation shielding
   for (let layer = 0; layer < 5; layer++) {
-    const w = 4.25 - layer * 0.14;
-    const d = 3.05 - layer * 0.12;
+    const w = 4.24 - (layer % 2) * 0.02;
+    const d = 3.04 - (layer % 2) * 0.02;
     const ring = new THREE.Mesh(
-      trackGeo(createBeveledPanelGeometry(w, 0.34, d, 0.04)),
+      trackGeo(createBeveledPanelGeometry(w, 0.34, d, 0.03)),
       layer % 2 === 0 ? matRegolithPrint : matHullPanel,
     );
     ring.position.y = 0.52 + layer * 0.34;
@@ -684,17 +779,16 @@ export function buildOutpostAssets(
     chapeaWing.add(ring);
   }
 
-  // Upper observation cupola + twin CO2 scrubber tanks + side service ladder
-  const cupola = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.95, 1.15, 0.68, 12)), matDarkSteel);
+  const cupola = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.95, 1.15, 0.68, 14)), matDarkSteel);
   cupola.position.set(0, 2.35, 0.15);
   cupola.castShadow = castShadow;
   chapeaWing.add(cupola);
 
-  const cupolaGlass = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.88, 0.88, 0.28, 12)), matWarmWindow);
+  const cupolaGlass = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.88, 0.88, 0.28, 14)), matWarmWindow);
   cupolaGlass.position.set(0, 2.42, 0.15);
   chapeaWing.add(cupolaGlass);
 
-  const cupolaCap = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.55, 1.0, 0.24, 12)), matHullPanel);
+  const cupolaCap = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.55, 1.0, 0.24, 14)), matHullPanel);
   cupolaCap.position.set(0, 2.78, 0.15);
   chapeaWing.add(cupolaCap);
 
@@ -709,7 +803,6 @@ export function buildOutpostAssets(
     chapeaWing.add(collar);
   });
 
-  // External steel service ladder on east flank of CHAPEA wing
   [-0.2, 0.2].forEach((lz) => {
     const rail = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.025, 0.025, 2.1, 6)), matBrushedAlum);
     rail.position.set(2.15, 1.25, lz);
@@ -722,20 +815,38 @@ export function buildOutpostAssets(
     chapeaWing.add(rung);
   }
 
-  // Pressurized connector corridor linking Habitat 01 to CHAPEA Rear Wing
-  const rearConnStart = new THREE.Vector3(habX, habY + 1.15, habZ - 2.1);
-  const rearConnEnd = new THREE.Vector3(cwX, cwY + 1.15, cwZ + 1.5);
-  const rearConnGeo = trackGeo(new THREE.TubeGeometry(new THREE.LineCurve3(rearConnStart, rearConnEnd), 8, 0.56, 12, false));
-  const rearConnMesh = new THREE.Mesh(rearConnGeo, matHullPanel);
+  // Pressurized connector corridor linking Habitat 01 cleanly into CHAPEA wall
+  const chConn = m.connHabChapea;
+  const rearCorr = computeCorridorTransform(
+    habX,
+    habY + chConn.centerYOffset,
+    habZ + chConn.habStartOffsetZ,
+    cwX,
+    cwY + chConn.centerYOffset,
+    cwZ + chConn.chapeaEndOffsetZ,
+  );
+  const rearConnMesh = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(chConn.halfWidth * 2, chConn.halfHeight * 2, rearCorr.length)),
+    matHullPanel,
+  );
+  rearConnMesh.position.set(rearCorr.cx, rearCorr.cy, rearCorr.cz);
+  rearConnMesh.quaternion.set(
+    rearCorr.quaternion.x,
+    rearCorr.quaternion.y,
+    rearCorr.quaternion.z,
+    rearCorr.quaternion.w,
+  );
   rearConnMesh.castShadow = castShadow;
-  scene.add(rearConnMesh);
-  for (let r = 1; r <= 3; r++) {
-    const pos = new THREE.Vector3().lerpVectors(rearConnStart, rearConnEnd, r / 4);
-    const ring = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.6, 0.045, 8, 16)), matDarkSteel);
-    ring.position.copy(pos);
-    ring.lookAt(rearConnEnd);
-    scene.add(ring);
+  rearConnMesh.receiveShadow = true;
+  for (let r = -1; r <= 1; r++) {
+    const rib = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(chConn.halfWidth * 2.06, chConn.halfHeight * 2.06, 0.08)),
+      matDarkSteel,
+    );
+    rib.position.set(0, 0, r * (rearCorr.length * 0.26));
+    rearConnMesh.add(rib);
   }
+  scene.add(rearConnMesh);
 
   registerInteractive(chapeaWing, 'habitat');
   scene.add(chapeaWing);
@@ -744,76 +855,105 @@ export function buildOutpostAssets(
   scene.add(habGroup);
 
   // ============================================================================
-  // 2. BIO-DOME GREENHOUSE (Metallic Ribcage, Glass Dome, Leafy Hydroponics, Pipes)
+  // 2. BIO-DOME GREENHOUSE (Hollow Segmented Perimeter, Open Doorway, Walkable Floor)
   // ============================================================================
   const ghGroup = new THREE.Group();
-  const ghX = 8.6;
-  const ghZ = -0.1;
-  const ghY = groundHeightAt(ghX, ghZ);
+  const ghSpec = m.greenhouse;
+  const ghX = ghSpec.x;
+  const ghZ = ghSpec.z;
+  const ghY = gAt(ghX, ghZ);
   ghGroup.position.set(ghX, ghY, ghZ);
-  addContactShadow(ghGroup, 2.6, 2.6, 0.68);
+  const ghRScale = ghSpec.floorRadius / 2.25;
+  addContactShadow(ghGroup, ghSpec.floorRadius * 1.15, ghSpec.floorRadius * 1.15, 0.68);
 
-  // Foundation collar & bolted steel rim
-  const ghFoundation = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(2.05, 2.22, 0.38, 16)), matDarkSteel);
-  ghFoundation.position.y = 0.19;
+  const ghFoundation = new THREE.Mesh(
+    trackGeo(new THREE.CylinderGeometry(ghSpec.floorRadius, ghSpec.floorRadius, 0.62, 32)),
+    matDarkSteel,
+  );
+  ghFoundation.position.y = -0.09;
   ghFoundation.castShadow = castShadow;
   ghFoundation.receiveShadow = true;
   ghGroup.add(ghFoundation);
 
-  const ghRim = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(1.98, 0.07, 8, 24)), matBrushedAlum);
-  ghRim.rotation.x = Math.PI / 2;
-  ghRim.position.y = 0.38;
-  ghGroup.add(ghRim);
+  const ghDoor = getGreenhouseDoorwaySpec(layout);
+  const doorLocalX = ghDoor.centerX - ghX;
+  const doorLocalZ = ghDoor.centerZ - ghZ;
+  const doorStepMesh = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(1.18, 0.3, 0.56)),
+    matBrushedAlum,
+  );
+  doorStepMesh.position.set(
+    doorLocalX + Math.cos(ghSpec.doorAngleRad) * 0.22,
+    -0.03,
+    doorLocalZ + Math.sin(ghSpec.doorAngleRad) * 0.22,
+  );
+  doorStepMesh.rotation.y = ghDoor.yawRad;
+  doorStepMesh.receiveShadow = true;
+  ghGroup.add(doorStepMesh);
 
-  // Interior hydroponic planter beds & sculpted multi-leaf plants
-  const bedMat = trackMat(new THREE.MeshStandardMaterial({ color: '#2b3b4e', roughness: 0.55, metalness: 0.4 }));
-  const leafGeo = trackGeo(createLeafGeometry());
-  const planterAngles = [0, 1, 2, 3, 4, 5].map((i) => (i / 6) * Math.PI * 2);
+  const ghWalls = getGreenhouseWallSegments(layout);
+  ghWalls.forEach((seg) => {
+    const bayGroup = new THREE.Group();
+    bayGroup.position.set(seg.cx - ghX, ghSpec.floorTopOffset + seg.halfHeight, seg.cz - ghZ);
+    bayGroup.rotation.y = seg.yawRad;
 
-  planterAngles.forEach((a) => {
-    const rack = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(0.82, 0.24, 0.42, 0.02)), bedMat);
-    rack.position.set(Math.cos(a) * 1.05, 0.52, Math.sin(a) * 1.05);
-    rack.rotation.y = -a + Math.PI / 2;
-    ghGroup.add(rack);
+    const glassWall = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(seg.halfWidth * 2, seg.halfHeight * 2, seg.halfThick * 2)),
+      matGreenhouseGlass,
+    );
+    glassWall.renderOrder = 3;
+    bayGroup.add(glassWall);
 
-    // 3 leafy plant clusters per planter
-    [-0.24, 0, 0.24].forEach((offset) => {
-      const px = Math.cos(a) * 1.05 - Math.sin(a) * offset;
-      const pz = Math.sin(a) * 1.05 + Math.cos(a) * offset;
-      for (let l = 0; l < 5; l++) {
-        const leaf = new THREE.Mesh(leafGeo, matPlantLeaf);
-        leaf.position.set(px, 0.65, pz);
-        leaf.rotation.y = (l / 5) * Math.PI * 2 + a;
-        leaf.scale.setScalar(0.85 + (l % 2) * 0.25);
-        ghGroup.add(leaf);
-      }
-    });
+    const sill = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(seg.halfWidth * 1.98, 0.16, seg.halfThick * 1.98)),
+      matBrushedAlum,
+    );
+    sill.position.y = -seg.halfHeight + 0.08;
+    sill.castShadow = castShadow;
+    bayGroup.add(sill);
+
+    const topFrame = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(seg.halfWidth * 1.98, 0.12, seg.halfThick * 1.98)),
+      matDarkSteel,
+    );
+    topFrame.position.y = seg.halfHeight - 0.06;
+    bayGroup.add(topFrame);
+
+    ghGroup.add(bayGroup);
   });
 
-  // Central hydroponic tower + warm grow-light canopy
-  const centerTower = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.24, 0.32, 1.55, 12)), matBrushedAlum);
-  centerTower.position.y = 1.05;
-  ghGroup.add(centerTower);
+  const doorLintel = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(1.56, 0.22, 0.22)),
+    matMarsOrange,
+  );
+  doorLintel.position.set(doorLocalX, ghSpec.floorTopOffset + ghSpec.wallHeight + 0.11, doorLocalZ);
+  doorLintel.rotation.y = ghDoor.yawRad;
+  ghGroup.add(doorLintel);
 
-  const growRing = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.75, 0.045, 8, 24)), matWarmWindow);
-  growRing.rotation.x = Math.PI / 2;
-  growRing.position.y = 1.48;
-  ghGroup.add(growRing);
-
-  const ghLight = new THREE.PointLight('#ffd166', 2.6, 7.5, 2);
-  ghLight.position.set(0, 1.45, 0);
-  ghGroup.add(ghLight);
-
-  // Curved glass dome + arched metallic structural ribs (TubeGeometry)
-  const glassDome = new THREE.Mesh(
-    trackGeo(new THREE.SphereGeometry(1.94, 24, 16, 0, Math.PI * 2, 0, Math.PI * 0.5)),
+  const roofBaseY = ghSpec.floorTopOffset + ghSpec.wallHeight;
+  const roofLower = new THREE.Mesh(
+    trackGeo(new THREE.CylinderGeometry(2.14 * ghRScale, 2.14 * ghRScale, 0.34, 28)),
     matGreenhouseGlass,
   );
-  glassDome.position.y = 0.38;
-  glassDome.renderOrder = 3;
-  ghGroup.add(glassDome);
+  roofLower.position.y = roofBaseY + 0.19;
+  roofLower.renderOrder = 3;
+  ghGroup.add(roofLower);
 
-  // Dynamic frost dome overlay for Mission 4 ("Cold Greenhouse")
+  const roofRimMid = new THREE.Mesh(
+    trackGeo(new THREE.CylinderGeometry(2.15 * ghRScale, 2.15 * ghRScale, 0.08, 28)),
+    matBrushedAlum,
+  );
+  roofRimMid.position.y = roofBaseY + 0.02;
+  ghGroup.add(roofRimMid);
+
+  const roofUpper = new THREE.Mesh(
+    trackGeo(new THREE.CylinderGeometry(1.45 * ghRScale, 1.62 * ghRScale, 0.56, 24)),
+    matGreenhouseGlass,
+  );
+  roofUpper.position.y = roofBaseY + 0.64;
+  roofUpper.renderOrder = 3;
+  ghGroup.add(roofUpper);
+
   const ghFrostMat = trackMat(
     new THREE.MeshPhysicalMaterial({
       color: '#bfe8ff',
@@ -827,85 +967,292 @@ export function buildOutpostAssets(
     }),
   );
   const ghFrostDome = new THREE.Mesh(
-    trackGeo(new THREE.SphereGeometry(1.965, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.5)),
+    trackGeo(new THREE.CylinderGeometry(2.16 * ghRScale, 2.16 * ghRScale, 0.88, 28)),
     ghFrostMat,
   );
-  ghFrostDome.position.y = 0.38;
+  ghFrostDome.position.y = roofBaseY + 0.46;
   ghFrostDome.renderOrder = 4;
+  ghFrostDome.userData.nonPhysicalMarker = true;
   ghGroup.add(ghFrostDome);
 
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    const archPts: THREE.Vector3[] = [];
-    for (let s = 0; s <= 10; s++) {
-      const phi = (s / 10) * (Math.PI * 0.5);
-      const r = Math.cos(phi) * 1.97;
-      const y = 0.38 + Math.sin(phi) * 1.97;
-      archPts.push(new THREE.Vector3(Math.cos(a) * r, y, Math.sin(a) * r));
-    }
-    const archCurve = new THREE.CatmullRomCurve3(archPts);
-    const rib = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(archCurve, 14, 0.038, 6, false)), matBrushedAlum);
-    rib.castShadow = castShadow;
-    ghGroup.add(rib);
-  }
-  const midRing = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(1.42, 0.035, 8, 24)), matBrushedAlum);
-  midRing.rotation.x = Math.PI / 2;
-  midRing.position.y = 1.74;
-  ghGroup.add(midRing);
+  const bedMat = trackMat(new THREE.MeshStandardMaterial({ color: '#2b3b4e', roughness: 0.55, metalness: 0.4 }));
+  const leafGeo = trackGeo(createLeafGeometry());
 
-  // Exterior Water Storage Tank & Copper Supply Pipes
+  if (layout.mode === 'gameplay') {
+    const floorOffset = ghSpec.floorTopOffset;
+    const matWoodBark = trackMat(new THREE.MeshStandardMaterial({ color: '#6b4226', roughness: 0.88 }));
+    const matCanopyDeep = trackMat(new THREE.MeshStandardMaterial({ color: '#15803d', roughness: 0.65, emissive: '#052e16', emissiveIntensity: 0.25 }));
+    const matPurpleLed = trackMat(new THREE.MeshStandardMaterial({ color: '#c084fc', emissive: '#a855f7', emissiveIntensity: 2.0, roughness: 0.2 }));
+    const matCitrus = trackMat(new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.35 }));
+    const matTomato = trackMat(new THREE.MeshStandardMaterial({ color: '#ef4444', roughness: 0.32 }));
+
+    for (const prop of GAMEPLAY_GREENHOUSE_PROPS) {
+      const pGroup = new THREE.Group();
+      pGroup.position.set(prop.dx, floorOffset, prop.dz);
+      pGroup.rotation.y = prop.yawRad;
+
+      if (prop.kind === 'orchard-tree') {
+        const isCitrus = prop.id.includes('citrus');
+        const tub = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.5, 0.44, 0.48, 14)), bedMat);
+        tub.position.y = 0.24;
+        tub.castShadow = castShadow;
+        pGroup.add(tub);
+        const tubCollar = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.52, 0.52, 0.06, 14)), matBrushedAlum);
+        tubCollar.position.y = 0.46;
+        pGroup.add(tubCollar);
+        const trunk = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.06, 0.11, 0.95, 8)), matWoodBark);
+        trunk.position.y = 0.92;
+        trunk.castShadow = castShadow;
+        pGroup.add(trunk);
+        const canopyOffsets: [number, number, number, number][] = [
+          [0, 1.58, 0, 0.46],
+          [0.24, 1.42, 0.14, 0.32],
+          [-0.22, 1.44, -0.15, 0.3],
+          [0.05, 1.78, -0.1, 0.28],
+        ];
+        canopyOffsets.forEach(([cx, cy, cz, cr], idx) => {
+          const foliage = new THREE.Mesh(
+            trackGeo(new THREE.DodecahedronGeometry(cr, 1)),
+            idx % 2 === 0 ? matCanopyDeep : matPlantLeaf,
+          );
+          foliage.position.set(cx, cy, cz);
+          foliage.castShadow = castShadow;
+          pGroup.add(foliage);
+        });
+        const fruitMat = isCitrus ? matCitrus : matTomato;
+        [
+          [0.28, 1.38, 0.26],
+          [-0.24, 1.52, 0.22],
+          [0.12, 1.65, -0.25],
+          [-0.18, 1.34, -0.24],
+        ].forEach(([fx, fy, fz]) => {
+          const fruit = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.055, 8, 6)), fruitMat);
+          fruit.position.set(fx, fy, fz);
+          pGroup.add(fruit);
+        });
+      } else if (prop.kind === 'led-rack') {
+        [-0.78, 0.78].forEach((px) => {
+          [-0.28, 0.28].forEach((pz) => {
+            const post = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.028, 0.028, 1.84, 6)), matBrushedAlum);
+            post.position.set(px, 0.92, pz);
+            pGroup.add(post);
+          });
+        });
+        [0.42, 0.98, 1.54].forEach((sy) => {
+          const tray = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.72, 0.08, 0.68)), bedMat);
+          tray.position.y = sy;
+          tray.castShadow = castShadow;
+          pGroup.add(tray);
+          const led = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.56, 0.035, 0.14)), matPurpleLed);
+          led.position.y = sy + 0.38;
+          pGroup.add(led);
+          for (let lx = -0.62; lx <= 0.62; lx += 0.31) {
+            const leaf = new THREE.Mesh(leafGeo, matPlantLeaf);
+            leaf.position.set(lx, sy + 0.05, 0);
+            leaf.scale.setScalar(0.95);
+            pGroup.add(leaf);
+          }
+        });
+      } else if (prop.kind === 'planter') {
+        const trough = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(1.4, 0.44, 0.68, 0.03)), bedMat);
+        trough.position.y = 0.24;
+        trough.castShadow = castShadow;
+        pGroup.add(trough);
+        [-0.42, 0, 0.42].forEach((tx, idx) => {
+          const stake = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.015, 0.015, 0.75, 6)), matBrushedAlum);
+          stake.position.set(tx, 0.78, 0);
+          pGroup.add(stake);
+          const bush = new THREE.Mesh(trackGeo(new THREE.DodecahedronGeometry(0.24, 1)), matPlantLeaf);
+          bush.position.set(tx, 0.62 + (idx % 2) * 0.08, 0);
+          pGroup.add(bush);
+          const veg = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.048, 8, 6)), matTomato);
+          veg.position.set(tx + 0.12, 0.68, 0.14);
+          pGroup.add(veg);
+        });
+      } else if (prop.kind === 'mist-tower') {
+        const baseTank = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.4, 0.42, 0.42, 14)), bedMat);
+        baseTank.position.y = 0.21;
+        pGroup.add(baseTank);
+        const col = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.2, 0.24, 1.5, 12)), matBrushedAlum);
+        col.position.y = 1.15;
+        col.castShadow = castShadow;
+        pGroup.add(col);
+        for (let r = 0; r < 5; r++) {
+          const ang = r * 1.25;
+          const pod = new THREE.Mesh(leafGeo, matPlantLeaf);
+          pod.position.set(Math.cos(ang) * 0.24, 0.58 + r * 0.25, Math.sin(ang) * 0.24);
+          pod.rotation.y = -ang;
+          pod.scale.setScalar(0.95);
+          pGroup.add(pod);
+        }
+      } else if (prop.kind === 'workbench') {
+        const table = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(1.18, 0.08, 0.66, 0.02)), matBrushedAlum);
+        table.position.y = 0.86;
+        table.castShadow = castShadow;
+        pGroup.add(table);
+        const legBlock = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.06, 0.82, 0.56)), bedMat);
+        legBlock.position.y = 0.41;
+        pGroup.add(legBlock);
+        const tablet = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.32, 0.03, 0.22)), matWarmWindow);
+        tablet.position.set(-0.22, 0.92, 0.08);
+        pGroup.add(tablet);
+      }
+
+      ghGroup.add(pGroup);
+    }
+  } else {
+    const planterAngles = [-0.55, 0.35, 3.35, 4.35];
+    planterAngles.forEach((a) => {
+      const rack = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(0.68, 0.22, 0.34, 0.02)), bedMat);
+      rack.position.set(Math.cos(a) * 1.48, 0.33, Math.sin(a) * 1.48);
+      rack.rotation.y = -a + Math.PI / 2;
+      ghGroup.add(rack);
+
+      [-0.18, 0, 0.18].forEach((offset) => {
+        const px = Math.cos(a) * 1.48 - Math.sin(a) * offset;
+        const pz = Math.sin(a) * 1.48 + Math.cos(a) * offset;
+        for (let l = 0; l < 4; l++) {
+          const leaf = new THREE.Mesh(leafGeo, matPlantLeaf);
+          leaf.position.set(px, 0.46, pz);
+          leaf.rotation.y = (l / 4) * Math.PI * 2 + a;
+          leaf.scale.setScalar(0.82 + (l % 2) * 0.22);
+          ghGroup.add(leaf);
+        }
+      });
+    });
+
+    const centerTower = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.22, 0.28, 1.38, 12)), matBrushedAlum);
+    centerTower.position.set(0.88, 0.91, -0.78);
+    ghGroup.add(centerTower);
+  }
+
+  const growRing = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.68 * ghRScale, 0.045, 8, 28)), matWarmWindow);
+  growRing.rotation.x = Math.PI / 2;
+  growRing.position.set(0, roofBaseY - 0.14, 0);
+  ghGroup.add(growRing);
+
+  const ghLight = new THREE.PointLight('#ffd166', 2.8, ghSpec.floorRadius * 3.6, 2);
+  ghLight.position.set(0, roofBaseY - 0.24, 0);
+  ghGroup.add(ghLight);
+
+  // Exterior Water Storage Tank & Supply Pipes
   const tankProfile = [
     new THREE.Vector2(0, 0),
-    new THREE.Vector2(0.42, 0),
-    new THREE.Vector2(0.44, 0.95),
-    new THREE.Vector2(0.32, 1.15),
-    new THREE.Vector2(0, 1.22),
+    new THREE.Vector2(0.43, 0),
+    new THREE.Vector2(0.44, 1.15),
+    new THREE.Vector2(0.41, 1.19),
+    new THREE.Vector2(0, 1.2),
   ];
   const waterTank = new THREE.Mesh(trackGeo(new THREE.LatheGeometry(tankProfile, 16)), matHullPanel);
-  waterTank.position.set(-2.35, 0.05, 1.1);
+  const wtLocalX = ghSpec.waterTankX - ghX;
+  const wtLocalZ = ghSpec.waterTankZ - ghZ;
+  waterTank.position.set(wtLocalX, 0.0, wtLocalZ);
   waterTank.castShadow = castShadow;
   ghGroup.add(waterTank);
 
+  const wtDist = Math.hypot(wtLocalX, wtLocalZ) || 1;
+  const wallInX = (wtLocalX / wtDist) * (ghSpec.floorRadius - 0.35);
+  const wallInZ = (wtLocalZ / wtDist) * (ghSpec.floorRadius - 0.35);
   const waterPipeCurve = new THREE.CatmullRomCurve3([
-    new THREE.Vector3(-2.15, 0.55, 1.0),
-    new THREE.Vector3(-1.95, 0.55, 0.72),
-    new THREE.Vector3(-1.72, 0.32, 0.55),
+    new THREE.Vector3(wtLocalX, 0.55, wtLocalZ),
+    new THREE.Vector3((wtLocalX + wallInX) * 0.5, 0.45, (wtLocalZ + wallInZ) * 0.5),
+    new THREE.Vector3(wallInX, 0.32, wallInZ),
   ]);
   const waterPipe = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(waterPipeCurve, 10, 0.05, 8, false)), matCopperPipe);
   ghGroup.add(waterPipe);
 
-  // Ribbed Pressurized Airlock Connector Tunnel between Habitat & Greenhouse
-  const habAnchor = new THREE.Vector3(habX + 1.85, habY + 1.15, habZ + 1.25);
-  const ghAnchor = new THREE.Vector3(ghX - 1.55, ghY + 0.85, ghZ - 0.75);
-  const tunnelCurve = new THREE.LineCurve3(habAnchor, ghAnchor);
-  const tunnelMesh = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(tunnelCurve, 10, 0.44, 12, false)), matHullPanel);
+  // Pressurized connector / elevated skybridge linking Habitat & Greenhouse
+  const ghConn = m.connHabGh;
+  const ghCorr = computeCorridorTransform(
+    ghConn.startX,
+    habY + ghConn.startYOffset,
+    ghConn.startZ,
+    ghConn.endX,
+    ghY + ghConn.endYOffset,
+    ghConn.endZ,
+  );
+  const tunnelMesh = new THREE.Mesh(
+    trackGeo(new THREE.BoxGeometry(ghConn.halfWidth * 2, ghConn.halfHeight * 2, ghCorr.length)),
+    matHullPanel,
+  );
+  tunnelMesh.position.set(ghCorr.cx, ghCorr.cy, ghCorr.cz);
+  tunnelMesh.quaternion.set(
+    ghCorr.quaternion.x,
+    ghCorr.quaternion.y,
+    ghCorr.quaternion.z,
+    ghCorr.quaternion.w,
+  );
   tunnelMesh.castShadow = castShadow;
+  tunnelMesh.receiveShadow = true;
+  const ribSteps = ghConn.elevatedOverpass ? [-3, -2, -1, 0, 1, 2, 3] : [-1, 0, 1];
+  const ribSpanFrac = ghConn.elevatedOverpass ? 0.12 : 0.25;
+  for (const r of ribSteps) {
+    const rib = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(ghConn.halfWidth * 2.08, ghConn.halfHeight * 2.08, 0.08)),
+      matDarkSteel,
+    );
+    rib.position.set(0, 0, r * (ghCorr.length * ribSpanFrac));
+    tunnelMesh.add(rib);
+  }
   scene.add(tunnelMesh);
 
-  for (let r = 1; r <= 4; r++) {
-    const t = r / 5;
-    const pos = new THREE.Vector3().lerpVectors(habAnchor, ghAnchor, t);
-    const ring = new THREE.Mesh(trackGeo(new THREE.TorusGeometry(0.47, 0.04, 8, 16)), matDarkSteel);
-    ring.position.copy(pos);
-    ring.lookAt(ghAnchor);
-    scene.add(ring);
+  let skybridgeCollarsGroup: THREE.Group | null = null;
+  if (ghConn.elevatedOverpass) {
+    skybridgeCollarsGroup = new THREE.Group();
+    // Pressurized attachment collar towers at Habitat East & Greenhouse West
+    const buildCollarTower = (wx: number, wy: number, wz: number) => {
+      const collar = new THREE.Group();
+      collar.position.set(wx, wy, wz);
+      const plinth = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.46, 0.65, 1.38)), matDarkSteel);
+      plinth.position.y = 0.325;
+      collar.add(plinth);
+      const tower = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(1.36, 3.6, 1.28, 0.04)), matHullPanel);
+      tower.position.y = 2.0;
+      tower.castShadow = castShadow;
+      tower.receiveShadow = true;
+      collar.add(tower);
+      const band = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.4, 0.16, 1.32)), matMarsOrange);
+      band.position.y = 3.15;
+      collar.add(band);
+      skybridgeCollarsGroup!.add(collar);
+    };
+    buildCollarTower(ghConn.startX - 0.12, habY, ghConn.startZ);
+    buildCollarTower(ghConn.endX + 0.12, ghY, ghConn.endZ);
+    scene.add(skybridgeCollarsGroup);
+
+    // Slender structural support piers outside East Ring Road clearance
+    ghConn.pierXs.forEach((px) => {
+      const t = (px - ghConn.startX) / (ghConn.endX - ghConn.startX);
+      const pz = ghConn.startZ + (ghConn.endZ - ghConn.startZ) * t;
+      const py = gAt(px, pz);
+      const pierH = ghConn.undersideClearanceY + 0.05;
+      const pierGroup = new THREE.Group();
+      pierGroup.position.set(px, py, pz);
+      const footing = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.44, 0.52, 0.3, 12)), matDarkSteel);
+      footing.position.y = 0.15;
+      pierGroup.add(footing);
+      const col = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.22, 0.24, pierH, 12)), matBrushedAlum);
+      col.position.y = pierH * 0.5;
+      col.castShadow = castShadow;
+      pierGroup.add(col);
+      scene.add(pierGroup);
+    });
+
+    // Underpass amber clearance markers above East Ring Road
+    const underLight = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.72, 0.06, 0.22)), matWarmWindow);
+    underLight.position.set(11.4, habY + ghConn.undersideClearanceY - 0.01, (ghConn.startZ + ghConn.endZ) * 0.5);
+    scene.add(underLight);
   }
 
   registerInteractive(ghGroup, 'greenhouse');
   scene.add(ghGroup);
 
   // ============================================================================
-  // 3. EXPANDED SOLAR MICROGRID (5 Tracking Arrays + LiFePO4 Battery Container Bank)
+  // 3. SOLAR MICROGRID (Tracking Arrays + LiFePO4 Battery Container Bank)
   // ============================================================================
   const solarGroup = new THREE.Group();
   const solarWings: THREE.Group[] = [];
-  const solarLocations: [number, number][] = [
-    [9.4, -4.6],
-    [11.4, -2.4],
-    [13.8, -5.2],
-    [14.2, -1.5],
-    [11.8, -7.2],
-  ];
+  const solarLocations = m.solarPanels;
 
   const pedProfile = [
     new THREE.Vector2(0, 0),
@@ -923,7 +1270,7 @@ export function buildOutpostAssets(
 
   solarLocations.forEach(([sx, sz]) => {
     const unit = new THREE.Group();
-    unit.position.set(sx, groundHeightAt(sx, sz), sz);
+    unit.position.set(sx, gAt(sx, sz), sz);
     addContactShadow(unit, 1.5, 1.2, 0.6);
 
     const pedestal = new THREE.Mesh(pedGeo, matDarkSteel);
@@ -934,7 +1281,6 @@ export function buildOutpostAssets(
     const wingPivot = new THREE.Group();
     wingPivot.position.set(0, 1.65, 0);
 
-    // Metallic rear truss frame
     const backingFrame = new THREE.Mesh(
       trackGeo(createBeveledPanelGeometry(2.55, 1.48, 0.05, 0.02)),
       matBrushedAlum,
@@ -943,7 +1289,6 @@ export function buildOutpostAssets(
     backingFrame.castShadow = castShadow;
     wingPivot.add(backingFrame);
 
-    // 6 distinct beveled photovoltaic sub-panels (3x2 grid)
     for (let row = 0; row < 2; row++) {
       for (let col = 0; col < 3; col++) {
         const panel = new THREE.Mesh(subPanelGeo, matSolarWafer);
@@ -953,7 +1298,6 @@ export function buildOutpostAssets(
       }
     }
 
-    // Translucent settled-dust coat overlay (visible during/after M2 storm until cleaned)
     const dustCoatMat = trackMat(
       new THREE.MeshStandardMaterial({
         color: '#c96f3b',
@@ -971,9 +1315,9 @@ export function buildOutpostAssets(
     );
     dustOverlay.rotation.x = -Math.PI / 2;
     dustOverlay.position.y = 0.095;
+    dustOverlay.userData.nonPhysicalMarker = true;
     wingPivot.add(dustOverlay);
 
-    // Junction box underneath
     const jBox = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.35, 0.16, 0.28)), matMarsOrange);
     jBox.position.set(0, -0.1, 0);
     wingPivot.add(jBox);
@@ -984,12 +1328,12 @@ export function buildOutpostAssets(
     solarGroup.add(unit);
   });
 
-  // Armored LiFePO4 Battery Container Bank & Inverter Skid (14.5, -3.6)
+  // Armored LiFePO4 Battery Container Bank & Inverter Skid
   const batBank = new THREE.Group();
-  const bbX = 14.5;
-  const bbZ = -3.6;
-  batBank.position.set(bbX, groundHeightAt(bbX, bbZ), bbZ);
-  batBank.rotation.y = -0.35;
+  const bbX = m.batteryBank.x;
+  const bbZ = m.batteryBank.z;
+  batBank.position.set(bbX, gAt(bbX, bbZ), bbZ);
+  batBank.rotation.y = m.batteryBank.yaw;
   addContactShadow(batBank, 1.8, 1.2, 0.64);
 
   const batSkid = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(2.4, 0.22, 1.4, 0.03)), matDarkSteel);
@@ -1023,10 +1367,11 @@ export function buildOutpostAssets(
   // 4. ROVER-7 (Sculpted Chassis, Rocker-Bogie Suspension, Treaded Wheels, Optics)
   // ============================================================================
   const roverGroup = new THREE.Group();
-  const roverBaseX = 2.1;
-  const roverBaseZ = 3.25;
-  roverGroup.position.set(roverBaseX, groundHeightAt(roverBaseX, roverBaseZ), roverBaseZ);
-  roverGroup.rotation.y = -1.02; // Hero 3/4 angle showcasing 6 wheels, suspension, and ROVER-7 nameplate
+  const roverBaseX = m.roverSpawn.x;
+  const roverBaseZ = m.roverSpawn.z;
+  const roverInitY = getOutpostSupportHeightAt(roverBaseX, roverBaseZ, gAt, layout);
+  roverGroup.position.set(roverBaseX, roverInitY, roverBaseZ);
+  roverGroup.rotation.y = m.roverSpawn.yaw;
   addContactShadow(roverGroup, 1.45, 1.15, 0.74);
 
   // Sculpted beveled aerospace chassis
@@ -1118,33 +1463,69 @@ export function buildOutpostAssets(
     roverGroup.add(fin);
   }
 
-  // Rocker-Bogie Suspension Arms & Helical Shock Coils + 6 Detailed Treaded Wheels
+  // Rocker-Bogie Differential Suspension Arms & 6 Detailed 48-Grouser Wheels (0.525 m diameter)
+  const roverWheelOffsets: THREE.Group[] = [];
   const roverWheels: THREE.Group[] = [];
   const wheelZList = [-0.66, 0.0, 0.66];
-  const lugGeo = trackGeo(new THREE.BoxGeometry(0.18, 0.03, 0.045));
-  const springGeo = trackGeo(createHelicalSpringGeometry(0.05, 0.26, 5, 0.014));
+  const lugGeo = trackGeo(new THREE.BoxGeometry(0.18, 0.022, 0.035));
+  const springGeo = trackGeo(createHelicalSpringGeometry(0.05, 0.24, 5, 0.014));
+  const wheelRadius = PHYSICS_CONSTANTS.ROVER_WHEEL_RADIUS_M; // 0.2625 m -> 0.525 m diameter
+  const matRoverWheelTread = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: wheelTex.treadMap,
+      bumpMap: wheelTex.treadBump,
+      bumpScale: 0.025,
+      roughness: 0.58,
+      metalness: 0.52,
+    }),
+  );
+  const matWheelSpoke = trackMat(
+    new THREE.MeshStandardMaterial({
+      map: wheelTex.spokeAlpha,
+      roughness: 0.36,
+      metalness: 0.78,
+    }),
+  );
+
+  // Differential bar linking Left & Right rocker-bogie arms across top chassis spine
+  const roverDiffBar = new THREE.Mesh(
+    trackGeo(createBeveledPanelGeometry(1.16, 0.055, 0.07, 0.01)),
+    matBrushedAlum,
+  );
+  roverDiffBar.position.set(0, 0.96, 0.05);
+  roverDiffBar.castShadow = castShadow;
+  roverGroup.add(roverDiffBar);
+
+  let roverLeftRockerPivot = new THREE.Group();
+  let roverRightRockerPivot = new THREE.Group();
 
   [-1, 1].forEach((side) => {
     const sx = side * 0.78;
-    // Rocker-bogie linkage struts
+    const rockerPivot = new THREE.Group();
+    rockerPivot.position.set(side * 0.56, 0.62, 0.04);
+    roverGroup.add(rockerPivot);
+    if (side === -1) roverLeftRockerPivot = rockerPivot;
+    else roverRightRockerPivot = rockerPivot;
+
+    const localDx = sx - side * 0.56;
     const rockerCurve1 = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(side * 0.56, 0.62, 0.05),
-      new THREE.Vector3(sx, 0.52, 0.34),
-      new THREE.Vector3(sx, 0.28, 0.66),
+      new THREE.Vector3(0, 0, 0.01),
+      new THREE.Vector3(localDx, -0.1, 0.3),
+      new THREE.Vector3(localDx, -0.34, 0.62),
     ]);
     const rockerCurve2 = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(side * 0.56, 0.62, 0.05),
-      new THREE.Vector3(sx, 0.5, -0.32),
-      new THREE.Vector3(sx, 0.28, -0.66),
+      new THREE.Vector3(0, 0, 0.01),
+      new THREE.Vector3(localDx, -0.12, -0.36),
+      new THREE.Vector3(localDx, -0.34, -0.7),
     ]);
     const middleStrut = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(sx, 0.52, 0.0),
-      new THREE.Vector3(sx, 0.28, 0.0),
+      new THREE.Vector3(localDx, -0.1, -0.04),
+      new THREE.Vector3(localDx, -0.34, -0.04),
     ]);
     [rockerCurve1, rockerCurve2, middleStrut].forEach((c) => {
       const arm = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(c, 10, 0.032, 6, false)), matBrushedAlum);
       arm.castShadow = castShadow;
-      roverGroup.add(arm);
+      rockerPivot.add(arm);
     });
 
     // Helical shock springs
@@ -1154,38 +1535,69 @@ export function buildOutpostAssets(
       roverGroup.add(spring);
     });
 
-    // 3 detailed wheels per side
+    // 3 detailed wheels per side (suspension offset group + inner spin group)
     wheelZList.forEach((wz) => {
-      const wGroup = new THREE.Group();
-      wGroup.position.set(sx, 0.28, wz);
+      const offsetGroup = new THREE.Group();
+      offsetGroup.position.set(sx, wheelRadius, wz);
 
-      const tire = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.26, 0.26, 0.22, 18)), matTireRubber);
+      const spinGroup = new THREE.Group();
+      offsetGroup.add(spinGroup);
+
+      const tire = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(wheelRadius, wheelRadius, 0.22, 24)),
+        matRoverWheelTread,
+      );
       tire.rotation.z = Math.PI / 2;
       tire.castShadow = castShadow;
-      wGroup.add(tire);
+      spinGroup.add(tire);
 
-      // 12 sculpted chevron tread lugs around tire perimeter
-      for (let t = 0; t < 12; t++) {
-        const ta = (t / 12) * Math.PI * 2;
-        const lug = new THREE.Mesh(lugGeo, matTireRubber);
-        lug.position.set(0, Math.cos(ta) * 0.265, Math.sin(ta) * 0.265);
+      // 16 sculpted titanium tread lugs around tire perimeter (matches 48 grousers texture)
+      for (let t = 0; t < 16; t++) {
+        const ta = (t / 16) * Math.PI * 2;
+        const lug = new THREE.Mesh(lugGeo, matDarkSteel);
+        lug.position.set(0, Math.cos(ta) * (wheelRadius + 0.005), Math.sin(ta) * (wheelRadius + 0.005));
         lug.rotation.x = ta;
-        wGroup.add(lug);
+        spinGroup.add(lug);
       }
 
-      // Recessed alloy rim & planetary gold hub cap
-      const rim = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.16, 0.16, 0.23, 14)), matBrushedAlum);
-      rim.rotation.z = Math.PI / 2;
-      wGroup.add(rim);
+      // 6-spoke titanium flex wheel faces on outer & inner wheel disks
+      [-0.112, 0.112].forEach((faceX) => {
+        const spokeFace = new THREE.Mesh(
+          trackGeo(new THREE.CircleGeometry(wheelRadius * 0.78, 20)),
+          matWheelSpoke,
+        );
+        spokeFace.position.set(faceX, 0, 0);
+        spokeFace.rotation.y = faceX > 0 ? Math.PI / 2 : -Math.PI / 2;
+        spinGroup.add(spokeFace);
+      });
 
-      const hub = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.08, 0.08, 0.25, 10)), matGoldVisor);
+      const hub = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.072, 0.072, 0.24, 12)), matGoldVisor);
       hub.rotation.z = Math.PI / 2;
-      wGroup.add(hub);
+      spinGroup.add(hub);
 
-      roverWheels.push(wGroup);
-      roverGroup.add(wGroup);
+      roverWheelOffsets.push(offsetGroup);
+      roverWheels.push(spinGroup);
+      roverGroup.add(offsetGroup);
     });
   });
+
+  // Forward Deployed 5-DOF Robotic Sample Arm & Coring Turret (Perseverance style)
+  const sampleArmShoulder = new THREE.Group();
+  sampleArmShoulder.position.set(0.24, 0.62, 0.96);
+  const armJoint1 = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.055, 10, 8)), matDarkSteel);
+  sampleArmShoulder.add(armJoint1);
+  const armSegment1 = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.06, 0.06, 0.34)), matBrushedAlum);
+  armSegment1.position.set(0, 0.04, 0.16);
+  armSegment1.rotation.x = -0.25;
+  sampleArmShoulder.add(armSegment1);
+  const turretPod = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.09, 0.09, 0.12, 12)), matDarkSteel);
+  turretPod.position.set(-0.04, 0.08, 0.34);
+  turretPod.rotation.z = Math.PI / 2;
+  sampleArmShoulder.add(turretPod);
+  const coringBit = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.018, 0.008, 0.14, 8)), matMarsOrange);
+  coringBit.position.set(-0.04, -0.02, 0.38);
+  sampleArmShoulder.add(coringBit);
+  roverGroup.add(sampleArmShoulder);
 
   // Stereo Camera Mast + Lathe Lens Barrels + Headlamps
   const mastTube = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.055, 0.075, 0.66, 10)), matBrushedAlum);
@@ -1285,96 +1697,74 @@ export function buildOutpostAssets(
   scene.add(roverGroup);
 
   // ============================================================================
-  // 5. JUNIOR COMMANDER ASTRONAUT (Kid-Friendly Stylized Explorer Character)
+  // 5. PRESSURIZED EVA ASTRONAUT BUILDER (Commander + 4 Articulated Crew NPCs)
   // ============================================================================
-  const astroGroup = new THREE.Group();
-  const astroX = 4.95;
-  const astroZ = 2.65;
-  astroGroup.position.set(astroX, groundHeightAt(astroX, astroZ), astroZ);
-  astroGroup.rotation.y = -0.45;
-  addContactShadow(astroGroup, 0.54, 0.54, 0.68);
+  const astroX = m.astroSpawn.x;
+  const astroZ = m.astroSpawn.z;
 
-  // Calibrated Stylized Explorer Materials (soft ivory suit, slate gear, vibrant orange, amber LEDs)
-  const matKidSuitWhite = trackMat(
+  const matEvaSuitWhite = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#f2f3f6',
+      color: '#eff2f7',
       normalMap: suitTex.normalMap,
-      normalScale: new THREE.Vector2(0.32, 0.32),
-      roughness: 0.78,
+      normalScale: new THREE.Vector2(0.38, 0.38),
+      roughnessMap: suitTex.roughnessMap,
+      roughness: 0.72,
+      metalness: 0.04,
+    }),
+  );
+  const matEvaSuitDusty = trackMat(
+    new THREE.MeshStandardMaterial({
+      color: '#d8b6a2', // Regolith dust patina on lower shins & boots
+      normalMap: suitTex.normalMap,
+      normalScale: new THREE.Vector2(0.42, 0.42),
+      roughness: 0.88,
       metalness: 0.02,
     }),
   );
   const matHelmetShellWhite = trackMat(
     new THREE.MeshStandardMaterial({
       color: '#f4f6fa',
-      roughness: 0.34,
-      metalness: 0.08,
+      roughness: 0.3,
+      metalness: 0.1,
     }),
   );
   const matSlateGear = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#4b5462',
-      roughness: 0.68,
-      metalness: 0.1,
+      color: '#3f4a59',
+      roughness: 0.62,
+      metalness: 0.18,
     }),
   );
-  const matExplorerOrange = trackMat(
+  const matAnodizedRing = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#f97316',
-      roughness: 0.42,
-      metalness: 0.08,
+      color: '#7c899b',
+      roughness: 0.28,
+      metalness: 0.84,
     }),
   );
   const matAmberLed = trackMat(
     new THREE.MeshStandardMaterial({
       color: '#ffd166',
       emissive: '#ff9e1b',
-      emissiveIntensity: 2.1,
+      emissiveIntensity: 2.0,
       roughness: 0.2,
     }),
   );
-  const matBlueRimGlow = trackMat(
+  const matHeadlampLed = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#9ee6ff',
-      emissive: '#38bdf8',
-      emissiveIntensity: 1.45,
-      roughness: 0.2,
+      color: '#ffffff',
+      emissive: '#dbeafe',
+      emissiveIntensity: 2.3,
+      roughness: 0.12,
     }),
   );
-  const matBlueBubbleVisor = trackMat(
-    new THREE.MeshPhysicalMaterial({
-      color: '#a8e8ff',
-      metalness: 0.05,
-      roughness: 0.04,
-      clearcoat: 1.0,
-      clearcoatRoughness: 0.03,
-      envMapIntensity: 1.65,
-      transparent: true,
-      opacity: isSoftwareGl ? 0.3 : 0.22,
-      depthWrite: false,
-    }),
-  );
-  const matKidSkin = trackMat(
-    new THREE.MeshPhysicalMaterial({
-      color: '#eab08a',
-      roughness: 0.64,
-      metalness: 0.0,
-      sheen: 0.32,
-      sheenRoughness: 0.65,
-      sheenColor: new THREE.Color('#ffd3ba'),
-    }),
-  );
-  const matFreckle = trackMat(
+  const matChestDcm = trackMat(
     new THREE.MeshStandardMaterial({
-      color: '#c47b59',
-      roughness: 0.72,
-    }),
-  );
-  const matChestnutHair = trackMat(
-    new THREE.MeshStandardMaterial({
-      color: '#5a3622',
-      roughness: 0.76,
-      metalness: 0.04,
+      map: chestDcmTex,
+      emissiveMap: chestDcmTex,
+      emissive: '#ffffff',
+      emissiveIntensity: 0.45,
+      roughness: 0.35,
     }),
   );
   const matEmblemFace = trackMat(
@@ -1384,823 +1774,496 @@ export function buildOutpostAssets(
       metalness: 0.04,
     }),
   );
-  void matGoldVisor;
 
-  // Pelvis / Utility Belt Hub (world y = 0.86)
-  const astroPelvisGroup = new THREE.Group();
-  astroPelvisGroup.position.y = 0.86;
-  astroGroup.add(astroPelvisGroup);
-
-  const pelvisProfile = [
-    new THREE.Vector2(0.0, -0.08),
-    new THREE.Vector2(0.138, -0.068),
-    new THREE.Vector2(0.172, 0.0),
-    new THREE.Vector2(0.162, 0.075),
-    new THREE.Vector2(0.0, 0.082),
-  ];
-  const pelvisBrief = new THREE.Mesh(
-    trackGeo(new THREE.LatheGeometry(pelvisProfile, 20)),
-    matKidSuitWhite,
+  // Shared geometries across all 5 EVA suits so draw calls & GPU memory stay super lean
+  const pelvisGeo = trackGeo(
+    new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.0, -0.08),
+        new THREE.Vector2(0.138, -0.068),
+        new THREE.Vector2(0.172, 0.0),
+        new THREE.Vector2(0.162, 0.075),
+        new THREE.Vector2(0.0, 0.082),
+      ],
+      18,
+    ),
   );
-  pelvisBrief.scale.set(1.06, 1.0, 0.8);
-  pelvisBrief.castShadow = castShadow;
-  astroPelvisGroup.add(pelvisBrief);
+  const thighGeo = trackGeo(
+    new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.07, -0.38),
+        new THREE.Vector2(0.084, -0.31),
+        new THREE.Vector2(0.08, -0.24),
+        new THREE.Vector2(0.088, -0.14),
+        new THREE.Vector2(0.088, -0.05),
+        new THREE.Vector2(0.084, 0.0),
+      ],
+      14,
+    ),
+  );
+  const shinGeo = trackGeo(
+    new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.062, -0.35),
+        new THREE.Vector2(0.082, -0.29),
+        new THREE.Vector2(0.072, -0.22),
+        new THREE.Vector2(0.082, -0.14),
+        new THREE.Vector2(0.072, -0.06),
+        new THREE.Vector2(0.068, 0.0),
+      ],
+      14,
+    ),
+  );
+  const torsoGeo = trackGeo(
+    new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.0, 0.0),
+        new THREE.Vector2(0.15, 0.02),
+        new THREE.Vector2(0.168, 0.14),
+        new THREE.Vector2(0.194, 0.3),
+        new THREE.Vector2(0.184, 0.4),
+        new THREE.Vector2(0.132, 0.45),
+        new THREE.Vector2(0.0, 0.46),
+      ],
+      18,
+    ),
+  );
+  const upperArmGeo = trackGeo(
+    new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.054, -0.22),
+        new THREE.Vector2(0.064, -0.14),
+        new THREE.Vector2(0.06, -0.07),
+        new THREE.Vector2(0.066, 0.0),
+      ],
+      12,
+    ),
+  );
+  const foreArmGeo = trackGeo(
+    new THREE.LatheGeometry(
+      [
+        new THREE.Vector2(0.048, -0.2),
+        new THREE.Vector2(0.058, -0.12),
+        new THREE.Vector2(0.052, -0.05),
+        new THREE.Vector2(0.054, 0.0),
+      ],
+      12,
+    ),
+  );
 
-  // Orange hip-back accent panels (matching turnaround back view)
-  [-0.125, 0.125].forEach((ox) => {
-    const hipAccent = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.068, 12, 10)),
-      matExplorerOrange,
+  const buildEvaExplorer = (
+    accentColor: string,
+    badgeTex: THREE.Texture,
+    scaleFactor = 1.0,
+  ) => {
+    const matAccent = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: accentColor,
+        roughness: 0.42,
+        metalness: 0.12,
+      }),
     );
-    hipAccent.scale.set(0.75, 1.15, 0.65);
-    hipAccent.position.set(ox, -0.032, -0.082);
-    astroPelvisGroup.add(hipAccent);
-  });
-
-  // Chunky Dark-Slate Utility Belt + Silver Buckle + Belt Loops
-  const waistBelt = new THREE.Mesh(
-    trackGeo(new THREE.TorusGeometry(0.164, 0.024, 10, 26)),
-    matSlateGear,
-  );
-  waistBelt.rotation.x = Math.PI / 2;
-  waistBelt.scale.set(1.07, 0.82, 1.0);
-  waistBelt.position.y = 0.035;
-  astroPelvisGroup.add(waistBelt);
-
-  const beltBuckle = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.072, 0.056, 0.028, 0.008)),
-    matBrushedAlum,
-  );
-  beltBuckle.position.set(0, 0.035, 0.145);
-  astroPelvisGroup.add(beltBuckle);
-
-  // Right Hip (-X, viewer's left): Padded Slate Utility Pouch with Orange Flap + Orange D-Ring Carabiner
-  const rightPouchGroup = new THREE.Group();
-  rightPouchGroup.position.set(-0.175, -0.015, 0.055);
-  rightPouchGroup.rotation.y = -0.35;
-  const rightPouchBody = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.075, 0.11, 0.068, 0.016)),
-    matSlateGear,
-  );
-  rightPouchBody.castShadow = castShadow;
-  rightPouchGroup.add(rightPouchBody);
-  const rightPouchFlap = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.072, 0.044, 0.072, 0.014)),
-    matExplorerOrange,
-  );
-  rightPouchFlap.position.set(0, 0.036, 0.004);
-  rightPouchGroup.add(rightPouchFlap);
-  astroPelvisGroup.add(rightPouchGroup);
-
-  const carabiner = new THREE.Mesh(
-    trackGeo(new THREE.TorusGeometry(0.032, 0.009, 8, 18)),
-    matExplorerOrange,
-  );
-  carabiner.scale.set(0.82, 1.25, 1.0);
-  carabiner.position.set(-0.095, -0.025, 0.145);
-  carabiner.rotation.y = -0.25;
-  astroPelvisGroup.add(carabiner);
-
-  // Left Hip (+X, viewer's right): Insulated White Energy Flask with Glowing Amber Indicator Bars
-  const flaskGroup = new THREE.Group();
-  flaskGroup.position.set(0.172, -0.015, 0.042);
-  const flaskBody = new THREE.Mesh(
-    trackGeo(new THREE.CapsuleGeometry(0.038, 0.064, 6, 12)),
-    matHelmetShellWhite,
-  );
-  flaskBody.castShadow = castShadow;
-  flaskGroup.add(flaskBody);
-  const flaskHolder = new THREE.Mesh(
-    trackGeo(new THREE.CylinderGeometry(0.042, 0.042, 0.052, 12)),
-    matSlateGear,
-  );
-  flaskHolder.position.y = -0.012;
-  flaskGroup.add(flaskHolder);
-  const flaskCap = new THREE.Mesh(
-    trackGeo(new THREE.CylinderGeometry(0.018, 0.022, 0.028, 10)),
-    matSlateGear,
-  );
-  flaskCap.position.y = 0.062;
-  flaskGroup.add(flaskCap);
-  const flaskLedTop = new THREE.Mesh(
-    trackGeo(new THREE.BoxGeometry(0.036, 0.011, 0.012)),
-    matAmberLed,
-  );
-  flaskLedTop.position.set(0.018, 0.022, 0.034);
-  flaskGroup.add(flaskLedTop);
-  const flaskLedVert = new THREE.Mesh(
-    trackGeo(new THREE.BoxGeometry(0.01, 0.03, 0.01)),
-    matAmberLed,
-  );
-  flaskLedVert.position.set(0.038, -0.012, 0.014);
-  flaskGroup.add(flaskLedVert);
-  astroPelvisGroup.add(flaskGroup);
-
-  // Rear Belt Utility Pouches (matching back turnaround)
-  [-0.085, 0.085].forEach((bx) => {
-    const backPouch = new THREE.Mesh(
-      trackGeo(createBeveledPanelGeometry(0.068, 0.088, 0.052, 0.012)),
-      matSlateGear,
+    const matBadge = trackMat(
+      new THREE.MeshStandardMaterial({
+        map: badgeTex,
+        roughness: 0.45,
+      }),
     );
-    backPouch.position.set(bx, 0.0, -0.145);
-    astroPelvisGroup.add(backPouch);
-  });
 
-  // 2-Segment Articulated Kid Explorer Legs (Padded wrinkled trousers + Knee Pads + Chunky Explorer Boots)
-  const buildLeg = (isRight: boolean) => {
-    const side = isRight ? 1 : -1;
-    const hipPivot = new THREE.Group();
-    hipPivot.position.set(side * 0.112, -0.02, 0);
-    hipPivot.rotation.y = side * -0.055;
+    const group = new THREE.Group();
+    group.scale.setScalar(scaleFactor);
+    addContactShadow(group, 0.54, 0.54, 0.68);
 
-    const hipSocket = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.086, 14, 12)),
-      matKidSuitWhite,
+    const pelvis = new THREE.Group();
+    pelvis.position.y = 0.86;
+    group.add(pelvis);
+
+    const pelvisBrief = new THREE.Mesh(pelvisGeo, matEvaSuitWhite);
+    pelvisBrief.scale.set(1.06, 1.0, 0.8);
+    pelvisBrief.castShadow = castShadow;
+    pelvis.add(pelvisBrief);
+
+    const waistRing = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(0.162, 0.02, 8, 22)),
+      matAnodizedRing,
     );
-    hipSocket.castShadow = castShadow;
-    hipPivot.add(hipSocket);
+    waistRing.rotation.x = Math.PI / 2;
+    waistRing.scale.set(1.07, 0.82, 1.0);
+    waistRing.position.y = 0.04;
+    pelvis.add(waistRing);
 
-    // Padded thigh with subtle soft fabric fold wave
-    const thighProfile = [
-      new THREE.Vector2(0.07, -0.38),
-      new THREE.Vector2(0.084, -0.31),
-      new THREE.Vector2(0.08, -0.24),
-      new THREE.Vector2(0.088, -0.14),
-      new THREE.Vector2(0.088, -0.05),
-      new THREE.Vector2(0.084, 0.0),
-    ];
-    const thigh = new THREE.Mesh(
-      trackGeo(new THREE.LatheGeometry(thighProfile, 16)),
-      matKidSuitWhite,
+    const buckle = new THREE.Mesh(
+      trackGeo(createBeveledPanelGeometry(0.07, 0.054, 0.026, 0.008)),
+      matBrushedAlum,
     );
-    thigh.scale.set(0.98, 1.0, 1.05);
-    thigh.castShadow = castShadow;
-    hipPivot.add(thigh);
+    buckle.position.set(0, 0.04, 0.145);
+    pelvis.add(buckle);
 
-    if (!isRight) {
-      // Right-leg (-X) dark-slate thigh strap with buckle
-      const thighStrap = new THREE.Mesh(
-        trackGeo(new THREE.TorusGeometry(0.085, 0.015, 8, 18)),
+    const buildLeg = (isRight: boolean) => {
+      const side = isRight ? 1 : -1;
+      const hipPivot = new THREE.Group();
+      hipPivot.position.set(side * 0.112, -0.02, 0);
+      hipPivot.rotation.y = side * -0.055;
+
+      const hipSocket = new THREE.Mesh(
+        trackGeo(new THREE.SphereGeometry(0.086, 12, 10)),
+        matAnodizedRing,
+      );
+      hipPivot.add(hipSocket);
+
+      const thigh = new THREE.Mesh(thighGeo, matEvaSuitWhite);
+      thigh.scale.set(0.98, 1.0, 1.05);
+      thigh.castShadow = castShadow;
+      hipPivot.add(thigh);
+
+      const thighBand = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(0.085, 0.014, 6, 16)),
+        matAccent,
+      );
+      thighBand.rotation.x = Math.PI / 2;
+      thighBand.position.y = -0.17;
+      hipPivot.add(thighBand);
+
+      const kneePivot = new THREE.Group();
+      kneePivot.position.set(0, -0.38, 0);
+      hipPivot.add(kneePivot);
+
+      const kneeRing = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(0.072, 0.012, 6, 16)),
+        matAnodizedRing,
+      );
+      kneeRing.rotation.x = Math.PI / 2;
+      kneePivot.add(kneeRing);
+
+      const kneePad = new THREE.Mesh(
+        trackGeo(createBeveledPanelGeometry(0.084, 0.095, 0.034, 0.014)),
         matSlateGear,
       );
-      thighStrap.rotation.x = Math.PI / 2;
-      thighStrap.scale.set(1.0, 1.08, 1.0);
-      thighStrap.position.y = -0.16;
-      hipPivot.add(thighStrap);
+      kneePad.position.set(0, -0.01, 0.068);
+      kneePad.castShadow = castShadow;
+      kneePivot.add(kneePad);
 
-      const strapBuckle = new THREE.Mesh(
-        trackGeo(createBeveledPanelGeometry(0.044, 0.044, 0.018, 0.005)),
+      // Lower shin & dusty boot patina from Martian regolith exposure
+      const shin = new THREE.Mesh(shinGeo, matEvaSuitDusty);
+      shin.scale.set(0.98, 1.0, 1.05);
+      shin.castShadow = castShadow;
+      kneePivot.add(shin);
+
+      const anklePivot = new THREE.Group();
+      anklePivot.position.set(0, -0.35, 0);
+      kneePivot.add(anklePivot);
+
+      const bootUpper = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.074, 0.078, 0.095, 14)),
+        matEvaSuitDusty,
+      );
+      bootUpper.position.set(0, -0.01, 0.005);
+      bootUpper.castShadow = castShadow;
+      anklePivot.add(bootUpper);
+
+      const bootAccent = new THREE.Mesh(
+        trackGeo(createBeveledPanelGeometry(0.036, 0.062, 0.022, 0.006)),
+        matAccent,
+      );
+      bootAccent.position.set(0, -0.02, 0.078);
+      anklePivot.add(bootAccent);
+
+      const toeBox = new THREE.Mesh(
+        trackGeo(new THREE.SphereGeometry(0.08, 12, 10)),
         matSlateGear,
       );
-      strapBuckle.position.set(0, -0.16, 0.09);
-      hipPivot.add(strapBuckle);
-    } else {
-      // Left-leg (+X) orange vertical stripe & zipper tab accent
-      const thighOrangeStripe = new THREE.Mesh(
-        trackGeo(new THREE.CapsuleGeometry(0.015, 0.24, 4, 8)),
-        matExplorerOrange,
+      toeBox.scale.set(0.95, 0.54, 1.44);
+      toeBox.position.set(0, -0.062, 0.056);
+      toeBox.castShadow = castShadow;
+      anklePivot.add(toeBox);
+
+      const bootSole = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.084, 0.088, 0.036, 14)),
+        matSlateGear,
       );
-      thighOrangeStripe.position.set(0.048, -0.15, 0.072);
-      hipPivot.add(thighOrangeStripe);
-    }
+      bootSole.scale.set(0.98, 1.0, 1.64);
+      bootSole.position.set(0, -0.092, 0.034);
+      bootSole.castShadow = castShadow;
+      anklePivot.add(bootSole);
 
-    // Knee Pivot (world y = 0.46)
-    const kneePivot = new THREE.Group();
-    kneePivot.position.set(0, -0.38, 0);
-    hipPivot.add(kneePivot);
+      pelvis.add(hipPivot);
+      return { hipPivot, kneePivot, anklePivot };
+    };
 
-    const kneeBall = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.07, 14, 12)),
-      matKidSuitWhite,
-    );
-    kneePivot.add(kneeBall);
+    const leftLegRig = buildLeg(false);
+    const rightLegRig = buildLeg(true);
 
-    // Rounded dark-slate explorer knee pad
-    const kneePad = new THREE.Mesh(
-      trackGeo(createBeveledPanelGeometry(0.086, 0.1, 0.036, 0.016)),
-      matSlateGear,
-    );
-    kneePad.position.set(0, -0.01, 0.068);
-    kneePad.castShadow = castShadow;
-    kneePivot.add(kneePad);
+    const torso = new THREE.Group();
+    torso.position.y = 0.07;
+    pelvis.add(torso);
 
-    // Padded lower trouser leg with cozy cloth bunching above boot cuff
-    const shinProfile = [
-      new THREE.Vector2(0.062, -0.35),
-      new THREE.Vector2(0.082, -0.29),
-      new THREE.Vector2(0.072, -0.22),
-      new THREE.Vector2(0.082, -0.14),
-      new THREE.Vector2(0.072, -0.06),
-      new THREE.Vector2(0.068, 0.0),
-    ];
-    const shin = new THREE.Mesh(
-      trackGeo(new THREE.LatheGeometry(shinProfile, 16)),
-      matKidSuitWhite,
-    );
-    shin.scale.set(0.98, 1.0, 1.05);
-    shin.castShadow = castShadow;
-    kneePivot.add(shin);
+    const suitTorso = new THREE.Mesh(torsoGeo, matEvaSuitWhite);
+    suitTorso.scale.set(1.06, 1.0, 0.8);
+    suitTorso.castShadow = castShadow;
+    torso.add(suitTorso);
 
-    // Ankle Pivot (world y = 0.11 -> chunky boot sole flush at y = 0)
-    const anklePivot = new THREE.Group();
-    anklePivot.position.set(0, -0.35, 0);
-    kneePivot.add(anklePivot);
-
-    // Chunky Stylized Explorer Boot (matching front/side/back turnaround!)
-    const bootUpper = new THREE.Mesh(
-      trackGeo(new THREE.CylinderGeometry(0.074, 0.078, 0.095, 16)),
-      matSlateGear,
-    );
-    bootUpper.position.set(0, -0.01, 0.005);
-    bootUpper.castShadow = castShadow;
-    anklePivot.add(bootUpper);
-
-    // Top ankle strap collar + white side badge
-    const ankleCollar = new THREE.Mesh(
-      trackGeo(new THREE.TorusGeometry(0.075, 0.014, 8, 18)),
-      matSlateGear,
-    );
-    ankleCollar.rotation.x = Math.PI / 2;
-    ankleCollar.position.set(0, 0.025, 0.004);
-    anklePivot.add(ankleCollar);
-
-    const bootFrontWhite = new THREE.Mesh(
-      trackGeo(createBeveledPanelGeometry(0.054, 0.036, 0.022, 0.006)),
-      matHelmetShellWhite,
-    );
-    bootFrontWhite.position.set(0, 0.025, 0.078);
-    anklePivot.add(bootFrontWhite);
-
-    // Bright orange vertical boot tongue latch
-    const bootOrangeLatch = new THREE.Mesh(
-      trackGeo(createBeveledPanelGeometry(0.036, 0.068, 0.024, 0.007)),
-      matExplorerOrange,
-    );
-    bootOrangeLatch.position.set(0, -0.022, 0.078);
-    anklePivot.add(bootOrangeLatch);
-
-    // Rounded slate toe box + crisp white bridge strap
-    const toeBox = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.08, 16, 12)),
-      matSlateGear,
-    );
-    toeBox.scale.set(0.95, 0.54, 1.44);
-    toeBox.position.set(0, -0.062, 0.056);
-    toeBox.castShadow = castShadow;
-    anklePivot.add(toeBox);
-
-    const toeWhiteBridge = new THREE.Mesh(
-      trackGeo(new THREE.CylinderGeometry(0.072, 0.076, 0.044, 16, 1, false, -Math.PI * 0.45, Math.PI * 0.9)),
-      matHelmetShellWhite,
-    );
-    toeWhiteBridge.rotation.z = Math.PI / 2;
-    toeWhiteBridge.rotation.y = Math.PI / 2;
-    toeWhiteBridge.scale.set(0.9, 1.0, 0.95);
-    toeWhiteBridge.position.set(0, -0.05, 0.076);
-    anklePivot.add(toeWhiteBridge);
-
-    // White heel patch (visible in back turnaround)
-    const heelWhitePatch = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.062, 12, 10)),
-      matHelmetShellWhite,
-    );
-    heelWhitePatch.scale.set(0.88, 0.6, 0.72);
-    heelWhitePatch.position.set(0, -0.055, -0.046);
-    anklePivot.add(heelWhitePatch);
-
-    // Heavy lugged tread outsole (bottom flush at y = -0.11 -> world y = 0)
-    const bootSole = new THREE.Mesh(
-      trackGeo(new THREE.CylinderGeometry(0.084, 0.088, 0.036, 18)),
-      matSlateGear,
-    );
-    bootSole.scale.set(0.98, 1.0, 1.64);
-    bootSole.position.set(0, -0.092, 0.034);
-    bootSole.castShadow = castShadow;
-    anklePivot.add(bootSole);
-
-    astroPelvisGroup.add(hipPivot);
-    return { hipPivot, kneePivot, anklePivot };
-  };
-
-  const leftLegRig = buildLeg(false);
-  const rightLegRig = buildLeg(true);
-  const astroLeftLegPivot = leftLegRig.hipPivot;
-  const astroRightLegPivot = rightLegRig.hipPivot;
-  const astroLeftKneePivot = leftLegRig.kneePivot;
-  const astroRightKneePivot = rightLegRig.kneePivot;
-  const astroLeftAnklePivot = leftLegRig.anklePivot;
-  const astroRightAnklePivot = rightLegRig.anklePivot;
-
-  // Articulated Upper Torso (Waist pivot at world y = 0.93)
-  const astroTorsoGroup = new THREE.Group();
-  astroTorsoGroup.position.y = 0.07;
-  astroPelvisGroup.add(astroTorsoGroup);
-
-  // Soft padded ivory suit torso
-  const torsoProfile = [
-    new THREE.Vector2(0.0, 0.0),
-    new THREE.Vector2(0.15, 0.02),
-    new THREE.Vector2(0.168, 0.14),
-    new THREE.Vector2(0.194, 0.3),
-    new THREE.Vector2(0.184, 0.4),
-    new THREE.Vector2(0.132, 0.45),
-    new THREE.Vector2(0.0, 0.46),
-  ];
-  const suitTorso = new THREE.Mesh(
-    trackGeo(new THREE.LatheGeometry(torsoProfile, 22)),
-    matKidSuitWhite,
-  );
-  suitTorso.scale.set(1.06, 1.0, 0.8);
-  suitTorso.castShadow = castShadow;
-  astroTorsoGroup.add(suitTorso);
-
-  // Vibrant Orange Vertical Explorer Stripes on chest/ribs
-  [-1, 1].forEach((side) => {
-    const chestStripeCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(side * 0.125, 0.38, 0.075),
-      new THREE.Vector3(side * 0.115, 0.24, 0.132),
-      new THREE.Vector3(side * 0.095, 0.05, 0.125),
-    ]);
-    const chestStripe = new THREE.Mesh(
-      trackGeo(new THREE.TubeGeometry(chestStripeCurve, 12, 0.02, 8, false)),
-      matExplorerOrange,
-    );
-    astroTorsoGroup.add(chestStripe);
-
-    // Dark-Slate Over-Shoulder Harness Straps wrapping into Chest Pack & Waist
-    const harnessCurve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(side * 0.11, 0.36, -0.12),
-      new THREE.Vector3(side * 0.115, 0.44, 0.01),
-      new THREE.Vector3(side * 0.088, 0.32, 0.142),
-      new THREE.Vector3(side * 0.135, 0.17, 0.128),
-      new THREE.Vector3(side * 0.158, 0.14, -0.02),
-      new THREE.Vector3(side * 0.11, 0.14, -0.14),
-    ]);
-    const harnessStrap = new THREE.Mesh(
-      trackGeo(new THREE.TubeGeometry(harnessCurve, 20, 0.017, 8, false)),
-      matSlateGear,
-    );
-    harnessStrap.castShadow = castShadow;
-    astroTorsoGroup.add(harnessStrap);
-  });
-
-  // Front Rounded White Chest Pack with Glowing Amber Slit + Twin-Peak ▲▲ Emblem
-  const chestPackGroup = new THREE.Group();
-  chestPackGroup.position.set(0, 0.245, 0.158);
-  const chestPackBody = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.17, 0.145, 0.062, 0.022)),
-    matHelmetShellWhite,
-  );
-  chestPackBody.castShadow = castShadow;
-  chestPackGroup.add(chestPackBody);
-
-  const chestAmberBar = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.11, 0.016, 0.014, 0.004)),
-    matAmberLed,
-  );
-  chestAmberBar.position.set(0, 0.044, 0.045);
-  chestPackGroup.add(chestAmberBar);
-
-  const chestEmblemPlate = new THREE.Mesh(
-    trackGeo(new THREE.PlaneGeometry(0.125, 0.075)),
-    matEmblemFace,
-  );
-  chestEmblemPlate.position.set(0, -0.016, 0.054);
-  chestPackGroup.add(chestEmblemPlate);
-  astroTorsoGroup.add(chestPackGroup);
-
-  // Back Rounded White Explorer Backpack with Glowing 'T' Amber LEDs, Twin-Peak ▲▲ Emblem & Orange Side Pods
-  const backpackGroup = new THREE.Group();
-  backpackGroup.position.set(0, 0.27, -0.185);
-  const packBody = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.22, 0.29, 0.095, 0.028)),
-    matHelmetShellWhite,
-  );
-  packBody.castShadow = castShadow;
-  backpackGroup.add(packBody);
-
-  const packSlateInner = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.24, 0.25, 0.06, 0.016)),
-    matSlateGear,
-  );
-  packSlateInner.position.set(0, -0.005, 0.032);
-  backpackGroup.add(packSlateInner);
-
-  // Glowing Amber 'T' Light Bars on Back
-  const packLedTop = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.12, 0.018, 0.014, 0.005)),
-    matAmberLed,
-  );
-  packLedTop.position.set(0, 0.1, -0.068);
-  backpackGroup.add(packLedTop);
-
-  const packLedVert = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.022, 0.09, 0.014, 0.005)),
-    matAmberLed,
-  );
-  packLedVert.position.set(0, 0.036, -0.068);
-  backpackGroup.add(packLedVert);
-
-  const packEmblem = new THREE.Mesh(
-    trackGeo(new THREE.PlaneGeometry(0.13, 0.08)),
-    matEmblemFace,
-  );
-  packEmblem.rotation.y = Math.PI;
-  packEmblem.position.set(0, -0.065, -0.076);
-  backpackGroup.add(packEmblem);
-
-  [-0.125, 0.125].forEach((sx) => {
-    const sidePod = new THREE.Mesh(
-      trackGeo(createBeveledPanelGeometry(0.036, 0.09, 0.056, 0.01)),
-      matExplorerOrange,
-    );
-    sidePod.position.set(sx, -0.045, 0.005);
-    backpackGroup.add(sidePod);
-  });
-  astroTorsoGroup.add(backpackGroup);
-
-  // Kid Explorer Head & Clear Sky-Blue Bubble Helmet (world neck y = 1.35)
-  const astroHeadGroup = new THREE.Group();
-  astroHeadGroup.position.set(0, 0.425, 0.005);
-  astroTorsoGroup.add(astroHeadGroup);
-
-  // Dark-slate ribbed neck collar + front glowing amber chin light pod
-  const neckCollar = new THREE.Mesh(
-    trackGeo(new THREE.TorusGeometry(0.128, 0.024, 10, 24)),
-    matSlateGear,
-  );
-  neckCollar.rotation.x = Math.PI / 2 + 0.06;
-  astroHeadGroup.add(neckCollar);
-
-  const chinPod = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.115, 0.052, 0.054, 0.015)),
-    matSlateGear,
-  );
-  chinPod.position.set(0, 0.015, 0.132);
-  astroHeadGroup.add(chinPod);
-
-  const chinAmberLed = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.068, 0.017, 0.014, 0.004)),
-    matAmberLed,
-  );
-  chinAmberLed.position.set(0, 0.015, 0.165);
-  astroHeadGroup.add(chinAmberLed);
-
-  // Expressive Kid Explorer Face Inside Helmet (center at y = 0.21 -> world 1.56)
-  const headCranium = new THREE.Mesh(
-    trackGeo(new THREE.SphereGeometry(0.118, 22, 18)),
-    matKidSkin,
-  );
-  headCranium.scale.set(0.94, 1.03, 0.96);
-  headCranium.position.set(0, 0.205, 0.01);
-  astroHeadGroup.add(headCranium);
-
-  // Rounded gentle cheeks & friendly chin
-  [-0.056, 0.056].forEach((cx) => {
-    const cheek = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.044, 12, 10)),
-      matKidSkin,
-    );
-    cheek.position.set(cx, 0.175, 0.072);
-    astroHeadGroup.add(cheek);
-
-    // Cute subtle freckles across upper cheeks
-    [
-      [0.0, 0.012],
-      [-0.014, 0.006],
-      [0.014, 0.006],
-    ].forEach(([fx, fy]) => {
-      const dot = new THREE.Mesh(
-        trackGeo(new THREE.SphereGeometry(0.0036, 6, 6)),
-        matFreckle,
+    // Shoulder harness & suit stripe markings
+    [-1, 1].forEach((side) => {
+      const chestStripeCurve = new THREE.CatmullRomCurve3([
+        new THREE.Vector3(side * 0.125, 0.38, 0.075),
+        new THREE.Vector3(side * 0.115, 0.24, 0.132),
+        new THREE.Vector3(side * 0.095, 0.05, 0.125),
+      ]);
+      const chestStripe = new THREE.Mesh(
+        trackGeo(new THREE.TubeGeometry(chestStripeCurve, 10, 0.018, 6, false)),
+        matAccent,
       );
-      dot.position.set(cx + fx * (cx < 0 ? 1 : -1), 0.186 + fy, 0.104);
-      astroHeadGroup.add(dot);
+      torso.add(chestStripe);
     });
-  });
 
-  // Side-parted Chestnut Brown Hair (swept bangs across forehead + side locks + crown)
-  const hairBack = new THREE.Mesh(
-    trackGeo(
-      new THREE.SphereGeometry(0.125, 22, 16, Math.PI * 0.72, Math.PI * 1.56, 0, Math.PI * 0.72),
-    ),
-    matChestnutHair,
-  );
-  hairBack.scale.set(0.96, 1.04, 0.98);
-  hairBack.position.set(0, 0.212, 0.006);
-  astroHeadGroup.add(hairBack);
-
-  // Sweeping side-parted front hair bangs
-  const leftBang = new THREE.Mesh(
-    trackGeo(new THREE.SphereGeometry(0.088, 16, 12)),
-    matChestnutHair,
-  );
-  leftBang.scale.set(1.05, 0.56, 0.72);
-  leftBang.position.set(-0.045, 0.285, 0.068);
-  leftBang.rotation.z = 0.42;
-  leftBang.rotation.y = 0.28;
-  astroHeadGroup.add(leftBang);
-
-  const rightBang = new THREE.Mesh(
-    trackGeo(new THREE.SphereGeometry(0.078, 16, 12)),
-    matChestnutHair,
-  );
-  rightBang.scale.set(0.96, 0.52, 0.68);
-  rightBang.position.set(0.058, 0.282, 0.068);
-  rightBang.rotation.z = -0.48;
-  rightBang.rotation.y = -0.28;
-  astroHeadGroup.add(rightBang);
-
-  // Hair framing both cheeks inside helmet
-  [-0.098, 0.098].forEach((hx) => {
-    const sideLock = new THREE.Mesh(
-      trackGeo(new THREE.CapsuleGeometry(0.028, 0.075, 6, 10)),
-      matChestnutHair,
+    // Chest Display & Control Module (DCM) with illuminated O2 / kPa / H2O readout
+    const chestPackGroup = new THREE.Group();
+    chestPackGroup.position.set(0, 0.25, 0.158);
+    const chestPackBody = new THREE.Mesh(
+      trackGeo(createBeveledPanelGeometry(0.18, 0.15, 0.064, 0.02)),
+      matHelmetShellWhite,
     );
-    sideLock.position.set(hx, 0.19, 0.036);
-    sideLock.rotation.z = hx < 0 ? 0.12 : -0.12;
-    astroHeadGroup.add(sideLock);
-  });
+    chestPackBody.castShadow = castShadow;
+    chestPackGroup.add(chestPackBody);
 
-  // Friendly Button Nose
-  const nose = new THREE.Mesh(
-    trackGeo(new THREE.SphereGeometry(0.017, 10, 8)),
-    matKidSkin,
-  );
-  nose.scale.set(1.12, 0.88, 1.18);
-  nose.position.set(0, 0.194, 0.118);
-  astroHeadGroup.add(nose);
-
-  // Big Expressive Eyes with White Specular Catchlights + Friendly Smile
-  const matSclera = trackMat(
-    new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.18 }),
-  );
-  const matIris = trackMat(
-    new THREE.MeshStandardMaterial({ color: '#2b1910', roughness: 0.1, metalness: 0.05 }),
-  );
-  const matMouth = trackMat(
-    new THREE.MeshStandardMaterial({ color: '#b86357', roughness: 0.5 }),
-  );
-  const matEyeCatchlight = trackMat(
-    new THREE.MeshBasicMaterial({ color: '#ffffff' }),
-  );
-
-  [-0.04, 0.04].forEach((ex) => {
-    const sclera = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.02, 12, 10)),
-      matSclera,
+    const chestScreen = new THREE.Mesh(
+      trackGeo(new THREE.PlaneGeometry(0.14, 0.072)),
+      matChestDcm,
     );
-    sclera.scale.set(1.06, 0.96, 0.62);
-    sclera.position.set(ex, 0.214, 0.102);
-    astroHeadGroup.add(sclera);
+    chestScreen.position.set(0, 0.025, 0.052);
+    chestPackGroup.add(chestScreen);
 
-    const iris = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.0145, 12, 10)),
-      matIris,
-    );
-    iris.scale.set(1, 1.04, 0.66);
-    iris.position.set(ex, 0.214, 0.109);
-    astroHeadGroup.add(iris);
-
-    const catchlight = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.0048, 8, 8)),
-      matEyeCatchlight,
-    );
-    catchlight.position.set(ex + 0.0045, 0.22, 0.116);
-    astroHeadGroup.add(catchlight);
-
-    const brow = new THREE.Mesh(
-      trackGeo(new THREE.CapsuleGeometry(0.0062, 0.026, 4, 8)),
-      matChestnutHair,
-    );
-    brow.rotation.z = ex < 0 ? Math.PI / 2 - 0.14 : Math.PI / 2 + 0.14;
-    brow.position.set(ex, 0.244, 0.104);
-    astroHeadGroup.add(brow);
-  });
-
-  const smile = new THREE.Mesh(
-    trackGeo(new THREE.TorusGeometry(0.024, 0.0048, 6, 14, Math.PI * 0.72)),
-    matMouth,
-  );
-  smile.rotation.z = Math.PI + 0.44;
-  smile.position.set(0, 0.162, 0.106);
-  astroHeadGroup.add(smile);
-
-  // Rounded White Bubble Helmet Shell (radius 0.216 -> iconic friendly kid-explorer silhouette)
-  const helmetRearShell = new THREE.Mesh(
-    trackGeo(
-      new THREE.SphereGeometry(
-        0.216,
-        28,
-        20,
-        Math.PI * 0.8,
-        Math.PI * 1.4,
-        Math.PI * 0.12,
-        Math.PI * 0.78,
-      ),
-    ),
-    matHelmetShellWhite,
-  );
-  helmetRearShell.position.set(0, 0.212, 0.0);
-  helmetRearShell.castShadow = castShadow;
-  astroHeadGroup.add(helmetRearShell);
-
-  const helmetCrown = new THREE.Mesh(
-    trackGeo(
-      new THREE.SphereGeometry(0.216, 26, 12, 0, Math.PI * 2, 0, Math.PI * 0.24),
-    ),
-    matHelmetShellWhite,
-  );
-  helmetCrown.position.set(0, 0.212, 0.0);
-  helmetCrown.castShadow = castShadow;
-  astroHeadGroup.add(helmetCrown);
-
-  // Top crest ridge & rear dark-slate vent plate
-  const helmetCrest = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.056, 0.022, 0.09, 0.008)),
-    matHelmetShellWhite,
-  );
-  helmetCrest.position.set(0, 0.425, 0.01);
-  astroHeadGroup.add(helmetCrest);
-
-  const rearVentPlate = new THREE.Mesh(
-    trackGeo(createBeveledPanelGeometry(0.11, 0.036, 0.024, 0.008)),
-    matSlateGear,
-  );
-  rearVentPlate.position.set(0, 0.165, -0.205);
-  astroHeadGroup.add(rearVentPlate);
-
-  // Sky-blue glowing interior visor bezel ring
-  const visorBezel = new THREE.Mesh(
-    trackGeo(new THREE.TorusGeometry(0.172, 0.011, 8, 28)),
-    matBlueRimGlow,
-  );
-  visorBezel.position.set(0, 0.212, 0.118);
-  astroHeadGroup.add(visorBezel);
-
-  // Crystal-Clear Sky-Blue Bubble Dome Visor protruding cleanly on +Z
-  const visorDome = new THREE.Mesh(
-    trackGeo(
-      new THREE.SphereGeometry(
-        0.205,
-        28,
-        18,
-        Math.PI * 0.16,
-        Math.PI * 0.68,
-        Math.PI * 0.16,
-        Math.PI * 0.66,
-      ),
-    ),
-    matBlueBubbleVisor,
-  );
-  visorDome.position.set(0, 0.212, 0.038);
-  visorDome.renderOrder = 4;
-  astroHeadGroup.add(visorDome);
-
-  // Iconic Twin Circular Ear Pods with Glowing Amber-Orange LED Halo Rings
-  [-0.212, 0.212].forEach((hx) => {
-    const earHousing = new THREE.Mesh(
-      trackGeo(new THREE.CylinderGeometry(0.072, 0.068, 0.044, 20)),
-      matSlateGear,
-    );
-    earHousing.rotation.z = Math.PI / 2;
-    earHousing.position.set(hx, 0.205, 0.01);
-    astroHeadGroup.add(earHousing);
-
-    const earInnerCap = new THREE.Mesh(
-      trackGeo(new THREE.CylinderGeometry(0.056, 0.056, 0.052, 18)),
-      matSlateGear,
-    );
-    earInnerCap.rotation.z = Math.PI / 2;
-    earInnerCap.position.set(hx + (hx < 0 ? -0.004 : 0.004), 0.205, 0.01);
-    astroHeadGroup.add(earInnerCap);
-
-    const earLedRing = new THREE.Mesh(
-      trackGeo(new THREE.TorusGeometry(0.048, 0.0085, 8, 22)),
+    const chestAmberBar = new THREE.Mesh(
+      trackGeo(createBeveledPanelGeometry(0.11, 0.016, 0.012, 0.004)),
       matAmberLed,
     );
-    earLedRing.rotation.y = Math.PI / 2;
-    earLedRing.position.set(hx + (hx < 0 ? -0.025 : 0.025), 0.205, 0.01);
-    astroHeadGroup.add(earLedRing);
-  });
+    chestAmberBar.position.set(0, -0.044, 0.048);
+    chestPackGroup.add(chestAmberBar);
+    torso.add(chestPackGroup);
 
-  // 2-Segment Articulated Kid Explorer Arms (Orange shoulder pads + folded sleeves + slate cuff + orange-patched gloves)
-  const buildArm = (isRight: boolean) => {
-    const side = isRight ? 1 : -1;
-    const shoulderPivot = new THREE.Group();
-    shoulderPivot.position.set(side * 0.222, 0.37, 0);
-
-    const shoulderCap = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.072, 14, 12)),
-      matKidSuitWhite,
+    // Tall Pressurized PLSS Backpack + Dual Telemetry Whip Antenna + Callsign Badge
+    const backpackGroup = new THREE.Group();
+    backpackGroup.position.set(0, 0.28, -0.195);
+    const packBody = new THREE.Mesh(
+      trackGeo(createBeveledPanelGeometry(0.24, 0.36, 0.12, 0.026)),
+      matHelmetShellWhite,
     );
-    shoulderCap.castShadow = castShadow;
-    shoulderPivot.add(shoulderCap);
+    packBody.castShadow = castShadow;
+    backpackGroup.add(packBody);
 
-    // Contoured Vibrant Orange Shoulder Pad hugging upper deltoid
-    const orangeShoulderPad = new THREE.Mesh(
-      trackGeo(createBeveledPanelGeometry(0.052, 0.115, 0.112, 0.018)),
-      matExplorerOrange,
+    const packBadge = new THREE.Mesh(
+      trackGeo(new THREE.PlaneGeometry(0.14, 0.095)),
+      matBadge,
     );
-    orangeShoulderPad.position.set(side * 0.042, -0.02, 0);
-    orangeShoulderPad.rotation.z = side * -0.15;
-    orangeShoulderPad.castShadow = castShadow;
-    shoulderPivot.add(orangeShoulderPad);
+    packBadge.rotation.y = Math.PI;
+    packBadge.position.set(0, 0.06, -0.088);
+    backpackGroup.add(packBadge);
 
-    const upperArmProfile = [
-      new THREE.Vector2(0.054, -0.22),
-      new THREE.Vector2(0.064, -0.14),
-      new THREE.Vector2(0.06, -0.07),
-      new THREE.Vector2(0.066, 0.0),
-    ];
-    const upperArm = new THREE.Mesh(
-      trackGeo(new THREE.LatheGeometry(upperArmProfile, 14)),
-      matKidSuitWhite,
+    const packLed = new THREE.Mesh(
+      trackGeo(createBeveledPanelGeometry(0.12, 0.018, 0.014, 0.005)),
+      matAmberLed,
     );
-    upperArm.castShadow = castShadow;
-    shoulderPivot.add(upperArm);
+    packLed.position.set(0, -0.06, -0.086);
+    backpackGroup.add(packLed);
 
-    // Elbow Pivot
-    const elbowPivot = new THREE.Group();
-    elbowPivot.position.set(0, -0.22, 0);
-    shoulderPivot.add(elbowPivot);
-
-    const elbowBall = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.054, 12, 10)),
-      matKidSuitWhite,
+    const plssWhip = new THREE.Mesh(
+      trackGeo(new THREE.CylinderGeometry(0.006, 0.012, 0.42, 6)),
+      matBrushedAlum,
     );
-    elbowPivot.add(elbowBall);
+    plssWhip.position.set(0.095, 0.34, -0.02);
+    backpackGroup.add(plssWhip);
+    torso.add(backpackGroup);
 
-    const foreArmProfile = [
-      new THREE.Vector2(0.048, -0.2),
-      new THREE.Vector2(0.058, -0.12),
-      new THREE.Vector2(0.052, -0.05),
-      new THREE.Vector2(0.054, 0.0),
-    ];
-    const foreArm = new THREE.Mesh(
-      trackGeo(new THREE.LatheGeometry(foreArmProfile, 14)),
-      matKidSuitWhite,
-    );
-    foreArm.castShadow = castShadow;
-    elbowPivot.add(foreArm);
+    // Zero-Gap EVA Head: Anodized Neck Disconnect Ring + Soft Pleated Collar + Closed Gold-Visor Helmet
+    const head = new THREE.Group();
+    head.position.set(0, 0.435, 0.005);
+    torso.add(head);
 
-    // Chunky Dark-Slate Wrist Cuff Band
-    const wristCuff = new THREE.Mesh(
-      trackGeo(new THREE.CylinderGeometry(0.058, 0.056, 0.056, 16)),
+    const neckSealCollar = new THREE.Mesh(
+      trackGeo(new THREE.CylinderGeometry(0.12, 0.145, 0.085, 18)),
       matSlateGear,
     );
-    wristCuff.position.y = -0.185;
-    wristCuff.castShadow = castShadow;
-    elbowPivot.add(wristCuff);
+    neckSealCollar.position.y = 0.015;
+    head.add(neckSealCollar);
 
-    // Dark-Slate Articulated Explorer Glove with Orange Back-of-Hand Armor Patch
-    const palm = new THREE.Mesh(
-      trackGeo(new THREE.SphereGeometry(0.048, 12, 10)),
-      matSlateGear,
+    const neckDisconnectRing = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(0.132, 0.022, 10, 22)),
+      matAnodizedRing,
     );
-    palm.scale.set(0.76, 1.08, 0.96);
-    palm.position.set(0, -0.242, 0.006);
-    palm.castShadow = castShadow;
-    elbowPivot.add(palm);
+    neckDisconnectRing.rotation.x = Math.PI / 2;
+    neckDisconnectRing.position.y = 0.052;
+    head.add(neckDisconnectRing);
 
-    const gloveOrangePatch = new THREE.Mesh(
-      trackGeo(createBeveledPanelGeometry(0.026, 0.052, 0.048, 0.01)),
-      matExplorerOrange,
+    // Closed white pressure helmet shell
+    const helmetShell = new THREE.Mesh(
+      trackGeo(new THREE.SphereGeometry(0.205, 22, 16)),
+      matHelmetShellWhite,
     );
-    gloveOrangePatch.position.set(side * 0.025, -0.236, 0.004);
-    elbowPivot.add(gloveOrangePatch);
+    helmetShell.scale.set(0.96, 1.02, 1.04);
+    helmetShell.position.set(0, 0.215, -0.005);
+    helmetShell.castShadow = castShadow;
+    head.add(helmetShell);
 
-    [-0.018, 0, 0.018].forEach((fz) => {
-      const finger = new THREE.Mesh(
-        trackGeo(new THREE.CapsuleGeometry(0.012, 0.038, 4, 8)),
+    // Reflective Gold Polycarbonate Sun Visor Dome (completely opaque, reflects Martian environment)
+    const goldVisor = new THREE.Mesh(
+      trackGeo(
+        new THREE.SphereGeometry(
+          0.194,
+          22,
+          16,
+          Math.PI * 0.14,
+          Math.PI * 0.72,
+          Math.PI * 0.18,
+          Math.PI * 0.62,
+        ),
+      ),
+      matGoldVisor,
+    );
+    goldVisor.position.set(0, 0.218, 0.044);
+    head.add(goldVisor);
+
+    // Anodized visor rim trim
+    const visorTrim = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(0.165, 0.014, 8, 24)),
+      matAnodizedRing,
+    );
+    visorTrim.position.set(0, 0.218, 0.105);
+    head.add(visorTrim);
+
+    // Twin Helmet Side LED Floodlights
+    [-0.198, 0.198].forEach((hx) => {
+      const pod = new THREE.Mesh(
+        trackGeo(createBeveledPanelGeometry(0.045, 0.062, 0.09, 0.01)),
         matSlateGear,
       );
-      finger.position.set(-side * 0.008, -0.292, fz + 0.008);
-      finger.rotation.z = side * -0.22;
-      elbowPivot.add(finger);
+      pod.position.set(hx, 0.23, 0.035);
+      head.add(pod);
+
+      const led = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.018, 0.018, 0.02, 10)),
+        matHeadlampLed,
+      );
+      led.rotation.x = Math.PI / 2;
+      led.position.set(hx, 0.23, 0.088);
+      head.add(led);
     });
 
-    const thumb = new THREE.Mesh(
-      trackGeo(new THREE.CapsuleGeometry(0.012, 0.028, 4, 8)),
-      matSlateGear,
-    );
-    thumb.position.set(-side * 0.028, -0.258, 0.036);
-    thumb.rotation.x = -0.45;
-    thumb.rotation.z = side * -0.32;
-    elbowPivot.add(thumb);
+    const buildArm = (isRight: boolean) => {
+      const side = isRight ? 1 : -1;
+      const shoulderPivot = new THREE.Group();
+      shoulderPivot.position.set(side * 0.222, 0.37, 0);
 
-    astroTorsoGroup.add(shoulderPivot);
-    return { shoulderPivot, elbowPivot };
+      const shoulderRing = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(0.068, 0.012, 8, 16)),
+        matAnodizedRing,
+      );
+      shoulderRing.rotation.y = Math.PI / 2;
+      shoulderPivot.add(shoulderRing);
+
+      const pad = new THREE.Mesh(
+        trackGeo(createBeveledPanelGeometry(0.052, 0.115, 0.11, 0.016)),
+        matAccent,
+      );
+      pad.position.set(side * 0.038, -0.02, 0);
+      pad.castShadow = castShadow;
+      shoulderPivot.add(pad);
+
+      const upperArm = new THREE.Mesh(upperArmGeo, matEvaSuitWhite);
+      upperArm.castShadow = castShadow;
+      shoulderPivot.add(upperArm);
+
+      const elbowPivot = new THREE.Group();
+      elbowPivot.position.set(0, -0.22, 0);
+      shoulderPivot.add(elbowPivot);
+
+      const elbowRing = new THREE.Mesh(
+        trackGeo(new THREE.TorusGeometry(0.052, 0.01, 6, 14)),
+        matAnodizedRing,
+      );
+      elbowRing.rotation.x = Math.PI / 2;
+      elbowPivot.add(elbowRing);
+
+      const foreArm = new THREE.Mesh(foreArmGeo, matEvaSuitWhite);
+      foreArm.castShadow = castShadow;
+      elbowPivot.add(foreArm);
+
+      const wristRing = new THREE.Mesh(
+        trackGeo(new THREE.CylinderGeometry(0.056, 0.056, 0.048, 14)),
+        matAnodizedRing,
+      );
+      wristRing.position.y = -0.185;
+      elbowPivot.add(wristRing);
+
+      const palm = new THREE.Mesh(
+        trackGeo(new THREE.SphereGeometry(0.046, 10, 8)),
+        matSlateGear,
+      );
+      palm.scale.set(0.76, 1.08, 0.96);
+      palm.position.set(0, -0.24, 0.006);
+      elbowPivot.add(palm);
+
+      const backPatch = new THREE.Mesh(
+        trackGeo(createBeveledPanelGeometry(0.024, 0.048, 0.044, 0.008)),
+        matAccent,
+      );
+      backPatch.position.set(side * 0.024, -0.235, 0.004);
+      elbowPivot.add(backPatch);
+
+      [-0.016, 0, 0.016].forEach((fz) => {
+        const finger = new THREE.Mesh(
+          trackGeo(new THREE.CapsuleGeometry(0.011, 0.036, 4, 6)),
+          matSlateGear,
+        );
+        finger.position.set(-side * 0.008, -0.288, fz + 0.006);
+        finger.rotation.z = side * -0.2;
+        elbowPivot.add(finger);
+      });
+
+      torso.add(shoulderPivot);
+      return { shoulderPivot, elbowPivot };
+    };
+
+    const leftArmRig = buildArm(false);
+    const rightArmRig = buildArm(true);
+
+    return {
+      group,
+      pelvis,
+      torso,
+      head,
+      leftLegPivot: leftLegRig.hipPivot,
+      rightLegPivot: rightLegRig.hipPivot,
+      leftKneePivot: leftLegRig.kneePivot,
+      rightKneePivot: rightLegRig.kneePivot,
+      leftAnklePivot: leftLegRig.anklePivot,
+      rightAnklePivot: rightLegRig.anklePivot,
+      leftArmPivot: leftArmRig.shoulderPivot,
+      rightArmPivot: rightArmRig.shoulderPivot,
+      leftElbowPivot: leftArmRig.elbowPivot,
+      rightElbowPivot: rightArmRig.elbowPivot,
+    };
   };
 
-  const leftArmRig = buildArm(false);
-  const rightArmRig = buildArm(true);
-  const astroLeftArmPivot = leftArmRig.shoulderPivot;
-  const astroRightArmPivot = rightArmRig.shoulderPivot;
-  const astroLeftElbowPivot = leftArmRig.elbowPivot;
-  const astroRightElbowPivot = rightArmRig.elbowPivot;
+  // Player Commander EVA Suit
+  const cmdrBadgeTex = trackTex(createCrewBadgeTexture('CMD', '#f97316', maxAniso));
+  const cmdrRig = buildEvaExplorer('#f97316', cmdrBadgeTex, 1.0);
+  const astroGroup = cmdrRig.group;
+  astroGroup.position.set(astroX, gAt(astroX, astroZ), astroZ);
+  astroGroup.rotation.y = m.astroSpawn.yaw;
+  const astroPelvisGroup = cmdrRig.pelvis;
+  const astroTorsoGroup = cmdrRig.torso;
+  const astroHeadGroup = cmdrRig.head;
+  const astroLeftLegPivot = cmdrRig.leftLegPivot;
+  const astroRightLegPivot = cmdrRig.rightLegPivot;
+  const astroLeftKneePivot = cmdrRig.leftKneePivot;
+  const astroRightKneePivot = cmdrRig.rightKneePivot;
+  const astroLeftAnklePivot = cmdrRig.leftAnklePivot;
+  const astroRightAnklePivot = cmdrRig.rightAnklePivot;
+  const astroLeftArmPivot = cmdrRig.leftArmPivot;
+  const astroRightArmPivot = cmdrRig.rightArmPivot;
+  const astroLeftElbowPivot = cmdrRig.leftElbowPivot;
+  const astroRightElbowPivot = cmdrRig.rightElbowPivot;
 
-  // Natural relaxed resting arm pose
   astroLeftArmPivot.rotation.z = -0.11;
   astroRightArmPivot.rotation.z = 0.11;
   astroLeftElbowPivot.rotation.x = -0.34;
@@ -2209,15 +2272,117 @@ export function buildOutpostAssets(
   registerInteractive(astroGroup, 'astronaut');
   scene.add(astroGroup);
 
+  // 4 Articulated Outpost Crew NPCs (Medical, Flight Eng, Science, ISRU)
+  const crewRigs: CrewAvatarRig[] = CREW_PROFILES.map((prof) => {
+    const badgeTex = trackTex(createCrewBadgeTexture(prof.initials, prof.avatarColor, maxAniso));
+    const rig = buildEvaExplorer(prof.avatarColor, badgeTex, 0.96);
+    rig.group.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        child.userData.crewId = prof.id;
+        interactiveTargets.push(child);
+      }
+    });
+    scene.add(rig.group);
+    return {
+      id: prof.id,
+      group: rig.group,
+      pelvis: rig.pelvis,
+      torso: rig.torso,
+      head: rig.head,
+      leftArm: rig.leftArmPivot,
+      rightArm: rig.rightArmPivot,
+      leftElbow: rig.leftElbowPivot,
+      rightElbow: rig.rightElbowPivot,
+      leftLeg: rig.leftLegPivot,
+      rightLeg: rig.rightLegPivot,
+      leftKnee: rig.leftKneePivot,
+      rightKnee: rig.rightKneePivot,
+      leftAnkle: rig.leftAnklePivot,
+      rightAnkle: rig.rightAnklePivot,
+    };
+  });
+
+  // ============================================================================
+  // 5B. FIRST-PERSON DEPTH-CLEARED EVA ARMS VIEW-MODEL (fpScene + fpCamera)
+  // ============================================================================
+  const fpScene = new THREE.Scene();
+  const fpCamera = new THREE.PerspectiveCamera(48, 16 / 9, 0.02, 10);
+  const fpHemi = new THREE.HemisphereLight('#a8c4e0', '#8c3b20', 1.25);
+  fpScene.add(fpHemi);
+  const fpKey = new THREE.DirectionalLight('#ffd59e', 2.2);
+  fpKey.position.set(1.5, 2.5, 1.0);
+  fpScene.add(fpKey);
+
+  const fpArmsGroup = new THREE.Group();
+  fpScene.add(fpArmsGroup);
+
+  const matFpOrange = trackMat(
+    new THREE.MeshStandardMaterial({ color: '#f97316', roughness: 0.42, metalness: 0.1 }),
+  );
+  const buildFpArm = (isRight: boolean) => {
+    const side = isRight ? 1 : -1;
+    const arm = new THREE.Group();
+    arm.position.set(side * 0.27, -0.26, -0.32);
+
+    const sleeve = new THREE.Mesh(
+      trackGeo(new THREE.CylinderGeometry(0.056, 0.068, 0.42, 14)),
+      matEvaSuitWhite,
+    );
+    sleeve.rotation.x = Math.PI * 0.44;
+    sleeve.rotation.z = side * 0.16;
+    arm.add(sleeve);
+
+    const stripe = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(0.022, 0.28, 0.018)),
+      matFpOrange,
+    );
+    stripe.rotation.x = Math.PI * 0.44;
+    stripe.position.set(side * 0.04, 0.03, -0.02);
+    arm.add(stripe);
+
+    const cuff = new THREE.Mesh(
+      trackGeo(new THREE.TorusGeometry(0.056, 0.012, 8, 18)),
+      matAnodizedRing,
+    );
+    cuff.position.set(-side * 0.03, 0.04, -0.18);
+    cuff.rotation.x = 0.15;
+    arm.add(cuff);
+
+    const glovePalm = new THREE.Mesh(
+      trackGeo(createBeveledPanelGeometry(0.09, 0.055, 0.11, 0.016)),
+      matSlateGear,
+    );
+    glovePalm.position.set(-side * 0.04, 0.045, -0.26);
+    arm.add(glovePalm);
+
+    // Left forearm carries wrist sample status display
+    if (!isRight) {
+      const wristDisplay = new THREE.Mesh(
+        trackGeo(new THREE.PlaneGeometry(0.068, 0.036)),
+        matChestDcm,
+      );
+      wristDisplay.position.set(0.02, 0.072, -0.12);
+      wristDisplay.rotation.x = -Math.PI / 2 + 0.35;
+      wristDisplay.rotation.z = -0.22;
+      arm.add(wristDisplay);
+    }
+
+    fpArmsGroup.add(arm);
+    return arm;
+  };
+  const fpLeftArm = buildFpArm(false);
+  const fpRightArm = buildFpArm(true);
+  void matEmblemFace;
+
   // ============================================================================
   // 6. OUTPOST POWER CONSOLE (Central Energy Router + Glowing World Beacon)
   // ============================================================================
   const powerConsoleGroup = new THREE.Group();
-  const consoleX = 6.15;
-  const consoleZ = -0.35;
-  const consoleY = groundHeightAt(consoleX, consoleZ);
+  const consoleX = m.powerConsole.x;
+  const consoleZ = m.powerConsole.z;
+  const consoleY = gAt(consoleX, consoleZ);
   powerConsoleGroup.position.set(consoleX, consoleY, consoleZ);
-  powerConsoleGroup.rotation.y = -0.45;
+  powerConsoleGroup.rotation.y = m.powerConsole.yaw;
   addContactShadow(powerConsoleGroup, 0.72, 0.72, 0.65);
 
   const consoleBase = new THREE.Mesh(
@@ -2269,7 +2434,6 @@ export function buildOutpostAssets(
   consoleTrim.position.set(0, 0.84, 0.18);
   powerConsoleGroup.add(consoleTrim);
 
-  // World-space target marker ring & hovering indicator diamond (prominent during Tutorial 04)
   const powerBeaconRingMat = trackMat(
     new THREE.MeshBasicMaterial({
       color: '#ffb703',
@@ -2292,6 +2456,7 @@ export function buildOutpostAssets(
     matConsoleScreen,
   );
   powerBeaconDiamond.position.set(0, 1.85, 0.04);
+  powerBeaconDiamond.userData.nonPhysicalMarker = true;
   powerConsoleGroup.add(powerBeaconDiamond);
 
   registerInteractive(powerConsoleGroup, 'power-console');
@@ -2301,11 +2466,11 @@ export function buildOutpostAssets(
   // 7. MISSION 1 ZONE: O2 TANK 2 & ISRU VALVE ASSEMBLY (with White Vapour Leak)
   // ============================================================================
   const tank2Group = new THREE.Group();
-  const tank2X = 1.45;
-  const tank2Z = -0.85;
-  const tank2Y = groundHeightAt(tank2X, tank2Z);
+  const tank2X = m.tank2.x;
+  const tank2Z = m.tank2.z;
+  const tank2Y = gAt(tank2X, tank2Z);
   tank2Group.position.set(tank2X, tank2Y, tank2Z);
-  tank2Group.rotation.y = 0.25;
+  tank2Group.rotation.y = m.tank2.yaw;
   addContactShadow(tank2Group, 1.35, 1.0, 0.65);
 
   const tankRack = new THREE.Mesh(
@@ -2317,7 +2482,6 @@ export function buildOutpostAssets(
   tankRack.receiveShadow = true;
   tank2Group.add(tankRack);
 
-  // Twin vertical pressurized O2 cylinders (Tank 1 nominal, Tank 2 accented)
   const o2BodyProfile = [
     new THREE.Vector2(0, 0),
     new THREE.Vector2(0.32, 0),
@@ -2340,7 +2504,29 @@ export function buildOutpostAssets(
   tank2Band.position.set(0.42, 1.15, 0);
   tank2Group.add(tank2Band);
 
-  // Manifold pipe & orange manual isolation wheel valve
+  if (m.tank2.hasIsruUnit) {
+    const isruGroup = new THREE.Group();
+    isruGroup.position.set(m.tank2.isruOffsetX, 0, m.tank2.isruOffsetZ);
+    const isruSkid = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(1.12, 0.2, 0.96, 0.03)), matDarkSteel);
+    isruSkid.position.y = 0.1;
+    isruGroup.add(isruSkid);
+    const isruCab = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(1.02, 1.18, 0.86, 0.04)), matHullPanel);
+    isruCab.position.y = 0.78;
+    isruCab.castShadow = castShadow;
+    isruGroup.add(isruCab);
+    const isruStripe = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.06, 0.16, 0.9)), matMarsOrange);
+    isruStripe.position.y = 1.12;
+    isruGroup.add(isruStripe);
+    const isruPipeCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0.45, 0.88, 0),
+      new THREE.Vector3(-m.tank2.isruOffsetX * 0.5, 0.96, -m.tank2.isruOffsetZ * 0.5),
+      new THREE.Vector3(-m.tank2.isruOffsetX - 0.42, 0.85, -m.tank2.isruOffsetZ),
+    ]);
+    const isruPipe = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(isruPipeCurve, 10, 0.045, 8, false)), matCopperPipe);
+    isruGroup.add(isruPipe);
+    tank2Group.add(isruGroup);
+  }
+
   const manifoldCurve = new THREE.CatmullRomCurve3([
     new THREE.Vector3(-0.42, 1.52, 0),
     new THREE.Vector3(0, 1.66, 0.12),
@@ -2357,7 +2543,6 @@ export function buildOutpostAssets(
   tank2ValveWheel.position.set(0.42, 1.12, 0.48);
   tank2Group.add(tank2ValveWheel);
 
-  // White cryogenic O2 vapour leak particle stream
   const leakCount = 42;
   const tank2LeakPositions = new Float32Array(leakCount * 3);
   for (let i = 0; i < leakCount; i++) {
@@ -2390,11 +2575,11 @@ export function buildOutpostAssets(
   // 8. MISSION 3 ZONE: WATER RECYCLER & SPARE-PARTS BAY
   // ============================================================================
   const recyclerGroup = new THREE.Group();
-  const recX = 6.45;
-  const recZ = -2.55;
-  const recY = groundHeightAt(recX, recZ);
+  const recX = m.recycler.x;
+  const recZ = m.recycler.z;
+  const recY = gAt(recX, recZ);
   recyclerGroup.position.set(recX, recY, recZ);
-  recyclerGroup.rotation.y = -0.3;
+  recyclerGroup.rotation.y = m.recycler.yaw;
   addContactShadow(recyclerGroup, 1.2, 1.0, 0.62);
 
   const recDeck = new THREE.Mesh(
@@ -2449,11 +2634,11 @@ export function buildOutpostAssets(
   // 9. MISSION 5 ZONE: WATER-WALL RADIATION STORM SHELTER
   // ============================================================================
   const shelterGroup = new THREE.Group();
-  const shX = -0.35;
-  const shZ = -4.25;
-  const shY = groundHeightAt(shX, shZ);
+  const shX = m.shelter.x;
+  const shZ = m.shelter.z;
+  const shY = gAt(shX, shZ);
   shelterGroup.position.set(shX, shY, shZ);
-  shelterGroup.rotation.y = 0.38;
+  shelterGroup.rotation.y = m.shelter.yaw;
   addContactShadow(shelterGroup, 1.75, 1.5, 0.7);
 
   const shelterVault = new THREE.Mesh(
@@ -2545,6 +2730,7 @@ export function buildOutpostAssets(
     zoneBeaconMat,
   );
   zoneBeaconDiamond.position.set(0, 2.35, 0);
+  zoneBeaconDiamond.userData.nonPhysicalMarker = true;
   zoneBeaconGroup.add(zoneBeaconDiamond);
   zoneBeaconGroup.visible = false;
   scene.add(zoneBeaconGroup);
@@ -2599,7 +2785,7 @@ export function buildOutpostAssets(
   scene.add(dustDevilGroup);
 
   const habShelterGroup = new THREE.Group();
-  habShelterGroup.position.set(habX - 1.2, habY + 0.08, habZ + 1.5);
+  habShelterGroup.position.set(airPose.stepX, habY + 0.08, airPose.stepZ);
   const habShelterRing = new THREE.Mesh(
     trackGeo(new THREE.RingGeometry(1.55, 1.88, 36)),
     trackMat(
@@ -2627,6 +2813,7 @@ export function buildOutpostAssets(
     ),
   );
   habShelterDiamond.position.set(0, 2.85, 0);
+  habShelterDiamond.userData.nonPhysicalMarker = true;
   habShelterGroup.add(habShelterDiamond);
   habShelterGroup.visible = false;
   scene.add(habShelterGroup);
@@ -2667,18 +2854,15 @@ export function buildOutpostAssets(
   ];
   const windTowerGeo = trackGeo(new THREE.LatheGeometry(towerProfile, 14));
 
-  const windLocations: [number, number, number][] = [
-    [-10.2, -7.8, 0.38],
-    [16.8, -8.2, -0.45],
-  ];
+  const windLocations = m.windmills;
 
   windLocations.forEach(([wx, wz, yaw]) => {
     const turbine = new THREE.Group();
-    turbine.position.set(wx, groundHeightAt(wx, wz), wz);
+    turbine.position.set(wx, gAt(wx, wz), wz);
     turbine.rotation.y = yaw;
     addContactShadow(turbine, 1.9, 1.9, 0.65);
 
-    const pad = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(1.15, 1.32, 0.26, 8)), matDarkSteel);
+    const pad = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(1.15, 1.25, 0.26, 24)), matDarkSteel);
     pad.position.y = 0.13;
     pad.castShadow = castShadow;
     pad.receiveShadow = true;
@@ -2737,11 +2921,11 @@ export function buildOutpostAssets(
     windmillGroup.add(turbine);
   });
 
-  // Compact Vertical-Axis Helical Turbine near Weather Mast (-2.6, 1.2)
+  // Compact Vertical-Axis Helical Turbine
   const vTurbine = new THREE.Group();
-  const vtX = -2.6;
-  const vtZ = 1.2;
-  vTurbine.position.set(vtX, groundHeightAt(vtX, vtZ), vtZ);
+  const vtX = m.verticalTurbine.x;
+  const vtZ = m.verticalTurbine.z;
+  vTurbine.position.set(vtX, gAt(vtX, vtZ), vtZ);
   addContactShadow(vTurbine, 0.9, 0.9, 0.55);
 
   const vtBase = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.45, 0.58, 0.34, 10)), matDarkSteel);
@@ -2780,18 +2964,18 @@ export function buildOutpostAssets(
   scene.add(windmillGroup);
 
   // ============================================================================
-  // 13. SWIM SUBSURFACE ICE DRILL DERRICK & CORE LAB (-14.5, -10.5 Crater Mascon)
+  // 13. SWIM SUBSURFACE ICE DRILL DERRICK & CORE LAB
   // ============================================================================
   const iceDrillGroup = new THREE.Group();
-  const idX = -14.5;
-  const idZ = -10.5;
-  const idY = groundHeightAt(idX, idZ);
+  const idX = m.iceDrill.x;
+  const idZ = m.iceDrill.z;
+  const idY = gAt(idX, idZ);
   iceDrillGroup.position.set(idX, idY, idZ);
-  iceDrillGroup.rotation.y = 0.48;
+  iceDrillGroup.rotation.y = m.iceDrill.yaw;
   addContactShadow(iceDrillGroup, 2.4, 2.4, 0.65);
 
-  const drillDeck = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(1.85, 2.05, 0.26, 8)), matDarkSteel);
-  drillDeck.position.y = 0.13;
+  const drillDeck = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(1.90, 2.00, 0.30, 12)), matDarkSteel);
+  drillDeck.position.y = 0.15;
   drillDeck.castShadow = castShadow;
   drillDeck.receiveShadow = true;
   iceDrillGroup.add(drillDeck);
@@ -2846,17 +3030,20 @@ export function buildOutpostAssets(
   scene.add(iceDrillGroup);
 
   // ============================================================================
-  // 14. ARES HEAVY LANDING PAD & PROPELLANT DEPOT (16.8, 9.2)
+  // 14. ARES HEAVY LANDING PAD & PROPELLANT DEPOT + GAMEPLAY INFRASTRUCTURE
   // ============================================================================
   const landingPadGroup = new THREE.Group();
-  const lpX = 16.8;
-  const lpZ = 9.2;
-  const lpY = groundHeightAt(lpX, lpZ);
+  const lpX = m.landingPad.x;
+  const lpZ = m.landingPad.z;
+  const lpY = gAt(lpX, lpZ);
   landingPadGroup.position.set(lpX, lpY, lpZ);
   addContactShadow(landingPadGroup, 5.4, 5.4, 0.5);
 
-  const apronSlab = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(4.8, 5.15, 0.22, 8)), matDarkSteel);
-  apronSlab.position.y = 0.11;
+  const apronSlab = new THREE.Mesh(
+    trackGeo(new THREE.CylinderGeometry(m.landingPad.apronRadius - 0.04, m.landingPad.apronRadius, 0.8, 24)),
+    matDarkSteel,
+  );
+  apronSlab.position.y = -0.18;
   apronSlab.receiveShadow = true;
   landingPadGroup.add(apronSlab);
 
@@ -2874,7 +3061,6 @@ export function buildOutpostAssets(
   padCircle.position.y = 0.23;
   landingPadGroup.add(padCircle);
 
-  // 4 corner perimeter approach beacons
   for (let c = 0; c < 4; c++) {
     const a = (c / 4) * Math.PI * 2 + Math.PI / 4;
     const post = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.06, 0.09, 0.65, 8)), matDarkSteel);
@@ -2886,9 +3072,11 @@ export function buildOutpostAssets(
     landingPadGroup.add(lamp);
   }
 
-  // Twin vertical CH4/LOX propellant storage spheres + stacked cargo container
   [-1.2, 1.2].forEach((cz, idx) => {
-    const propTank = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.68, 16, 12)), idx === 0 ? matHullPanel : matBrushedAlum);
+    const propTank = new THREE.Mesh(
+      trackGeo(new THREE.SphereGeometry(0.68, 16, 12)),
+      idx === 0 ? matHullPanel : matBrushedAlum,
+    );
     propTank.position.set(4.65, 0.95, cz);
     propTank.castShadow = castShadow;
     landingPadGroup.add(propTank);
@@ -2907,38 +3095,331 @@ export function buildOutpostAssets(
   registerInteractive(landingPadGroup, 'landing-pad');
   scene.add(landingPadGroup);
 
+  // Gameplay Rover Charging Pad + Roads + Instanced Kerbs + Solar Bollards + Signposts + Utility Bridges
+  let roverPadGroup: THREE.Group | null = null;
+  let bollardLampMat: THREE.MeshStandardMaterial | null = null;
+
+  if (m.roverPad.enabled) {
+    const rp = m.roverPad;
+    const rpY = gAt(rp.x, rp.z);
+    roverPadGroup = new THREE.Group();
+    roverPadGroup.position.set(rp.x, rpY, rp.z);
+
+    const slabMesh = new THREE.Mesh(
+      trackGeo(new THREE.BoxGeometry(rp.widthM, 0.44, rp.depthM)),
+      matDarkSteel,
+    );
+    slabMesh.position.y = rp.topOffset - 0.22;
+    slabMesh.receiveShadow = true;
+    roverPadGroup.add(slabMesh);
+
+    const bayStripeMat = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: '#f59e0b',
+        roughness: 0.55,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+      }),
+    );
+    const bayBox = new THREE.Mesh(trackGeo(new THREE.RingGeometry(2.1, 2.32, 4)), bayStripeMat);
+    bayBox.rotation.x = -Math.PI / 2;
+    bayBox.rotation.z = Math.PI / 4;
+    bayBox.position.y = rp.topOffset + 0.01;
+    roverPadGroup.add(bayBox);
+
+    // Corner charging pylon clear of rover parking bay
+    const pylonGroup = new THREE.Group();
+    pylonGroup.position.set(-rp.widthM * 0.5 + 0.55, rp.topOffset, -rp.depthM * 0.5 + 0.55);
+    pylonGroup.rotation.y = 0.3;
+    const pylonBody = new THREE.Mesh(
+      trackGeo(createBeveledPanelGeometry(0.64, 1.32, 0.64, 0.03)),
+      matHullPanel,
+    );
+    pylonBody.position.y = 0.66;
+    pylonBody.castShadow = castShadow;
+    pylonGroup.add(pylonBody);
+    const pylonLed = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.42, 0.14, 0.06)), matWarmWindow);
+    pylonLed.position.set(0, 1.05, 0.33);
+    pylonGroup.add(pylonLed);
+    roverPadGroup.add(pylonGroup);
+
+    registerInteractive(roverPadGroup, 'rover');
+    scene.add(roverPadGroup);
+  }
+
+  if (layout.mode === 'gameplay' && layout.roads.length > 0) {
+    const roadTex = createRoadSurfaceTextures(maxAniso);
+    trackTex(roadTex.map);
+    trackTex(roadTex.roughnessMap);
+
+    const matMainRoad = trackMat(
+      new THREE.MeshStandardMaterial({
+        map: roadTex.map,
+        roughnessMap: roadTex.roughnessMap,
+        color: '#6b4f48',
+        roughness: 0.92,
+        metalness: 0.03,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -2,
+      }),
+    );
+    const matFootpath = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: '#7d5b50',
+        roughness: 0.94,
+        metalness: 0.02,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -1,
+      }),
+    );
+    const matKerb = trackMat(
+      new THREE.MeshStandardMaterial({
+        color: '#52403c',
+        roughness: 0.85,
+        metalness: 0.12,
+      }),
+    );
+
+    // Compacted Courtyard Plaza
+    const courtyard = layout.pads.find((p) => p.id === 'airlock-courtyard');
+    if (courtyard && courtyard.halfX && courtyard.halfZ) {
+      const courtMesh = new THREE.Mesh(
+        trackGeo(new THREE.PlaneGeometry(courtyard.halfX * 2, courtyard.halfZ * 2)),
+        matMainRoad,
+      );
+      courtMesh.rotation.x = -Math.PI / 2;
+      courtMesh.position.set(courtyard.x, gAt(courtyard.x, courtyard.z) + 0.018, courtyard.z);
+      courtMesh.receiveShadow = true;
+      scene.add(courtMesh);
+    }
+
+    // Road strips & kerb instance transforms
+    const kerbMatrices: THREE.Matrix4[] = [];
+    const kDummy = new THREE.Object3D();
+
+    for (const seg of layout.roads) {
+      const dx = seg.x2 - seg.x1;
+      const dz = seg.z2 - seg.z1;
+      const len = Math.hypot(dx, dz);
+      if (len < 0.2) continue;
+      const cx = (seg.x1 + seg.x2) * 0.5;
+      const cz = (seg.z1 + seg.z2) * 0.5;
+      const cy = gAt(cx, cz) + (seg.category === 'footpath' ? 0.016 : 0.02);
+      const yaw = Math.atan2(dx, dz);
+
+      const strip = new THREE.Mesh(
+        trackGeo(new THREE.PlaneGeometry(seg.widthM, len + 0.65)),
+        seg.category === 'footpath' ? matFootpath : matMainRoad,
+      );
+      strip.rotation.order = 'YXZ';
+      strip.rotation.y = yaw;
+      strip.rotation.x = -Math.PI / 2;
+      strip.position.set(cx, cy, cz);
+      strip.receiveShadow = true;
+      scene.add(strip);
+
+      // Decorative kerb blocks on ring & spoke edges (collider-free, stepped smoothly)
+      if (seg.category === 'ring' || seg.category === 'spoke') {
+        const ux = dx / len;
+        const uz = dz / len;
+        const rx = uz;
+        const rz = -ux;
+        const steps = Math.max(2, Math.floor(len / 3.2));
+        for (let s = 1; s < steps; s++) {
+          const t = s / steps;
+          const px = seg.x1 + dx * t;
+          const pz = seg.z1 + dz * t;
+          for (const side of [-1, 1]) {
+            const kx = px + rx * side * (seg.widthM * 0.5 + 0.08);
+            const kz = pz + rz * side * (seg.widthM * 0.5 + 0.08);
+            kDummy.position.set(kx, gAt(kx, kz) + 0.03, kz);
+            kDummy.rotation.set(0, yaw, 0);
+            kDummy.updateMatrix();
+            kerbMatrices.push(kDummy.matrix.clone());
+          }
+        }
+      }
+    }
+
+    if (kerbMatrices.length > 0) {
+      const kerbGeo = trackGeo(new THREE.BoxGeometry(0.14, 0.06, 0.72));
+      const kerbInst = new THREE.InstancedMesh(kerbGeo, matKerb, kerbMatrices.length);
+      kerbMatrices.forEach((mat4, idx) => kerbInst.setMatrixAt(idx, mat4));
+      kerbInst.instanceMatrix.needsUpdate = true;
+      kerbInst.receiveShadow = true;
+      scene.add(kerbInst);
+    }
+
+    // Instanced Solar Corridor Bollards
+    if (layout.bollards.length > 0) {
+      bollardLampMat = trackMat(
+        new THREE.MeshStandardMaterial({
+          color: '#ffb703',
+          emissive: '#ffb703',
+          emissiveIntensity: 1.45,
+          roughness: 0.2,
+        }),
+      );
+      const postGeo = trackGeo(new THREE.CylinderGeometry(0.06, 0.09, 0.78, 8));
+      const lensGeo = trackGeo(new THREE.CylinderGeometry(0.065, 0.065, 0.14, 8));
+      const postInst = new THREE.InstancedMesh(postGeo, matDarkSteel, layout.bollards.length);
+      const lensInst = new THREE.InstancedMesh(lensGeo, bollardLampMat, layout.bollards.length);
+      layout.bollards.forEach((bol, idx) => {
+        const by = gAt(bol.x, bol.z);
+        kDummy.position.set(bol.x, by + 0.39, bol.z);
+        kDummy.rotation.set(0, 0, 0);
+        kDummy.updateMatrix();
+        postInst.setMatrixAt(idx, kDummy.matrix);
+
+        kDummy.position.set(bol.x, by + 0.84, bol.z);
+        kDummy.updateMatrix();
+        lensInst.setMatrixAt(idx, kDummy.matrix);
+      });
+      postInst.instanceMatrix.needsUpdate = true;
+      lensInst.instanceMatrix.needsUpdate = true;
+      postInst.castShadow = castShadow;
+      scene.add(postInst);
+      scene.add(lensInst);
+    }
+
+    // Crisp Text-Only Base Signposts
+    for (const sp of layout.signposts) {
+      const sGroup = new THREE.Group();
+      sGroup.position.set(sp.x, gAt(sp.x, sp.z), sp.z);
+      sGroup.rotation.y = sp.yawRad;
+
+      const pole = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.04, 0.06, 1.62, 8)), matDarkSteel);
+      pole.position.y = 0.81;
+      pole.castShadow = castShadow;
+      sGroup.add(pole);
+
+      const boardBack = new THREE.Mesh(trackGeo(createBeveledPanelGeometry(0.94, 0.48, 0.06, 0.015)), matDarkSteel);
+      boardBack.position.set(0, 1.52, 0);
+      boardBack.castShadow = castShadow;
+      sGroup.add(boardBack);
+
+      const plaqueTex = trackTex(createOutpostSignTexture(sp.title, sp.subtitle, maxAniso));
+      const plaqueMat = trackMat(
+        new THREE.MeshStandardMaterial({
+          map: plaqueTex,
+          roughness: 0.38,
+        }),
+      );
+      const faceF = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(0.86, 0.42)), plaqueMat);
+      faceF.position.set(0, 1.52, 0.05);
+      sGroup.add(faceF);
+
+      const faceB = new THREE.Mesh(trackGeo(new THREE.PlaneGeometry(0.86, 0.42)), plaqueMat);
+      faceB.rotation.y = Math.PI;
+      faceB.position.set(0, 1.52, -0.05);
+      sGroup.add(faceB);
+
+      scene.add(sGroup);
+    }
+
+    // Raised Pipe Bridges & Bevelled Cable Ramps
+    for (const ub of layout.utilityBridges) {
+      const cyBase = gAt((ub.x1 + ub.x2) * 0.5, (ub.z1 + ub.z2) * 0.5);
+      if (ub.kind === 'pipe-bridge') {
+        const yA = gAt(ub.x1, ub.z1);
+        const yB = gAt(ub.x2, ub.z2);
+        const postH = ub.clearanceY + 0.28;
+        [
+          [ub.x1, yA, ub.z1],
+          [ub.x2, yB, ub.z2],
+        ].forEach(([px, py, pz]) => {
+          const p = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.14, 0.17, postH, 10)), matDarkSteel);
+          p.position.set(px, py + postH * 0.5, pz);
+          p.castShadow = castShadow;
+          scene.add(p);
+        });
+        const span = computeCorridorTransform(
+          ub.x1,
+          cyBase + ub.clearanceY + 0.18,
+          ub.z1,
+          ub.x2,
+          cyBase + ub.clearanceY + 0.18,
+          ub.z2,
+        );
+        const spanMesh = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(0.4, 0.32, span.length)), matBrushedAlum);
+        spanMesh.position.set(span.cx, span.cy, span.cz);
+        spanMesh.quaternion.set(span.quaternion.x, span.quaternion.y, span.quaternion.z, span.quaternion.w);
+        spanMesh.castShadow = castShadow;
+        scene.add(spanMesh);
+      } else {
+        const rx = (ub.x1 + ub.x2) * 0.5;
+        const rz = (ub.z1 + ub.z2) * 0.5;
+        const yaw = Math.atan2(ub.x2 - ub.x1, ub.z2 - ub.z1);
+        const ramp = new THREE.Mesh(
+          trackGeo(createBeveledPanelGeometry(ub.widthM * 0.96, 0.09, 0.46, 0.025)),
+          matMarsOrange,
+        );
+        ramp.position.set(rx, cyBase + 0.04, rz);
+        ramp.rotation.y = yaw;
+        ramp.receiveShadow = true;
+        scene.add(ramp);
+      }
+    }
+  }
+
+  const buildPoint = (spec: { x: number; z: number; yOffset?: number }) =>
+    new THREE.Vector3(spec.x, gAt(spec.x, spec.z) + (spec.yOffset ?? 0), spec.z);
+
   const landmarkCenters: Record<OutpostLandmarkId, THREE.Vector3> = {
-    habitat: new THREE.Vector3(habX, habY + 1.8, habZ),
-    greenhouse: new THREE.Vector3(ghX, ghY + 1.2, ghZ),
-    solar: new THREE.Vector3(11.4, groundHeightAt(11.4, -3.4) + 1.4, -3.4),
-    rover: new THREE.Vector3(roverBaseX, groundHeightAt(roverBaseX, roverBaseZ) + 0.85, roverBaseZ),
-    astronaut: new THREE.Vector3(astroX, groundHeightAt(astroX, astroZ) + 1.1, astroZ),
-    'power-console': new THREE.Vector3(consoleX, consoleY + 1.1, consoleZ),
-    windmill: new THREE.Vector3(-10.2, groundHeightAt(-10.2, -7.8) + 4.2, -7.8),
-    'ice-drill': new THREE.Vector3(idX, idY + 1.8, idZ),
-    'landing-pad': new THREE.Vector3(lpX, lpY + 1.2, lpZ),
+    habitat: buildPoint(layout.landmarkFocusCoords.habitat),
+    greenhouse: buildPoint(layout.landmarkFocusCoords.greenhouse),
+    solar: buildPoint(layout.landmarkFocusCoords.solar),
+    rover: buildPoint(layout.landmarkFocusCoords.rover),
+    astronaut: buildPoint(layout.landmarkFocusCoords.astronaut),
+    'power-console': buildPoint(layout.landmarkFocusCoords['power-console']),
+    windmill: buildPoint(layout.landmarkFocusCoords.windmill),
+    'ice-drill': buildPoint(layout.landmarkFocusCoords['ice-drill']),
+    'landing-pad': buildPoint(layout.landmarkFocusCoords['landing-pad']),
   };
 
-  // Optimal surface coordinates for proximity interaction during exploration
   const stationInteractPoints: Record<OutpostLandmarkId, THREE.Vector3> = {
-    habitat: new THREE.Vector3(habX - 1.2, habY, habZ + 1.5), // Near airlock front steps
-    greenhouse: new THREE.Vector3(ghX, ghY, ghZ),
-    solar: new THREE.Vector3(11.4, groundHeightAt(11.4, -3.4), -3.4),
-    rover: new THREE.Vector3(roverBaseX, groundHeightAt(roverBaseX, roverBaseZ), roverBaseZ),
-    astronaut: new THREE.Vector3(astroX, groundHeightAt(astroX, astroZ), astroZ),
-    'power-console': new THREE.Vector3(consoleX, consoleY, consoleZ),
-    windmill: new THREE.Vector3(-10.2, groundHeightAt(-10.2, -7.8), -7.8),
-    'ice-drill': new THREE.Vector3(idX, idY, idZ),
-    'landing-pad': new THREE.Vector3(lpX, lpY, lpZ),
+    habitat: buildPoint(layout.stationInteractCoords.habitat),
+    greenhouse: buildPoint(layout.stationInteractCoords.greenhouse),
+    solar: buildPoint(layout.stationInteractCoords.solar),
+    rover: buildPoint(layout.stationInteractCoords.rover),
+    astronaut: buildPoint(layout.stationInteractCoords.astronaut),
+    'power-console': buildPoint(layout.stationInteractCoords['power-console']),
+    windmill: buildPoint(layout.stationInteractCoords.windmill),
+    'ice-drill': buildPoint(layout.stationInteractCoords['ice-drill']),
+    'landing-pad': buildPoint(layout.stationInteractCoords['landing-pad']),
   };
 
   const zonePositions: Record<MissionZoneId, THREE.Vector3> = {
-    tank2: new THREE.Vector3(tank2X, tank2Y, tank2Z),
-    solar: new THREE.Vector3(9.8, groundHeightAt(9.8, -3.8), -3.8),
-    recycler: new THREE.Vector3(recX, recY, recZ),
-    greenhouse: new THREE.Vector3(ghX, ghY, ghZ),
-    shelter: new THREE.Vector3(shX, shY, shZ),
+    tank2: buildPoint(layout.zoneCoords.tank2),
+    solar: buildPoint(layout.zoneCoords.solar),
+    recycler: buildPoint(layout.zoneCoords.recycler),
+    greenhouse: buildPoint(layout.zoneCoords.greenhouse),
+    shelter: buildPoint(layout.zoneCoords.shelter),
   };
+
+  const moduleRoots: Record<string, THREE.Object3D> = {
+    habitat: habGroup,
+    'hab-airlock': airlockGroup,
+    chapea: chapeaWing,
+    'conn-hab-chapea': rearConnMesh,
+    greenhouse: ghGroup,
+    'conn-hab-gh': tunnelMesh,
+    solar: solarGroup,
+    'battery-bank': batBank,
+    windmills: windmillGroup,
+    'ice-drill': iceDrillGroup,
+    'landing-pad': landingPadGroup,
+    'power-console': powerConsoleGroup,
+    tank2: tank2Group,
+    recycler: recyclerGroup,
+    shelter: shelterGroup,
+    rover: roverGroup,
+  };
+  if (suitVestibuleGroup) moduleRoots['hab-suit-vestibule'] = suitVestibuleGroup;
+  if (skybridgeCollarsGroup) moduleRoots['conn-hab-gh-collars'] = skybridgeCollarsGroup;
+  if (roverPadGroup) moduleRoots['rover-pad'] = roverPadGroup;
 
   return {
     interactiveTargets,
@@ -2949,6 +3430,10 @@ export function buildOutpostAssets(
     windmillVerticalRotors,
     roverGroup,
     roverHead,
+    roverLeftRockerPivot,
+    roverRightRockerPivot,
+    roverDiffBar,
+    roverWheelOffsets,
     roverWheels,
     roverEyeMat,
     roverGuideBeam,
@@ -2968,6 +3453,12 @@ export function buildOutpostAssets(
     astroRightKneePivot,
     astroLeftAnklePivot,
     astroRightAnklePivot,
+    crewRigs,
+    fpScene,
+    fpCamera,
+    fpArmsGroup,
+    fpLeftArm,
+    fpRightArm,
     powerConsoleGroup,
     powerBeaconRing,
     powerBeaconDiamond,
@@ -2991,13 +3482,15 @@ export function buildOutpostAssets(
     ghFrostMat,
     matWarmWindow,
     matConsoleScreen,
+    bollardLampMat,
     habWindowGlow,
     ghLight,
     roverBasePos: { x: roverBaseX, z: roverBaseZ },
-    astroBasePos: { x: astroX, z: astroZ, yaw: -0.45 },
+    astroBasePos: { x: astroX, z: astroZ, yaw: m.astroSpawn.yaw },
     stationInteractPoints,
     landmarkCenters,
     zonePositions,
+    moduleRoots,
     dispose: () => {
       geometries.forEach((g) => g.dispose());
       materials.forEach((m) => m.dispose());

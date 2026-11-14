@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Play,
@@ -10,6 +11,7 @@ import {
   MousePointerClick,
 } from 'lucide-react';
 import { GraphicsQuality } from './MarsOutpost3D';
+import { SoundMixerLevels, soundEngine } from '../utils/soundEngine';
 
 interface PauseMenuModalProps {
   open: boolean;
@@ -40,6 +42,20 @@ export function PauseMenuModal({
   onQuitToTitle,
   reducedMotion,
 }: PauseMenuModalProps) {
+  const [mixer, setMixer] = useState<SoundMixerLevels>(() => soundEngine.getMixerLevels());
+
+  useEffect(() => {
+    if (open) {
+      setMixer(soundEngine.getMixerLevels());
+    }
+  }, [open]);
+
+  const updateMixerChannel = (channel: keyof SoundMixerLevels, valuePct: number) => {
+    const ratio = Math.max(0, Math.min(1, valuePct / 100));
+    soundEngine.setMixerLevels({ [channel]: ratio });
+    setMixer(soundEngine.getMixerLevels());
+  };
+
   return (
     <AnimatePresence>
       {open && (
@@ -58,7 +74,7 @@ export function PauseMenuModal({
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.96, y: 8 }}
             transition={{ duration: 0.16 }}
-            className="w-full max-w-md rounded-2xl border border-[#E85D04]/65 bg-[#081528]/95 p-5 shadow-[0_0_40px_rgba(232,93,4,0.28)]"
+            className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl border border-[#E85D04]/65 bg-[#081528]/95 p-5 shadow-[0_0_40px_rgba(232,93,4,0.28)]"
           >
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <div>
@@ -143,6 +159,42 @@ export function PauseMenuModal({
                     {quickMode ? 'ON' : 'OFF'}
                   </span>
                 </button>
+
+                {/* Procedural Mars Audio Mixer (Master / Ambience / Effects) */}
+                <div className="rounded-lg border border-white/10 bg-[#071324]/75 p-2.5 space-y-2.5">
+                  <div className="flex items-center justify-between text-[11px] font-bold uppercase tracking-wider text-[#38BDF8]">
+                    <span>Martian Audio Mixer</span>
+                    <span className="text-[#F8F9FA]/65">CO₂ Acoustic Filter</span>
+                  </div>
+
+                  {(
+                    [
+                      { key: 'master', label: 'Master' },
+                      { key: 'ambience', label: 'Ambience (Wind & EVA Suit)' },
+                      { key: 'effects', label: 'Effects (Steps, Rover & Alerts)' },
+                    ] as const
+                  ).map((row) => {
+                    const pct = Math.round(mixer[row.key] * 100);
+                    return (
+                      <div key={row.key}>
+                        <div className="flex items-center justify-between text-[11px] font-bold">
+                          <span className="text-[#F8F9FA]/90">{row.label}</span>
+                          <span className="tabular-nums text-[#FFB703]">{pct}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min={0}
+                          max={100}
+                          step={5}
+                          value={pct}
+                          aria-label={`${row.label} volume`}
+                          onChange={(e) => updateMixerChannel(row.key, Number(e.target.value))}
+                          className="mt-1 w-full accent-[#38BDF8] cursor-pointer"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
 
                 {/* Audio & Graphics Toggles */}
                 <div className="grid grid-cols-2 gap-2">

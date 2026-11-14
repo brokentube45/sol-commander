@@ -1,6 +1,18 @@
 import RAPIER from '@dimforge/rapier3d-compat';
-import { MARS_FACTS, PHYSICS_CONSTANTS } from './constants';
+import { CREW_PROFILES, CrewMemberId, MARS_FACTS, PHYSICS_CONSTANTS } from './constants';
 import { computeLocalMarsGravity } from './marsPhysics';
+import {
+  GAMEPLAY_GREENHOUSE_PROPS,
+  OutpostLayoutConfig,
+  SHOWCASE_CRATES,
+  SHOWCASE_LAYOUT,
+  computeCorridorTransform,
+  getAirlockWorldPose,
+  getGreenhouseDoorwaySpec,
+  getGreenhouseWallSegments,
+  getOutpostSupportHeightAt,
+  rotateXZ,
+} from './outpostLayout';
 import {
   RockColliderSpec,
   TerrainHeightGrid,
@@ -61,12 +73,30 @@ export interface DroppedBodyRecord {
   radius: number;
 }
 
+export interface StaticColliderRecord {
+  id: string;
+  category: 'structure' | 'boundary' | 'terrain' | 'rover';
+  shape: 'cuboid' | 'cylinder' | 'heightfield';
+  cx: number;
+  cy: number;
+  cz: number;
+  halfExtents: { x: number; y: number; z: number };
+  yawRad: number;
+  pitchRad: number;
+  rollRad: number;
+  quaternion: { x: number; y: number; z: number; w: number };
+}
+
 function yawToQuat(yawRad: number): { x: number; y: number; z: number; w: number } {
   const half = yawRad * 0.5;
   return { x: 0, y: Math.sin(half), z: 0, w: Math.cos(half) };
 }
 
-function eulerXYZToQuat(rx: number, ry: number, rz: number): { x: number; y: number; z: number; w: number } {
+function eulerXYZToQuat(
+  rx: number,
+  ry: number,
+  rz: number,
+): { x: number; y: number; z: number; w: number } {
   const cx = Math.cos(rx * 0.5);
   const sx = Math.sin(rx * 0.5);
   const cy = Math.cos(ry * 0.5);
@@ -82,10 +112,16 @@ function eulerXYZToQuat(rx: number, ry: number, rz: number): { x: number; y: num
   };
 }
 
-function rotateXZ(lx: number, lz: number, yawRad: number): [number, number] {
-  const c = Math.cos(yawRad);
-  const s = Math.sin(yawRad);
-  return [lx * c + lz * s, -lx * s + lz * c];
+function quatMultiply(
+  a: { x: number; y: number; z: number; w: number },
+  b: { x: number; y: number; z: number; w: number },
+): { x: number; y: number; z: number; w: number } {
+  return {
+    x: a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y,
+    y: a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x,
+    z: a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w,
+    w: a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z,
+  };
 }
 
 /**
@@ -96,23 +132,35 @@ function rotateXZ(lx: number, lz: number, yawRad: number): [number, number] {
 export class MarsPhysicsWorld {
   public readonly world: RAPIER.World;
   public readonly grid: TerrainHeightGrid;
+  public readonly layout: OutpostLayoutConfig;
   public readonly structureVolumes: SolidStructureVolume[] = [];
+  public readonly staticColliderRecords: StaticColliderRecord[] = [];
+  public readonly crewBodyIds: CrewMemberId[] = [];
 
   private readonly controller: RAPIER.KinematicCharacterController;
   private readonly playerBody: RAPIER.RigidBody;
   private readonly playerCollider: RAPIER.Collider;
+  private readonly crewPhysics = new Map<
+    CrewMemberId,
+    {
+      body: RAPIER.RigidBody;
+      collider: RAPIER.Collider;
+      controller: RAPIER.KinematicCharacterController;
+    }
+  >();
   private readonly roverBody: RAPIER.RigidBody;
   private readonly roverCollider: RAPIER.Collider;
   private readonly terrainCollider: RAPIER.Collider;
+  private readonly nonModuleColliderHandles = new Set<number>();
 
   private readonly rockSpecs: RockColliderSpec[];
   private readonly activeRockColliders = new Map<string, RAPIER.Collider>();
   private readonly rockBodies: RAPIER.RigidBody[] = [];
 
   private accumulatorS = 0;
-  private prevCenter = { x: 4.95, y: 1.0, z: 2.65 };
-  private currCenter = { x: 4.95, y: 1.0, z: 2.65 };
-  private interpCenter = { x: 4.95, y: 1.0, z: 2.65 };
+  private prevCenter = { x: 0, y: 1.0, z: 0 };
+  private currCenter = { x: 0, y: 1.0, z: 0 };
+  private interpCenter = { x: 0, y: 1.0, z: 0 };
 
   private vx = 0;
   private vy = 0;
@@ -133,8 +181,10 @@ export class MarsPhysicsWorld {
     rockSpecs: RockColliderSpec[],
     startX: number,
     startZ: number,
+    layout: OutpostLayoutConfig,
   ) {
     this.grid = grid;
+    this.layout = layout;
     this.rockSpecs = rockSpecs.filter(
       (r) => r.diameter >= PHYSICS_CONSTANTS.ROCK_COLLIDER_MIN_DIAMETER_M,
     );
@@ -153,26 +203,45 @@ export class MarsPhysicsWorld {
       .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU)
       .setRestitution(0.05);
     this.terrainCollider = this.world.createCollider(hfDesc, terrainBody);
+    this.nonModuleColliderHandles.add(this.terrainCollider.handle);
+    this.staticColliderRecords.push({
+      id: 'terrain-heightfield',
+      category: 'terrain',
+      shape: 'heightfield',
+      cx: 0,
+      cy: 0,
+      cz: 0,
+      halfExtents: { x: grid.sizeMeters * 0.5, y: 2.0, z: grid.sizeMeters * 0.5 },
+      yawRad: 0,
+      pitchRad: 0,
+      rollRad: 0,
+      quaternion: { x: 0, y: 0, z: 0, w: 1 },
+    });
 
     // 2. Compound Outpost Structure Colliders + Walkable Boundary Ring
     this.buildStructureColliders();
     this.buildBoundaryWalls();
 
-    // 3. Companion Rover Kinematic Collider (synced with rover world transform)
-    const roverY = groundHeightAtGrid(grid, 2.1, 3.25);
-    const rBodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(
-      2.1,
-      roverY + 0.56,
-      3.25,
-    );
+    // 3. Companion Rover Compound Kinematic Colliders (synced with rover world transform)
+    const rv = layout.modules.roverSpawn;
+    const roverY = this.getGroundSupportHeightAt(rv.x, rv.z);
+    const rBodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased()
+      .setTranslation(rv.x, roverY + 0.56, rv.z)
+      .setRotation(yawToQuat(rv.yaw));
     this.roverBody = this.world.createRigidBody(rBodyDesc);
-    const rColDesc = RAPIER.ColliderDesc.cuboid(0.84, 0.56, 0.98)
-      .setRotation(yawToQuat(-1.02))
+    const rColDesc = RAPIER.ColliderDesc.cuboid(0.84, 0.50, 0.96)
+      .setTranslation(0, -0.06, 0.02)
       .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
     this.roverCollider = this.world.createCollider(rColDesc, this.roverBody);
+    const rMastColDesc = RAPIER.ColliderDesc.cuboid(0.39, 0.35, 0.68)
+      .setTranslation(0, 0.84, 0.05)
+      .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
+    const rMastCol = this.world.createCollider(rMastColDesc, this.roverBody);
+    this.nonModuleColliderHandles.add(this.roverCollider.handle);
+    this.nonModuleColliderHandles.add(rMastCol.handle);
 
     // 4. Player EVA Character Capsule + KinematicCharacterController
-    const footY = groundHeightAtGrid(grid, startX, startZ);
+    const footY = this.getGroundSupportHeightAt(startX, startZ);
     const centerY =
       footY +
       PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M +
@@ -190,6 +259,7 @@ export class MarsPhysicsWorld {
       PHYSICS_CONSTANTS.CAPSULE_RADIUS_M,
     ).setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
     this.playerCollider = this.world.createCollider(pColDesc, this.playerBody);
+    this.nonModuleColliderHandles.add(this.playerCollider.handle);
 
     this.controller = this.world.createCharacterController(PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M);
     this.controller.setUp({ x: 0, y: 1, z: 0 });
@@ -203,6 +273,44 @@ export class MarsPhysicsWorld {
     this.controller.setMinSlopeSlideAngle((PHYSICS_CONSTANTS.MIN_SLOPE_SLIDE_DEG * Math.PI) / 180);
     this.controller.setApplyImpulsesToDynamicBodies(true);
 
+    // 5. Register all 4 Crew NPCs as real Rapier KinematicCharacterController Capsules
+    const footOffset =
+      PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M +
+      PHYSICS_CONSTANTS.CAPSULE_RADIUS_M +
+      PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M;
+
+    for (const prof of CREW_PROFILES) {
+      const startSlot = layout.crewStations[prof.id][0];
+      const cx = startSlot.x;
+      const cz = startSlot.z;
+      const cy = this.getGroundSupportHeightAt(cx, cz) + footOffset;
+      const body = this.world.createRigidBody(
+        RAPIER.RigidBodyDesc.kinematicPositionBased().setTranslation(cx, cy, cz),
+      );
+      const col = this.world.createCollider(
+        RAPIER.ColliderDesc.capsule(
+          PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M,
+          PHYSICS_CONSTANTS.CAPSULE_RADIUS_M,
+        ).setFriction(MARS_FACTS.REGOLITH_FRICTION_MU),
+        body,
+      );
+      const ctrl = this.world.createCharacterController(PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M);
+      ctrl.setUp({ x: 0, y: 1, z: 0 });
+      ctrl.enableAutostep(
+        PHYSICS_CONSTANTS.AUTOSTEP_MAX_HEIGHT_M,
+        PHYSICS_CONSTANTS.AUTOSTEP_MIN_WIDTH_M,
+        false,
+      );
+      ctrl.enableSnapToGround(PHYSICS_CONSTANTS.SNAP_TO_GROUND_M);
+      ctrl.setMaxSlopeClimbAngle((PHYSICS_CONSTANTS.MAX_SLOPE_CLIMB_DEG * Math.PI) / 180);
+      ctrl.setMinSlopeSlideAngle((PHYSICS_CONSTANTS.MIN_SLOPE_SLIDE_DEG * Math.PI) / 180);
+      ctrl.setApplyImpulsesToDynamicBodies(false);
+
+      this.crewBodyIds.push(prof.id);
+      this.nonModuleColliderHandles.add(col.handle);
+      this.crewPhysics.set(prof.id, { body, collider: col, controller: ctrl });
+    }
+
     this.prevCenter = { x: startX, y: centerY, z: startZ };
     this.currCenter = { x: startX, y: centerY, z: startZ };
     this.interpCenter = { x: startX, y: centerY, z: startZ };
@@ -210,9 +318,11 @@ export class MarsPhysicsWorld {
     this.takeoffFootY = footY;
 
     this.syncStreamedRocks(startX, startZ);
+    this.world.step();
   }
 
   public static async create(options?: {
+    layout?: OutpostLayoutConfig;
     grid?: TerrainHeightGrid;
     quality?: 'high' | 'low';
     rockSpecs?: RockColliderSpec[];
@@ -220,14 +330,17 @@ export class MarsPhysicsWorld {
     startZ?: number;
   }): Promise<MarsPhysicsWorld> {
     await RAPIER.init();
-    const grid = options?.grid ?? getDefaultTerrainGrid();
+    const layout = options?.layout ?? SHOWCASE_LAYOUT;
+    const grid = options?.grid ?? getDefaultTerrainGrid(layout.mode);
     const rockSpecs =
-      options?.rockSpecs ?? generateOutpostRockSpecs(options?.quality ?? 'high', grid);
+      options?.rockSpecs ??
+      generateOutpostRockSpecs(options?.quality ?? 'high', grid, layout.mode);
     return new MarsPhysicsWorld(
       grid,
       rockSpecs,
-      options?.startX ?? 4.95,
-      options?.startZ ?? 2.65,
+      options?.startX ?? layout.modules.astroSpawn.x,
+      options?.startZ ?? layout.modules.astroSpawn.z,
+      layout,
     );
   }
 
@@ -246,6 +359,19 @@ export class MarsPhysicsWorld {
       MARS_FACTS.REGOLITH_FRICTION_MU,
     );
     this.world.createCollider(col, body);
+    this.staticColliderRecords.push({
+      id,
+      category: id.startsWith('boundary-') ? 'boundary' : 'structure',
+      shape: 'cylinder',
+      cx,
+      cy,
+      cz,
+      halfExtents: { x: radius, y: safeHH, z: radius },
+      yawRad: 0,
+      pitchRad: 0,
+      rollRad: 0,
+      quaternion: { x: 0, y: 0, z: 0, w: 1 },
+    });
     if (recordVolume) {
       this.structureVolumes.push({
         id,
@@ -271,20 +397,39 @@ export class MarsPhysicsWorld {
     pitchRad = 0,
     rollRad = 0,
     recordVolume = true,
+    allowThin = false,
   ): void {
-    const minWall = PHYSICS_CONSTANTS.STRUCTURE_MIN_WALL_THICKNESS_M * 0.5;
-    const minFloor = PHYSICS_CONSTANTS.STRUCTURE_MIN_FLOOR_THICKNESS_M * 0.5;
+    const minWall = allowThin ? 0.025 : PHYSICS_CONSTANTS.STRUCTURE_MIN_WALL_THICKNESS_M * 0.5;
+    const minFloor = allowThin ? 0.025 : PHYSICS_CONSTANTS.STRUCTURE_MIN_FLOOR_THICKNESS_M * 0.5;
     const safeHx = Math.max(hx, minWall);
     const safeHy = Math.max(hy, minFloor);
     const safeHz = Math.max(hz, minWall);
+    const quat =
+      pitchRad === 0 && rollRad === 0
+        ? yawToQuat(yawRad)
+        : eulerXYZToQuat(pitchRad, yawRad, rollRad);
 
     const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(cx, cy, cz));
     const col = RAPIER.ColliderDesc.cuboid(safeHx, safeHy, safeHz)
-      .setRotation(
-        pitchRad === 0 && rollRad === 0 ? yawToQuat(yawRad) : eulerXYZToQuat(pitchRad, yawRad, rollRad),
-      )
+      .setRotation(quat)
       .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
-    this.world.createCollider(col, body);
+    const created = this.world.createCollider(col, body);
+    if (id.startsWith('boundary-')) {
+      this.nonModuleColliderHandles.add(created.handle);
+    }
+    this.staticColliderRecords.push({
+      id,
+      category: id.startsWith('boundary-') ? 'boundary' : 'structure',
+      shape: 'cuboid',
+      cx,
+      cy,
+      cz,
+      halfExtents: { x: safeHx, y: safeHy, z: safeHz },
+      yawRad,
+      pitchRad,
+      rollRad,
+      quaternion: quat,
+    });
 
     if (recordVolume && pitchRad === 0 && rollRad === 0) {
       this.structureVolumes.push({
@@ -301,137 +446,537 @@ export class MarsPhysicsWorld {
     }
   }
 
+  private addFixedQuatCuboid(
+    id: string,
+    cx: number,
+    cy: number,
+    cz: number,
+    hx: number,
+    hy: number,
+    hz: number,
+    quat: { x: number; y: number; z: number; w: number },
+    recordVolume = true,
+    yawHint = 0,
+  ): void {
+    const safeHx = Math.max(hx, PHYSICS_CONSTANTS.STRUCTURE_MIN_WALL_THICKNESS_M * 0.5);
+    const safeHy = Math.max(hy, PHYSICS_CONSTANTS.STRUCTURE_MIN_FLOOR_THICKNESS_M * 0.5);
+    const safeHz = Math.max(hz, PHYSICS_CONSTANTS.STRUCTURE_MIN_WALL_THICKNESS_M * 0.5);
+    const body = this.world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(cx, cy, cz));
+    const col = RAPIER.ColliderDesc.cuboid(safeHx, safeHy, safeHz)
+      .setRotation(quat)
+      .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
+    this.world.createCollider(col, body);
+    this.staticColliderRecords.push({
+      id,
+      category: 'structure',
+      shape: 'cuboid',
+      cx,
+      cy,
+      cz,
+      halfExtents: { x: safeHx, y: safeHy, z: safeHz },
+      yawRad: yawHint,
+      pitchRad: 0,
+      rollRad: 0,
+      quaternion: quat,
+    });
+    if (recordVolume) {
+      this.structureVolumes.push({
+        id,
+        kind: 'cuboid',
+        cx,
+        cy,
+        cz,
+        halfHeight: safeHy,
+        hx: safeHx,
+        hz: safeHz,
+        yaw: yawHint,
+      });
+    }
+  }
+
   private buildStructureColliders(): void {
+    const m = this.layout.modules;
     const h = (x: number, z: number) => groundHeightAtGrid(this.grid, x, z);
 
-    // 1. Mars Habitat 01 (4.4, -3.4, yaw = -0.34)
-    const habX = 4.4;
-    const habZ = -3.4;
+    // 1. Mars Habitat 01 (tiered cylindrical pressure hull + dish mast, airlock & suit vestibule)
+    const habSpec = m.habitat;
+    const habX = habSpec.x;
+    const habZ = habSpec.z;
     const habY = h(habX, habZ);
-    const habYaw = -0.34;
-    this.addFixedCylinder('hab-plinth', habX, habY + 0.36, habZ, 0.36, 2.74);
-    this.addFixedCylinder('hab-shell', habX, habY + 1.85, habZ, 1.35, 2.48);
+    this.addFixedCylinder('hab-plinth', habX, habY + 0.34, habZ, 0.34, habSpec.deckRadius);
+    this.addFixedCylinder('hab-shell', habX, habY + 1.555, habZ, 0.895, habSpec.shellRadius);
+    this.addFixedCylinder('hab-roof-mid', habX, habY + 2.675, habZ, 0.225, 1.92, false);
+    this.addFixedCylinder('hab-roof-top', habX, habY + 3.08, habZ, 0.18, 1.22, false);
+    const [dishOffX, dishOffZ] = rotateXZ(0.35, -0.2, habSpec.yaw);
+    this.addFixedCylinder('hab-dish', habX + dishOffX, habY + 3.9, habZ + dishOffZ, 0.63, 0.88, false);
 
-    // Forward Airlock Vestibule & stepped platform (-1.55, 0, 1.85 rotated by habYaw)
-    const [axOff, azOff] = rotateXZ(-1.55, 1.85, habYaw);
-    const airX = habX + axOff;
-    const airZ = habZ + azOff;
-    const airYaw = habYaw - 0.62;
-    this.addFixedCuboid('hab-airlock', airX, habY + 1.15, airZ, 0.72, 1.15, 0.76, airYaw);
-    const [stepOffX, stepOffZ] = rotateXZ(0, 1.15, airYaw);
+    // Forward Airlock Vestibule (+ optional Suit Vestibule bridge in Gameplay) & stepped platform
+    const airPose = getAirlockWorldPose(this.layout);
+    if (m.airlockOffset.hasSuitVestibule) {
+      // Connects Habitat South hull (z = 2.48) seamlessly to Airlock North bulkhead (z = 5.215)
+      this.addFixedCuboid(
+        'hab-suit-vestibule',
+        habX,
+        habY + 1.15,
+        habZ + 3.85,
+        0.88,
+        1.15,
+        1.52,
+        0,
+      );
+    }
+    this.addFixedCuboid('hab-airlock', airPose.x, habY + 0.97, airPose.z, 0.74, 1.21, 0.785, airPose.yawRad);
+    const [doorOffX, doorOffZ] = rotateXZ(0, 0.8, airPose.yawRad);
+    this.addFixedCuboid(
+      'hab-airlock-door',
+      airPose.x + doorOffX,
+      habY + 1.32,
+      airPose.z + doorOffZ,
+      0.49,
+      0.6,
+      0.07,
+      airPose.yawRad,
+      0,
+      0,
+      true,
+      true,
+    );
+    const [stepOffX, stepOffZ] = rotateXZ(0, 1.1, airPose.yawRad);
     this.addFixedCuboid(
       'hab-airlock-steps',
-      airX + stepOffX,
-      habY + 0.08,
-      airZ + stepOffZ,
-      0.54,
+      airPose.x + stepOffX,
+      habY - 0.02,
+      airPose.z + stepOffZ,
+      0.52,
       0.22,
-      0.48,
-      airYaw,
+      0.43,
+      airPose.yawRad,
     );
 
-    // 2. CHAPEA Rear Crew & Science Wing (4.4, -8.0)
-    const cwX = 4.4;
-    const cwZ = -8.0;
-    const cwY = h(cwX, cwZ);
-    this.addFixedCuboid('chapea-plinth', cwX, cwY + 0.18, cwZ, 2.34, 0.22, 1.74, 0);
-    this.addFixedCuboid('chapea-body', cwX, cwY + 1.35, cwZ, 2.15, 1.15, 1.56, 0);
+    // 2. CHAPEA Rear Crew & Science Wing + rear connector
+    const cw = m.chapea;
+    const cwY = h(cw.x, cw.z);
+    this.addFixedCuboid('chapea-plinth', cw.x, cwY + 0.02, cw.z, cw.plinthHalfX, 0.37, cw.plinthHalfZ, cw.yaw);
+    this.addFixedCuboid('chapea-body', cw.x, cwY + 1.29, cw.z, cw.shellHalfX, 0.9, cw.shellHalfZ, cw.yaw);
+    this.addFixedCylinder('chapea-cupola', cw.x, cwY + 2.46, cw.z + 0.15, 0.44, 1.15, false);
+    this.addFixedCylinder('chapea-scrubber-l', cw.x - 1.35, cwY + 1.05, cw.z + 1.62, 0.78, 0.3);
+    this.addFixedCylinder('chapea-scrubber-r', cw.x + 1.35, cwY + 1.05, cw.z + 1.62, 0.78, 0.3);
 
-    // Connector corridors (thick solid cylinders/cuboids)
-    this.addFixedCuboid('conn-hab-chapea', 4.4, (habY + cwY) * 0.5 + 1.15, -5.9, 0.58, 0.58, 1.1, 0);
-    this.addFixedCuboid(
-      'conn-hab-gh',
-      6.65,
-      (habY + h(8.6, -0.1)) * 0.5 + 1.0,
-      -1.5,
-      0.48,
-      0.55,
-      1.05,
-      -0.88,
+    const chConn = m.connHabChapea;
+    const rearCorr = computeCorridorTransform(
+      habX,
+      habY + chConn.centerYOffset,
+      habZ + chConn.habStartOffsetZ,
+      cw.x,
+      cwY + chConn.centerYOffset,
+      cw.z + chConn.chapeaEndOffsetZ,
+    );
+    this.addFixedQuatCuboid(
+      'conn-hab-chapea',
+      rearCorr.cx,
+      rearCorr.cy,
+      rearCorr.cz,
+      chConn.halfWidth,
+      chConn.halfHeight,
+      rearCorr.length * 0.5,
+      rearCorr.quaternion,
+      true,
+      0,
     );
 
-    // 3. Bio-Dome Greenhouse (8.6, -0.1) + External Water Tank
-    const ghX = 8.6;
-    const ghZ = -0.1;
+    // Greenhouse pressurized connector (ground tunnel in Showcase, elevated skybridge + collars + piers in Gameplay)
+    const ghSpec = m.greenhouse;
+    const ghX = ghSpec.x;
+    const ghZ = ghSpec.z;
     const ghY = h(ghX, ghZ);
-    this.addFixedCylinder('greenhouse-base', ghX, ghY + 0.2, ghZ, 0.2, 2.14);
-    this.addFixedCylinder('greenhouse-dome', ghX, ghY + 1.25, ghZ, 1.05, 1.98);
-    this.addFixedCylinder('greenhouse-water-tank', ghX - 2.35, ghY + 0.65, ghZ + 1.1, 0.65, 0.46);
+    const ghConn = m.connHabGh;
 
-    // 4. Solar Microgrid (5 pedestals + tilted panel heads + LiFePO4 Battery Container Bank)
-    const solarLocs: [number, number][] = [
-      [9.4, -4.6],
-      [11.4, -2.4],
-      [13.8, -5.2],
-      [14.2, -1.5],
-      [11.8, -7.2],
-    ];
-    solarLocs.forEach(([sx, sz], idx) => {
+    if (ghConn.elevatedOverpass) {
+      // Pressurized attachment collar towers seating Habitat East & Greenhouse West firmly to skybridge
+      this.addFixedCuboid(
+        'conn-hab-gh-collar-hab',
+        ghConn.startX - 0.12,
+        habY + 1.9,
+        ghConn.startZ,
+        0.72,
+        1.9,
+        0.68,
+        0,
+      );
+      this.addFixedCuboid(
+        'conn-hab-gh-collar-gh',
+        ghConn.endX + 0.12,
+        ghY + 1.9,
+        ghConn.endZ,
+        0.72,
+        1.9,
+        0.68,
+        0,
+      );
+
+      const bridge = computeCorridorTransform(
+        ghConn.startX,
+        habY + ghConn.startYOffset,
+        ghConn.startZ,
+        ghConn.endX,
+        ghY + ghConn.endYOffset,
+        ghConn.endZ,
+      );
+      const bridgeYaw = Math.atan2(
+        ghConn.endX - ghConn.startX,
+        ghConn.endZ - ghConn.startZ,
+      );
+      this.addFixedQuatCuboid(
+        'conn-hab-gh',
+        bridge.cx,
+        bridge.cy,
+        bridge.cz,
+        ghConn.halfWidth,
+        ghConn.halfHeight,
+        bridge.length * 0.5,
+        bridge.quaternion,
+        true,
+        bridgeYaw,
+      );
+
+      ghConn.pierXs.forEach((px, pIdx) => {
+        const t = (px - ghConn.startX) / (ghConn.endX - ghConn.startX);
+        const pz = ghConn.startZ + (ghConn.endZ - ghConn.startZ) * t;
+        const py = h(px, pz);
+        const topY = habY + ghConn.undersideClearanceY + 0.05;
+        const hh = topY * 0.5;
+        this.addFixedCylinder(`conn-hab-gh-pier-${pIdx}`, px, py + hh, pz, hh, 0.24, true);
+      });
+    } else {
+      const ghCorr = computeCorridorTransform(
+        ghConn.startX,
+        habY + ghConn.startYOffset,
+        ghConn.startZ,
+        ghConn.endX,
+        ghY + ghConn.endYOffset,
+        ghConn.endZ,
+      );
+      const ghCorrYaw = Math.atan2(ghConn.endX - ghConn.startX, ghConn.endZ - ghConn.startZ);
+      this.addFixedQuatCuboid(
+        'conn-hab-gh',
+        ghCorr.cx,
+        ghCorr.cy,
+        ghCorr.cz,
+        ghConn.halfWidth,
+        ghConn.halfHeight,
+        ghCorr.length * 0.5,
+        ghCorr.quaternion,
+        true,
+        ghCorrYaw,
+      );
+    }
+
+    // 3. Hollow Bio-Dome Greenhouse: Walkable Floor + Door Step + Segmented Walls + Upper Roof + Interior Props
+    this.addFixedCylinder('greenhouse-base', ghX, ghY - 0.09, ghZ, 0.31, ghSpec.floorRadius, false);
+    const ghDoor = getGreenhouseDoorwaySpec(this.layout);
+    this.addFixedCuboid(
+      'greenhouse-door-step',
+      ghDoor.centerX + Math.cos(ghSpec.doorAngleRad) * 0.22,
+      ghY - 0.03,
+      ghDoor.centerZ + Math.sin(ghSpec.doorAngleRad) * 0.22,
+      0.59,
+      0.15,
+      0.28,
+      ghDoor.yawRad,
+      0,
+      0,
+      false,
+    );
+
+    for (const seg of getGreenhouseWallSegments(this.layout)) {
+      this.addFixedCuboid(
+        seg.id,
+        seg.cx,
+        ghY + ghSpec.floorTopOffset + seg.halfHeight,
+        seg.cz,
+        seg.halfWidth,
+        seg.halfHeight,
+        seg.halfThick,
+        seg.yawRad,
+        0,
+        0,
+        true,
+      );
+    }
+    this.addFixedCuboid(
+      'greenhouse-door-lintel',
+      ghDoor.centerX,
+      ghY + ghSpec.floorTopOffset + ghSpec.wallHeight + 0.11,
+      ghDoor.centerZ,
+      0.78,
+      0.11,
+      0.11,
+      ghDoor.yawRad,
+      0,
+      0,
+      false,
+    );
+    const rScale = ghSpec.floorRadius / 2.25;
+    const roofRimBaseY = ghY + ghSpec.floorTopOffset + ghSpec.wallHeight;
+    this.addFixedCylinder(
+      'greenhouse-roof-lower',
+      ghX,
+      roofRimBaseY + 0.2,
+      ghZ,
+      0.17,
+      2.15 * rScale,
+      false,
+    );
+    this.addFixedCylinder(
+      'greenhouse-roof-upper',
+      ghX,
+      roofRimBaseY + 0.54,
+      ghZ,
+      0.14,
+      1.6 * rScale,
+      false,
+    );
+    this.addFixedCylinder(
+      'greenhouse-roof-cap',
+      ghX,
+      roofRimBaseY + 0.77,
+      ghZ,
+      0.14,
+      1.49 * rScale,
+      false,
+    );
+
+    if (this.layout.mode === 'gameplay') {
+      const floorY = ghY + ghSpec.floorTopOffset;
+      for (const prop of GAMEPLAY_GREENHOUSE_PROPS) {
+        const px = ghX + prop.dx;
+        const pz = ghZ + prop.dz;
+        const hh = prop.height * 0.5;
+        if (prop.colliderShape === 'cylinder' && prop.radius !== undefined) {
+          this.addFixedCylinder(prop.id, px, floorY + hh, pz, hh, prop.radius, true);
+        } else if (prop.hx !== undefined && prop.hz !== undefined) {
+          this.addFixedCuboid(prop.id, px, floorY + hh, pz, prop.hx, hh, prop.hz, prop.yawRad, 0, 0, true);
+        }
+      }
+    } else {
+      this.addFixedCylinder('greenhouse-center-tower', ghX + 0.88, ghY + 0.91, ghZ - 0.78, 0.69, 0.28, true);
+    }
+    this.addFixedCylinder('greenhouse-water-tank', ghSpec.waterTankX, ghY + 0.6, ghSpec.waterTankZ, 0.6, 0.44, true);
+
+    // 4. Solar Microgrid (stepped pedestals + tilted panel heads + LiFePO4 Battery Container Bank)
+    m.solarPanels.forEach(([sx, sz], idx) => {
       const sy = h(sx, sz);
-      this.addFixedCylinder(`solar-ped-${idx}`, sx, sy + 0.85, sz, 0.85, 0.44);
+      this.addFixedCylinder(`solar-ped-base-${idx}`, sx, sy + 0.15, sz, 0.15, 0.48);
+      this.addFixedCylinder(`solar-ped-pole-${idx}`, sx, sy + 0.96, sz, 0.66, 0.16);
       this.addFixedCuboid(
         `solar-panel-${idx}`,
         sx,
-        sy + 1.68,
+        sy + 1.67,
         sz,
         1.28,
-        0.16,
+        0.065,
         0.74,
         -0.52,
         0.55,
         0,
         false,
+        true,
       );
     });
-    const bbX = 14.5;
-    const bbZ = -3.6;
-    this.addFixedCuboid('battery-bank', bbX, h(bbX, bbZ) + 0.72, bbZ, 1.2, 0.72, 0.7, -0.35);
+    const bb = m.batteryBank;
+    this.addFixedCuboid('battery-bank', bb.x, h(bb.x, bb.z) + 0.812, bb.z, 1.23, 0.843, 0.73, bb.yaw);
 
-    // 5. Wind Turbines (2 ridge horizontal + 1 helical vertical)
-    const windLocs: [number, number][] = [
-      [-10.2, -7.8],
-      [16.8, -8.2],
-    ];
-    windLocs.forEach(([wx, wz], idx) => {
+    // 5. Wind Turbines (horizontal towers + nacelles + rotors + helical vertical)
+    m.windmills.forEach(([wx, wz, yaw], idx) => {
       const wy = h(wx, wz);
-      this.addFixedCylinder(`wind-pad-${idx}`, wx, wy + 0.14, wz, 0.2, 1.28);
-      this.addFixedCylinder(`wind-tower-${idx}`, wx, wy + 2.4, wz, 2.4, 0.48);
+      this.addFixedCylinder(`wind-pad-${idx}`, wx, wy + 0.13, wz, 0.13, 1.25);
+      this.addFixedCylinder(`wind-tower-${idx}`, wx, wy + 3.48, wz, 3.48, 0.56);
+      const [nacBodyX, nacBodyZ] = rotateXZ(0, -0.15, yaw);
+      this.addFixedCuboid(
+        `wind-nacelle-${idx}`,
+        wx + nacBodyX,
+        wy + 6.72,
+        wz + nacBodyZ,
+        0.39,
+        0.37,
+        0.725,
+        yaw,
+        0,
+        0,
+        false,
+      );
+      const [nacX, nacZ] = rotateXZ(0, 0.72, yaw);
+      this.addFixedCuboid(
+        `wind-rotor-${idx}`,
+        wx + nacX,
+        wy + 6.72,
+        wz + nacZ,
+        2.25,
+        2.75,
+        0.14,
+        yaw,
+        0,
+        0,
+        false,
+        true,
+      );
     });
-    this.addFixedCylinder('wind-vertical', -2.6, h(-2.6, 1.2) + 1.5, 1.2, 1.5, 0.6);
+    const vw = m.verticalTurbine;
+    this.addFixedCylinder('wind-vertical', vw.x, h(vw.x, vw.z) + 1.58, vw.z, 1.58, 0.58);
 
-    // 6. SWIM Subsurface Ice Drill Derrick (-14.5, -10.5, yaw = 0.48)
-    const idX = -14.5;
-    const idZ = -10.5;
-    const idY = h(idX, idZ);
-    this.addFixedCylinder('ice-drill-deck', idX, idY + 0.13, idZ, 0.2, 1.98);
-    this.addFixedCylinder('ice-drill-mast', idX, idY + 1.4, idZ, 1.4, 0.92);
-    const [mtX, mtZ] = rotateXZ(1.25, 0.4, 0.48);
-    this.addFixedCylinder('ice-melt-tank', idX + mtX, idY + 0.72, idZ + mtZ, 0.72, 0.44);
+    // 6. SWIM Subsurface Ice Drill Derrick
+    const idSpec = m.iceDrill;
+    const idY = h(idSpec.x, idSpec.z);
+    this.addFixedCylinder('ice-drill-deck', idSpec.x, idY + 0.15, idSpec.z, 0.15, 2.0);
+    this.addFixedCylinder('ice-drill-mast', idSpec.x, idY + 1.98, idSpec.z, 1.86, 1.48, false);
+    const [mtX, mtZ] = rotateXZ(1.25, 0.4, idSpec.yaw);
+    this.addFixedCylinder('ice-melt-tank', idSpec.x + mtX, idY + 0.9, idSpec.z + mtZ, 0.66, 0.38);
 
-    // 7. Ares Landing Pad & Propellant Depot (16.8, 9.2)
-    // Apron slab top sits at lpY + 0.22; thick 0.50m slab prevents any tunneling while letting player step onto it
-    const lpX = 16.8;
-    const lpZ = 9.2;
-    const lpY = h(lpX, lpZ);
-    this.addFixedCylinder('landing-pad-apron', lpX, lpY - 0.03, lpZ, 0.25, 4.95, false);
-    this.addFixedCylinder('prop-tank-1', lpX + 4.65, lpY + 0.82, lpZ - 1.2, 0.82, 0.72);
-    this.addFixedCylinder('prop-tank-2', lpX + 4.65, lpY + 0.82, lpZ + 1.2, 0.82, 0.72);
-    this.addFixedCuboid('cargo-pod', lpX + 4.4, lpY + 0.64, lpZ - 3.1, 0.98, 0.62, 0.62, 0.22);
+    // 7. Ares Landing Pad & Propellant Depot + Rover Charging Pad
+    const lp = m.landingPad;
+    const lpY = h(lp.x, lp.z);
+    this.addFixedCylinder('landing-pad-apron', lp.x, lpY - 0.18, lp.z, 0.4, lp.apronRadius, false);
+    this.addFixedCylinder('prop-tank-1', lp.x + 4.65, lpY + 0.82, lp.z - 1.2, 0.82, 0.68);
+    this.addFixedCylinder('prop-tank-2', lp.x + 4.65, lpY + 0.82, lp.z + 1.2, 0.82, 0.68);
+    this.addFixedCuboid('cargo-pod', lp.x + 4.4, lpY + 0.64, lp.z - 3.1, 0.99, 0.62, 0.62, 0.22);
 
-    // 8. Interactive Zone Props, Crates & Weather Mast
-    this.addFixedCuboid('power-console', 6.15, h(6.15, -0.35) + 0.65, -0.35, 0.46, 0.65, 0.42, -0.45);
-    this.addFixedCuboid('tank2-bay', 1.45, h(1.45, -0.85) + 0.85, -0.85, 0.92, 0.85, 0.58, 0.25);
-    this.addFixedCuboid('water-recycler', 6.45, h(6.45, -2.55) + 0.65, -2.55, 0.78, 0.65, 0.54, -0.3);
-    this.addFixedCuboid('rad-shelter', -0.35, h(-0.35, -4.25) + 0.75, -4.25, 1.38, 0.75, 1.02, 0.38);
-    this.addFixedCuboid('crate-1', 1.65, h(1.65, -2.05) + 0.24, -2.05, 0.36, 0.24, 0.26, 0.3);
-    this.addFixedCuboid('crate-2', 1.25, h(1.25, -1.65) + 0.24, -1.65, 0.36, 0.24, 0.26, -0.4);
-    this.addFixedCylinder('weather-mast', -0.6, h(-0.6, 1.4) + 1.0, 1.4, 1.0, 0.38);
+    if (m.roverPad.enabled) {
+      const rp = m.roverPad;
+      const rpY = h(rp.x, rp.z);
+      const slabTop = rpY + rp.topOffset;
+      this.addFixedCuboid(
+        'rover-pad-slab',
+        rp.x,
+        slabTop - 0.22,
+        rp.z,
+        rp.widthM * 0.5,
+        0.22,
+        rp.depthM * 0.5,
+        0,
+        0,
+        0,
+        false,
+      );
+      this.addFixedCuboid(
+        'rover-pad-pylon',
+        rp.x - rp.widthM * 0.5 + 0.55,
+        slabTop + 0.68,
+        rp.z - rp.depthM * 0.5 + 0.55,
+        0.34,
+        0.68,
+        0.34,
+        0.3,
+      );
+    }
+
+    // 8. Interactive Zone Props, Comms/Weather Mast & Gameplay Infrastructure
+    const pc = m.powerConsole;
+    const pcY = h(pc.x, pc.z);
+    this.addFixedCuboid('power-console-base', pc.x, pcY + 0.1, pc.z, 0.46, 0.15, 0.42, pc.yaw);
+    this.addFixedCuboid('power-console-ped', pc.x, pcY + 0.54, pc.z, 0.26, 0.44, 0.21, pc.yaw);
+    const [pcHx, pcHz] = rotateXZ(0, 0.06, pc.yaw);
+    const qPcHead = quatMultiply(yawToQuat(pc.yaw), eulerXYZToQuat(-0.42, 0, 0));
+    this.addFixedQuatCuboid(
+      'power-console-head',
+      pc.x + pcHx,
+      pcY + 1.06,
+      pc.z + pcHz,
+      0.37,
+      0.27,
+      0.15,
+      qPcHead,
+      true,
+      pc.yaw,
+    );
+
+    const t2 = m.tank2;
+    const t2Y = h(t2.x, t2.z);
+    this.addFixedCuboid('tank2-rack', t2.x, t2Y + 0.1, t2.z, 0.91, 0.15, 0.58, t2.yaw);
+    const [t2Lx, t2Lz] = rotateXZ(-0.42, 0, t2.yaw);
+    const [t2Rx, t2Rz] = rotateXZ(0.42, 0, t2.yaw);
+    this.addFixedCylinder('tank2-cyl-l', t2.x + t2Lx, t2Y + 0.93, t2.z + t2Lz, 0.77, 0.35);
+    this.addFixedCylinder('tank2-cyl-r', t2.x + t2Rx, t2Y + 0.93, t2.z + t2Rz, 0.77, 0.35);
+    if (t2.hasIsruUnit) {
+      const [isruX, isruZ] = rotateXZ(t2.isruOffsetX, t2.isruOffsetZ, t2.yaw);
+      this.addFixedCuboid('tank2-isru-unit', t2.x + isruX, t2Y + 0.72, t2.z + isruZ, 0.56, 0.72, 0.48, t2.yaw);
+    }
+
+    const rec = m.recycler;
+    this.addFixedCuboid('water-recycler', rec.x, h(rec.x, rec.z) + 0.625, rec.z, 0.78, 0.655, 0.56, rec.yaw);
+
+    const sh = m.shelter;
+    this.addFixedCuboid('rad-shelter', sh.x, h(sh.x, sh.z) + 0.72, sh.z, 1.28, 0.77, 1.0, sh.yaw);
+
+    if (this.layout.mode === 'showcase') {
+      SHOWCASE_CRATES.forEach((cr, idx) => {
+        this.addFixedCuboid(`crate-${idx + 1}`, cr.x, h(cr.x, cr.z) + 0.24, cr.z, 0.36, 0.24, 0.26, cr.yaw);
+      });
+    }
+
+    const cm = m.commsMast;
+    const mastHH = cm.tall ? 3.2 : 1.0;
+    this.addFixedCylinder('weather-mast', cm.x, h(cm.x, cm.z) + mastHH, cm.z, mastHH, cm.radiusM);
+
+    // Gameplay signposts, perimeter bollards, raised pipe bridge piers, and low cable ramps
+    for (const sp of this.layout.signposts) {
+      this.addFixedCylinder(sp.id, sp.x, h(sp.x, sp.z) + 0.85, sp.z, 0.85, 0.08, false);
+    }
+    for (const bol of this.layout.bollards) {
+      this.addFixedCylinder(bol.id, bol.x, h(bol.x, bol.z) + 0.45, bol.z, 0.45, 0.11, false);
+    }
+    for (const ub of this.layout.utilityBridges) {
+      const uy = h((ub.x1 + ub.x2) * 0.5, (ub.z1 + ub.z2) * 0.5);
+      if (ub.kind === 'pipe-bridge') {
+        const halfH = (ub.clearanceY + 0.2) * 0.5;
+        this.addFixedCylinder(`${ub.id}-pier-a`, ub.x1, h(ub.x1, ub.z1) + halfH, ub.z1, halfH, 0.18, true);
+        this.addFixedCylinder(`${ub.id}-pier-b`, ub.x2, h(ub.x2, ub.z2) + halfH, ub.z2, halfH, 0.18, true);
+        const span = computeCorridorTransform(
+          ub.x1,
+          uy + ub.clearanceY + 0.18,
+          ub.z1,
+          ub.x2,
+          uy + ub.clearanceY + 0.18,
+          ub.z2,
+        );
+        const yaw = Math.atan2(ub.x2 - ub.x1, ub.z2 - ub.z1);
+        this.addFixedQuatCuboid(
+          `${ub.id}-span`,
+          span.cx,
+          span.cy,
+          span.cz,
+          0.22,
+          0.18,
+          span.length * 0.5,
+          span.quaternion,
+          true,
+          yaw,
+        );
+      } else {
+        const rx = (ub.x1 + ub.x2) * 0.5;
+        const rz = (ub.z1 + ub.z2) * 0.5;
+        const yaw = Math.atan2(ub.x2 - ub.x1, ub.z2 - ub.z1);
+        this.addFixedCuboid(
+          ub.id,
+          rx,
+          uy + 0.045,
+          rz,
+          ub.widthM * 0.48,
+          0.045,
+          0.26,
+          yaw,
+          0,
+          0,
+          false,
+          true,
+        );
+      }
+    }
   }
 
   private buildBoundaryWalls(): void {
-    const cx = PHYSICS_CONSTANTS.WALKABLE_CENTER_X;
-    const cz = PHYSICS_CONSTANTS.WALKABLE_CENTER_Z;
-    const r = PHYSICS_CONSTANTS.WALKABLE_BOUNDARY_RADIUS_M;
+    const cx = this.layout.walkableCenter.x;
+    const cz = this.layout.walkableCenter.z;
+    const r = this.layout.walkableRadiusM;
     const segments = 32;
     const segLen = (2 * Math.PI * r) / segments + 0.6;
     for (let i = 0; i < segments; i++) {
@@ -475,9 +1020,11 @@ export class MarsPhysicsWorld {
           body,
         );
         this.rockBodies.push(body);
+        this.nonModuleColliderHandles.add(col.handle);
         this.activeRockColliders.set(rock.id, col);
       } else if (existing && distSq > exitSq) {
         const parent = existing.parent();
+        this.nonModuleColliderHandles.delete(existing.handle);
         this.world.removeCollider(existing, false);
         if (parent) {
           this.world.removeRigidBody(parent);
@@ -517,23 +1064,82 @@ export class MarsPhysicsWorld {
   }
 
   /**
-   * Returns exact ground/floor surface height (terrain or landing pad apron) at (x, z).
+   * Returns exact ground/floor surface height (terrain, landing pad apron, rover pad, or Greenhouse floor) at (x, z).
    */
   public getGroundSupportHeightAt(x: number, z: number): number {
-    const terrainY = groundHeightAtGrid(this.grid, x, z);
-    // Landing pad apron slab walkable floor top
-    const dxPad = x - 16.8;
-    const dzPad = z - 9.2;
-    if (Math.hypot(dxPad, dzPad) <= 4.95) {
-      const lpBase = groundHeightAtGrid(this.grid, 16.8, 9.2);
-      return Math.max(terrainY, lpBase + 0.22);
-    }
-    return terrainY;
+    return getOutpostSupportHeightAt(
+      x,
+      z,
+      (px, pz) => groundHeightAtGrid(this.grid, px, pz),
+      this.layout,
+    );
   }
 
-  /**
-   * Computes current terrain slope angle in degrees using finite differences on shared TerrainHeightGrid.
-   */
+  public stepCrewMember(
+    id: CrewMemberId,
+    desiredDx: number,
+    desiredDz: number,
+    dt: number,
+  ): { x: number; footY: number; z: number; vx: number; vz: number; blocked: boolean } {
+    const entry = this.crewPhysics.get(id);
+    if (!entry || this.disposed) {
+      return { x: 0, footY: 0, z: 0, vx: 0, vz: 0, blocked: false };
+    }
+    const footOffset = PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M + PHYSICS_CONSTANTS.CAPSULE_RADIUS_M;
+    const pos = entry.body.translation();
+    const safeDt = Math.max(1e-4, dt);
+
+    entry.controller.computeColliderMovement(entry.collider, {
+      x: desiredDx,
+      y: -0.35 * safeDt,
+      z: desiredDz,
+    });
+    const corrected = entry.controller.computedMovement();
+    const nextX = pos.x + corrected.x;
+    let nextY = pos.y + corrected.y;
+    const nextZ = pos.z + corrected.z;
+
+    const supportY = this.getGroundSupportHeightAt(nextX, nextZ);
+    const minCenterY = supportY + footOffset + PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M * 0.5;
+    if (nextY < minCenterY) nextY = minCenterY;
+
+    entry.body.setNextKinematicTranslation({ x: nextX, y: nextY, z: nextZ });
+
+    const reqDist = Math.hypot(desiredDx, desiredDz);
+    const actDist = Math.hypot(corrected.x, corrected.z);
+    const blocked = reqDist > 0.005 && actDist < reqDist * 0.45;
+    return {
+      x: nextX,
+      footY: nextY - footOffset,
+      z: nextZ,
+      vx: corrected.x / safeDt,
+      vz: corrected.z / safeDt,
+      blocked,
+    };
+  }
+
+  public teleportCrewMember(id: CrewMemberId, x: number, z: number): { x: number; footY: number; z: number } {
+    const entry = this.crewPhysics.get(id);
+    const footY = this.getGroundSupportHeightAt(x, z);
+    if (!entry || this.disposed) return { x, footY, z };
+    const centerY =
+      footY +
+      PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M +
+      PHYSICS_CONSTANTS.CAPSULE_RADIUS_M +
+      PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M;
+    entry.body.setTranslation({ x, y: centerY, z }, true);
+    this.world.step();
+    return { x, footY, z };
+  }
+
+  public getCrewPhysicsPosition(id: CrewMemberId): { x: number; footY: number; z: number } | null {
+    const entry = this.crewPhysics.get(id);
+    if (!entry || this.disposed) return null;
+    const pos = entry.body.translation();
+    const footOffset = PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M + PHYSICS_CONSTANTS.CAPSULE_RADIUS_M;
+    return { x: pos.x, footY: pos.y - footOffset, z: pos.z };
+  }
+
   public getSlopeDegAt(x: number, z: number): number {
     const eps = 0.35;
     const hL = groundHeightAtGrid(this.grid, x - eps, z);
@@ -559,7 +1165,6 @@ export class MarsPhysicsWorld {
     const terrainHere = groundHeightAtGrid(this.grid, currentPos.x, currentPos.z);
     const localGrav = computeLocalMarsGravity(currentPos.x, currentPos.z, terrainHere).gravityMs2;
 
-    // 1. Horizontal target velocity from Froude gait speeds & Quick Mode flag
     const fwdX = Math.sin(input.camYaw);
     const fwdZ = Math.cos(input.camYaw);
     const rightX = -Math.cos(input.camYaw);
@@ -582,14 +1187,12 @@ export class MarsPhysicsWorld {
       targetVz = dirZ * baseSpeed * speedMult;
     }
 
-    // Gradual inertia ramp for 160 kg suited explorer (no instant arcade snapping)
     const timeConst =
       dirLen > 0.001 ? PHYSICS_CONSTANTS.PLAYER_ACCEL_TIME_S : PHYSICS_CONSTANTS.PLAYER_DECEL_TIME_S;
     const blend = 1 - Math.exp(-dt / timeConst);
     this.vx += (targetVx - this.vx) * blend;
     this.vz += (targetVz - this.vz) * blend;
 
-    // 2. Vertical velocity + Mars suited jump (2.101 m/s takeoff, -localGrav * dt)
     if (jumpPending.value && this.grounded) {
       jumpPending.value = false;
       this.vy = PHYSICS_CONSTANTS.SUITED_TAKEOFF_MS;
@@ -597,10 +1200,8 @@ export class MarsPhysicsWorld {
       this.airborneTimeS = 0;
       this.takeoffFootY = footYBefore;
       this.peakFootY = footYBefore;
-      // Temporarily disable snapToGround during ascent so Rapier does not glue capsule back down
       this.controller.disableSnapToGround();
     } else if (this.grounded) {
-      // Gentle downward bias keeps snapToGround & ground contact reliable over rolling regolith
       this.vy = -0.35;
       this.controller.enableSnapToGround(PHYSICS_CONSTANTS.SNAP_TO_GROUND_M);
     } else {
@@ -620,11 +1221,10 @@ export class MarsPhysicsWorld {
 
     this.controller.computeColliderMovement(this.playerCollider, desiredMovement);
     const corrected = this.controller.computedMovement();
-    let nextX = currentPos.x + corrected.x;
+    const nextX = currentPos.x + corrected.x;
     let nextY = currentPos.y + corrected.y;
-    let nextZ = currentPos.z + corrected.z;
+    const nextZ = currentPos.z + corrected.z;
 
-    // Hard safety net: capsule bottom may never drop below analytical/grid terrain floor
     const supportY = this.getGroundSupportHeightAt(nextX, nextZ);
     const minCenterY = supportY + footOffset + PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M * 0.5;
     let clampedToFloor = false;
@@ -636,7 +1236,6 @@ export class MarsPhysicsWorld {
     this.playerBody.setNextKinematicTranslation({ x: nextX, y: nextY, z: nextZ });
     this.world.step();
 
-    // Update currCenter & grounded/landing telemetry
     this.currCenter.x = nextX;
     this.currCenter.y = nextY;
     this.currCenter.z = nextZ;
@@ -669,7 +1268,6 @@ export class MarsPhysicsWorld {
       this.peakFootY = footYAfter;
     }
 
-    // Damp horizontal velocity along blocked axis if wall stopped motion
     if (dt > 0) {
       const actualVx = corrected.x / dt;
       const actualVz = corrected.z / dt;
@@ -701,11 +1299,7 @@ export class MarsPhysicsWorld {
       steps++;
     }
 
-    if (steps === 0) {
-      this.syncStreamedRocks(this.currCenter.x, this.currCenter.z);
-    } else {
-      this.syncStreamedRocks(this.currCenter.x, this.currCenter.z);
-    }
+    this.syncStreamedRocks(this.currCenter.x, this.currCenter.z);
 
     const alpha = Math.min(1, Math.max(0, this.accumulatorS / dt));
     this.interpCenter.x = this.prevCenter.x + (this.currCenter.x - this.prevCenter.x) * alpha;
@@ -716,9 +1310,6 @@ export class MarsPhysicsWorld {
     return this.getSnapshot();
   }
 
-  /**
-   * Executes one exact deterministic fixed timestep (1/120 s) — used by automated verification tests.
-   */
   public stepSingleFixed(input: CharacterFrameInput): PlayerStepSnapshot {
     const jumpPending = { value: input.jumpRequested };
     this.stepFixed(input, jumpPending);
@@ -756,9 +1347,6 @@ export class MarsPhysicsWorld {
     };
   }
 
-  /**
-   * Spawns dynamic CCD-enabled test spheres/boxes at given coordinates for automated drop tests.
-   */
   public spawnDropTestBodies(
     points: Array<{ x: number; y: number; z: number; kind: 'sphere' | 'box'; radius: number }>,
   ): DroppedBodyRecord[] {
@@ -782,9 +1370,6 @@ export class MarsPhysicsWorld {
     this.world.step();
   }
 
-  /**
-   * Checks whether a capsule center (x, y, z) penetrates strictly inside any recorded structure volume.
-   */
   public isPointInsideStructure(x: number, footY: number, z: number, playerRadius = 0.2): string | null {
     const capsuleMidY = footY + PHYSICS_CONSTANTS.CAPSULE_TOTAL_HEIGHT_M * 0.5;
     const capsuleHalfH = PHYSICS_CONSTANTS.CAPSULE_TOTAL_HEIGHT_M * 0.5;
@@ -807,6 +1392,164 @@ export class MarsPhysicsWorld {
       }
     }
     return null;
+  }
+
+  public getStaticColliderRecords(): ReadonlyArray<StaticColliderRecord> {
+    return this.staticColliderRecords;
+  }
+
+  public getRoverColliderRecords(): StaticColliderRecord[] {
+    const t = this.roverBody.translation();
+    const r = this.roverBody.rotation();
+    const q = { x: r.x, y: r.y, z: r.z, w: r.w };
+    const rotateOffset = (ox: number, oy: number, oz: number) => {
+      const ix = q.w * ox + q.y * oz - q.z * oy;
+      const iy = q.w * oy + q.z * ox - q.x * oz;
+      const iz = q.w * oz + q.x * oy - q.y * ox;
+      const iw = -q.x * ox - q.y * oy - q.z * oz;
+      return {
+        x: t.x + ix * q.w + iw * -q.x + iy * -q.z - iz * -q.y,
+        y: t.y + iy * q.w + iw * -q.y + iz * -q.x - ix * -q.z,
+        z: t.z + iz * q.w + iw * -q.z + ix * -q.y - iy * -q.x,
+      };
+    };
+    const c1 = rotateOffset(0, -0.06, 0.02);
+    const c2 = rotateOffset(0, 0.84, 0.05);
+    return [
+      {
+        id: 'rover-chassis',
+        category: 'rover',
+        shape: 'cuboid',
+        cx: c1.x,
+        cy: c1.y,
+        cz: c1.z,
+        halfExtents: { x: 0.84, y: 0.5, z: 0.96 },
+        yawRad: 0,
+        pitchRad: 0,
+        rollRad: 0,
+        quaternion: q,
+      },
+      {
+        id: 'rover-head',
+        category: 'rover',
+        shape: 'cuboid',
+        cx: c2.x,
+        cy: c2.y,
+        cz: c2.z,
+        halfExtents: { x: 0.39, y: 0.35, z: 0.68 },
+        yawRad: 0,
+        pitchRad: 0,
+        rollRad: 0,
+        quaternion: q,
+      },
+    ];
+  }
+
+  public getRoverColliderState(): {
+    cx: number;
+    cy: number;
+    cz: number;
+    hx: number;
+    hy: number;
+    hz: number;
+    quaternion: { x: number; y: number; z: number; w: number };
+  } {
+    const t = this.roverBody.translation();
+    const r = this.roverBody.rotation();
+    return {
+      cx: t.x,
+      cy: t.y + 0.31,
+      cz: t.z,
+      hx: 0.9,
+      hy: 0.87,
+      hz: 1.24,
+      quaternion: { x: r.x, y: r.y, z: r.z, w: r.w },
+    };
+  }
+
+  public getActiveRockSpecs(): RockColliderSpec[] {
+    return this.rockSpecs.filter((r) => this.activeRockColliders.has(r.id));
+  }
+
+  public castRay(
+    origin: { x: number; y: number; z: number },
+    dir: { x: number; y: number; z: number },
+    maxToi: number,
+    solid = true,
+    excludeTerrain = false,
+    excludeActorsAndRocks = false,
+  ): { toi: number; colliderHandle: number } | null {
+    if (this.disposed) return null;
+    const ray = new RAPIER.Ray(origin, dir);
+    const predicate = excludeActorsAndRocks
+      ? (col: RAPIER.Collider) => !this.nonModuleColliderHandles.has(col.handle)
+      : excludeTerrain
+        ? (col: RAPIER.Collider) => col.handle !== this.terrainCollider.handle
+        : undefined;
+    const hit = this.world.castRay(
+      ray,
+      maxToi,
+      solid,
+      undefined,
+      undefined,
+      this.playerCollider,
+      undefined,
+      predicate,
+    );
+    if (!hit) return null;
+    return { toi: hit.timeOfImpact, colliderHandle: hit.collider.handle };
+  }
+
+  public shapeCastCrewCapsule(
+    from: { x: number; y: number; z: number },
+    to: { x: number; y: number; z: number },
+    radius = PHYSICS_CONSTANTS.CAPSULE_RADIUS_M,
+    halfHeight = PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M,
+    ignoreCrewMemberId?: CrewMemberId,
+    excludeCrewAndTerrain = true,
+  ): { toi: number; hitPoint: { x: number; y: number; z: number } } | null {
+    if (this.disposed) return null;
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const dist = Math.hypot(dx, dy, dz);
+    if (dist < 1e-4) return null;
+    const vel = { x: dx / dist, y: dy / dist, z: dz / dist };
+    const shape = new RAPIER.Capsule(halfHeight, radius);
+    const ignoredCrewCol = ignoreCrewMemberId ? this.crewPhysics.get(ignoreCrewMemberId)?.collider : undefined;
+    const ignoredHandles = new Set<number>([this.playerCollider.handle]);
+    if (excludeCrewAndTerrain) {
+      ignoredHandles.add(this.terrainCollider.handle);
+      for (const entry of this.crewPhysics.values()) {
+        ignoredHandles.add(entry.collider.handle);
+      }
+    } else if (ignoredCrewCol) {
+      ignoredHandles.add(ignoredCrewCol.handle);
+    }
+    const predicate = (col: RAPIER.Collider) => !ignoredHandles.has(col.handle);
+    const hit = this.world.castShape(
+      from,
+      { x: 0, y: 0, z: 0, w: 1 },
+      vel,
+      shape,
+      0,
+      dist,
+      true,
+      undefined,
+      undefined,
+      ignoredCrewCol ?? this.playerCollider,
+      undefined,
+      predicate,
+    );
+    if (!hit) return null;
+    return {
+      toi: hit.time_of_impact,
+      hitPoint: {
+        x: from.x + vel.x * hit.time_of_impact,
+        y: from.y + vel.y * hit.time_of_impact,
+        z: from.z + vel.z * hit.time_of_impact,
+      },
+    };
   }
 
   public dispose(): void {

@@ -102,6 +102,19 @@ export const MARS_FACTS = {
   /** [DERIVED] 12 g × 24 h ≈ 288 g/sol (~1/3 of 1 astronaut's 840 g/day) */
   MOXIE_DAILY_EQUIV_G: 288,
   MOXIE_TOTAL_RUN_G: 122,
+  /** [REAL] Apparent angular diameter of the Sun at Mars (~21 arcmin vs ~32 arcmin on Earth) */
+  SUN_ANGULAR_DIAMETER_ARCMIN: 21,
+  /** [REAL] Martian forward-scattering dust asymmetry parameter g ≈ 0.7 (Pollack et al. / Tomasko et al.) */
+  HG_ASYMMETRY_G: 0.7,
+  /** [REAL] Phobos orbital period (~7.65 h, rises west → sets east) & Deimos orbital period (~30.3 h) */
+  PHOBOS_ORBIT_HOURS: 7.65,
+  DEIMOS_ORBIT_HOURS: 30.3,
+  /** [REAL] Golombek et al. (2012) exponential cumulative rock abundance k values */
+  GOLOMBEK_K_PLAINS: 0.05,
+  GOLOMBEK_K_SANDY_HOLLOW: 0.02,
+  GOLOMBEK_K_ROCKY_PATCH: 0.19,
+  /** [REAL] Thin-CO2 Mars acoustic high-frequency attenuation vs 1 bar Earth air (~ -20 dB) */
+  MARS_SOUND_ATTENUATION_DB: -20,
 } as const;
 
 const UNSUITED_TAKEOFF_MS_VALUE = Math.sqrt(2 * MARS_FACTS.EARTH_GRAVITY_MS2 * 0.45); // ≈ 2.97086 m/s
@@ -176,7 +189,8 @@ export const PHYSICS_CONSTANTS = {
   PLAYER_ACCEL_TIME_S: 0.32,
   PLAYER_DECEL_TIME_S: 0.24,
 
-  /** [SIM] Static rock collider streaming distances & size floor */
+  /** [SIM] Golombek rock sizing & streamed collider thresholds (m) */
+  ROCK_VISUAL_MIN_DIAMETER_M: 0.1,
   ROCK_COLLIDER_MIN_DIAMETER_M: 0.3,
   ROCK_STREAM_ENTER_RADIUS_M: 32.0,
   ROCK_STREAM_EXIT_RADIUS_M: 36.0,
@@ -192,8 +206,21 @@ export const PHYSICS_CONSTANTS = {
   /** [REAL] NASA Mars 2020 Perseverance Rover specifications (science.nasa.gov/mission/mars-2020-perseverance/) */
   ROVER_MASS_KG: 1025,
   ROVER_WHEEL_DIAMETER_M: 0.525,
+  ROVER_WHEEL_RADIUS_M: 0.2625,
+  ROVER_WHEEL_CIRCUMFERENCE_M: Math.PI * 0.525, // ≈ 1.649 m/rev
   ROVER_GROUSERS_PER_WHEEL: 48,
   ROVER_REAL_TOP_SPEED_MS: 0.042, // 4.2 cm/s (152 m/h)
+
+  /** [SIM] Rover companion hysteresis, simulation drive speed, soft-sand sinkage & tilt limits */
+  ROVER_PARK_START_FOLLOW_M: 8.0,
+  ROVER_PARK_STOP_FOLLOW_M: 4.0,
+  ROVER_SIM_DRIVE_SPEED_MS: 1.0,
+  ROVER_SOFT_SAND_SINK_RATIO: 0.5, // ~50% wheel radius sinkage in soft sand pockets
+  ROVER_TILT_WARN_DEG: 30,
+  ROVER_TILT_LIMIT_DEG: 45,
+
+  /** [SIM] EVA Suit breathing cycle period (seconds) */
+  SUIT_BREATH_CYCLE_S: 4.0,
 } as const;
 
 export const SIM_CONSTANTS = {

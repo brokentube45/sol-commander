@@ -1,15 +1,43 @@
+import { MARS_FACTS } from '../sim/constants';
+import { computeSoundDelaySeconds } from '../sim/marsPhysics';
+
+export interface SoundMixerLevels {
+  master: number; // 0..1
+  ambience: number; // 0..1
+  effects: number; // 0..1
+}
+
 /**
- * Procedural Web Audio synthesizer & optional Web Speech narration
- * for SOL COMMANDER (Phase 1 & Phase 2 Cinematic + Gameplay).
+ * Procedural Martian Web Audio Synthesizer (zero pre-recorded files, zero TTS).
+ * Simulates thin CO2 (-20 dB high-freq attenuation), 240 m/s sound speed delay,
+ * EVA suit breathing & PLSS fan, habitat low-pass muffler, footsteps, and 3D Rover telemetry.
  */
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private enabled = false;
-  private voiceOverEnabled = true;
+
+  private masterBus: GainNode | null = null;
+  private ambienceBus: GainNode | null = null;
+  private effectsBus: GainNode | null = null;
+  private mixer: SoundMixerLevels = { master: 0.85, ambience: 0.75, effects: 0.85 };
+
   private ambientGain: GainNode | null = null;
+  private ambientFilter: BiquadFilterNode | null = null;
+  private habitatHumGain: GainNode | null = null;
+  private suitBreathGain: GainNode | null = null;
   private ambientSources: AudioNode[] = [];
+
   private weatherGain: GainNode | null = null;
   private weatherSources: AudioNode[] = [];
+
+  private roverPanner: PannerNode | null = null;
+  private roverMotorGain: GainNode | null = null;
+  private roverMotorOsc: OscillatorNode | null = null;
+  private roverLowpass: BiquadFilterNode | null = null;
+  private lastRoverPingAt = 0;
+
+  private insideHabitat = false;
+  private outsideEvaActive = false;
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -20,6 +48,17 @@ class SoundEngine {
 
     if (!this.ctx) {
       this.ctx = new AudioCtx();
+      this.masterBus = this.ctx.createGain();
+      this.masterBus.gain.setValueAtTime(this.mixer.master, this.ctx.currentTime);
+      this.masterBus.connect(this.ctx.destination);
+
+      this.ambienceBus = this.ctx.createGain();
+      this.ambienceBus.gain.setValueAtTime(this.mixer.ambience, this.ctx.currentTime);
+      this.ambienceBus.connect(this.masterBus);
+
+      this.effectsBus = this.ctx.createGain();
+      this.effectsBus.gain.setValueAtTime(this.mixer.effects, this.ctx.currentTime);
+      this.effectsBus.connect(this.masterBus);
     }
     if (this.ctx.state === 'suspended') {
       void this.ctx.resume();
@@ -31,15 +70,21 @@ class SoundEngine {
     return this.enabled;
   }
 
-  public isVoiceOverEnabled(): boolean {
-    return this.voiceOverEnabled;
+  public getMixerLevels(): SoundMixerLevels {
+    return { ...this.mixer };
   }
 
-  public setVoiceOverEnabled(next: boolean): void {
-    this.voiceOverEnabled = next;
-    if (!next) {
-      this.stopNarration();
-    }
+  public setMixerLevels(next: Partial<SoundMixerLevels>): void {
+    this.mixer = {
+      master: Math.max(0, Math.min(1, next.master ?? this.mixer.master)),
+      ambience: Math.max(0, Math.min(1, next.ambience ?? this.mixer.ambience)),
+      effects: Math.max(0, Math.min(1, next.effects ?? this.mixer.effects)),
+    };
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    this.masterBus?.gain.setTargetAtTime(this.mixer.master, now, 0.04);
+    this.ambienceBus?.gain.setTargetAtTime(this.mixer.ambience, now, 0.04);
+    this.effectsBus?.gain.setTargetAtTime(this.mixer.effects, now, 0.04);
   }
 
   public setEnabled(next: boolean): boolean {
@@ -53,40 +98,72 @@ class SoundEngine {
     } else {
       this.stopAmbient();
       this.stopWeatherLoop();
-      this.stopNarration();
+      this.stopRoverSpatial();
     }
     return this.enabled;
   }
 
+  public setInsideHabitat(inside: boolean): void {
+    if (this.insideHabitat === inside) return;
+    this.insideHabitat = inside;
+    if (!this.enabled || !this.ctx) return;
+    const now = this.ctx.currentTime;
+
+    this.playAirlockHiss();
+
+    if (this.ambientFilter) {
+      this.ambientFilter.frequency.setTargetAtTime(inside ? 120 : 340, now, 0.25);
+    }
+    if (this.habitatHumGain) {
+      this.habitatHumGain.gain.setTargetAtTime(inside ? 0.32 : 0.0001, now, 0.28);
+    }
+    this.syncBreathGain();
+  }
+
+  public setOutsideEvaActive(active: boolean): void {
+    if (this.outsideEvaActive === active) return;
+    this.outsideEvaActive = active;
+    this.syncBreathGain();
+  }
+
+  private syncBreathGain(): void {
+    if (!this.ctx || !this.suitBreathGain) return;
+    const target = this.outsideEvaActive && !this.insideHabitat ? 0.26 : 0.0001;
+    this.suitBreathGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.25);
+  }
+
   private startAmbient(ctx: AudioContext): void {
     this.stopAmbient();
-    try {
-      const masterGain = ctx.createGain();
-      masterGain.gain.setValueAtTime(0.0001, ctx.currentTime);
-      masterGain.gain.exponentialRampToValueAtTime(0.045, ctx.currentTime + 1.2);
-      masterGain.connect(ctx.destination);
+    if (!this.ambienceBus) return;
 
+    try {
+      const now = ctx.currentTime;
+      const rootGain = ctx.createGain();
+      rootGain.gain.setValueAtTime(0.0001, now);
+      rootGain.gain.exponentialRampToValueAtTime(0.065, now + 1.1);
+      rootGain.connect(this.ambienceBus);
+
+      // Subtle atmospheric harmonic pad
       const oscA = ctx.createOscillator();
       oscA.type = 'sine';
-      oscA.frequency.setValueAtTime(110, ctx.currentTime);
+      oscA.frequency.setValueAtTime(110, now);
 
       const oscE = ctx.createOscillator();
       oscE.type = 'triangle';
-      oscE.frequency.setValueAtTime(164.81, ctx.currentTime);
+      oscE.frequency.setValueAtTime(164.81, now);
 
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'lowpass';
-      filter.frequency.setValueAtTime(320, ctx.currentTime);
+      const envFilter = ctx.createBiquadFilter();
+      envFilter.type = 'lowpass';
+      envFilter.frequency.setValueAtTime(this.insideHabitat ? 120 : 340, now);
 
       const padGain = ctx.createGain();
-      padGain.gain.setValueAtTime(0.55, ctx.currentTime);
+      padGain.gain.setValueAtTime(0.38, now);
 
-      oscA.connect(filter);
-      oscE.connect(filter);
-      filter.connect(padGain);
-      padGain.connect(masterGain);
+      oscA.connect(padGain);
+      oscE.connect(padGain);
+      padGain.connect(envFilter);
 
-      // Soft Martian breeze
+      // Soft Martian wind buffer (low-passed to emulate thin CO2 high-freq roll-off)
       const bufferSize = ctx.sampleRate * 2;
       const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const output = noiseBuffer.getChannelData(0);
@@ -102,22 +179,77 @@ class SoundEngine {
 
       const windFilter = ctx.createBiquadFilter();
       windFilter.type = 'bandpass';
-      windFilter.frequency.setValueAtTime(240, ctx.currentTime);
-      windFilter.Q.setValueAtTime(1.4, ctx.currentTime);
+      windFilter.frequency.setValueAtTime(210, now);
+      windFilter.Q.setValueAtTime(1.5, now);
 
       const windGain = ctx.createGain();
-      windGain.gain.setValueAtTime(0.45, ctx.currentTime);
+      windGain.gain.setValueAtTime(0.55, now);
 
       noise.connect(windFilter);
       windFilter.connect(windGain);
-      windGain.connect(masterGain);
+      windGain.connect(envFilter);
+      envFilter.connect(rootGain);
+
+      // Habitat pressurized interior 55 Hz life-support fan hum
+      const habOsc = ctx.createOscillator();
+      habOsc.type = 'sine';
+      habOsc.frequency.setValueAtTime(55, now);
+      const habGain = ctx.createGain();
+      habGain.gain.setValueAtTime(this.insideHabitat ? 0.32 : 0.0001, now);
+      habOsc.connect(habGain);
+      habGain.connect(rootGain);
+
+      // EVA suit breathing cycle (0.25 Hz = 4.0 s inhale/exhale) + 200 Hz PLSS fan whisper
+      const breathNoise = ctx.createBufferSource();
+      breathNoise.buffer = noiseBuffer;
+      breathNoise.loop = true;
+      const breathBand = ctx.createBiquadFilter();
+      breathBand.type = 'bandpass';
+      breathBand.frequency.setValueAtTime(280, now);
+      breathBand.Q.setValueAtTime(2.2, now);
+
+      const breathLfo = ctx.createOscillator();
+      breathLfo.type = 'sine';
+      breathLfo.frequency.setValueAtTime(0.25, now);
+      const breathLfoGain = ctx.createGain();
+      breathLfoGain.gain.setValueAtTime(0.11, now);
+      const breathDepth = ctx.createGain();
+      breathDepth.gain.setValueAtTime(0.16, now);
+      breathLfo.connect(breathLfoGain);
+      breathLfoGain.connect(breathDepth.gain);
+
+      const plssFan = ctx.createOscillator();
+      plssFan.type = 'triangle';
+      plssFan.frequency.setValueAtTime(200, now);
+      const plssFanGain = ctx.createGain();
+      plssFanGain.gain.setValueAtTime(0.04, now);
+
+      const suitBreathMaster = ctx.createGain();
+      suitBreathMaster.gain.setValueAtTime(
+        this.outsideEvaActive && !this.insideHabitat ? 0.26 : 0.0001,
+        now,
+      );
+
+      breathNoise.connect(breathBand);
+      breathBand.connect(breathDepth);
+      breathDepth.connect(suitBreathMaster);
+      plssFan.connect(plssFanGain);
+      plssFanGain.connect(suitBreathMaster);
+      suitBreathMaster.connect(rootGain);
 
       oscA.start();
       oscE.start();
       noise.start();
+      habOsc.start();
+      breathNoise.start();
+      breathLfo.start();
+      plssFan.start();
 
-      this.ambientGain = masterGain;
-      this.ambientSources = [oscA, oscE, noise];
+      this.ambientGain = rootGain;
+      this.ambientFilter = envFilter;
+      this.habitatHumGain = habGain;
+      this.suitBreathGain = suitBreathMaster;
+      this.ambientSources = [oscA, oscE, noise, habOsc, breathNoise, breathLfo, plssFan];
     } catch {
       // Safe fallback
     }
@@ -138,6 +270,9 @@ class SoundEngine {
     const sources = this.ambientSources;
     this.ambientSources = [];
     this.ambientGain = null;
+    this.ambientFilter = null;
+    this.habitatHumGain = null;
+    this.suitBreathGain = null;
     window.setTimeout(() => {
       sources.forEach((node) => {
         try {
@@ -152,6 +287,118 @@ class SoundEngine {
     }, 280);
   }
 
+  private stopRoverSpatial(): void {
+    try {
+      this.roverMotorOsc?.stop();
+      this.roverMotorOsc?.disconnect();
+    } catch {
+      // Ignore
+    }
+    this.roverMotorOsc = null;
+    this.roverMotorGain = null;
+    this.roverPanner = null;
+    this.roverLowpass = null;
+  }
+
+  /**
+   * 3D Spatial Rover audio via Web Audio PannerNode:
+   * - Attenuates high frequencies above 1800 Hz (Mars ~ -20 dB thin CO2 absorption)
+   * - Schedules delayed telemetry chirps with real Mars speed-of-sound delay d / 240
+   */
+  public updateRoverSpatialAudio(
+    roverX: number,
+    roverY: number,
+    roverZ: number,
+    listenerX: number,
+    listenerY: number,
+    listenerZ: number,
+    listenerYaw: number,
+    driving: boolean,
+  ): void {
+    if (!this.enabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.effectsBus) return;
+
+    try {
+      const now = ctx.currentTime;
+      const listener = ctx.listener;
+      if (listener.positionX) {
+        listener.positionX.setValueAtTime(listenerX, now);
+        listener.positionY.setValueAtTime(listenerY, now);
+        listener.positionZ.setValueAtTime(listenerZ, now);
+        listener.forwardX.setValueAtTime(Math.sin(listenerYaw), now);
+        listener.forwardY.setValueAtTime(0, now);
+        listener.forwardZ.setValueAtTime(Math.cos(listenerYaw), now);
+        listener.upX.setValueAtTime(0, now);
+        listener.upY.setValueAtTime(1, now);
+        listener.upZ.setValueAtTime(0, now);
+      }
+
+      if (!this.roverPanner || !this.roverMotorGain || !this.roverLowpass) {
+        const panner = ctx.createPanner();
+        panner.panningModel = 'HRTF';
+        panner.distanceModel = 'inverse';
+        panner.refDistance = 2.0;
+        panner.maxDistance = 42.0;
+        panner.rolloffFactor = 1.15;
+
+        const lowpass = ctx.createBiquadFilter();
+        lowpass.type = 'lowpass';
+        lowpass.frequency.setValueAtTime(1100, now);
+
+        const mGain = ctx.createGain();
+        mGain.gain.setValueAtTime(0.0001, now);
+
+        const osc = ctx.createOscillator();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(92, now);
+
+        osc.connect(lowpass);
+        lowpass.connect(mGain);
+        mGain.connect(panner);
+        panner.connect(this.effectsBus);
+        osc.start(now);
+
+        this.roverPanner = panner;
+        this.roverLowpass = lowpass;
+        this.roverMotorGain = mGain;
+        this.roverMotorOsc = osc;
+      }
+
+      if (this.roverPanner.positionX) {
+        this.roverPanner.positionX.setValueAtTime(roverX, now);
+        this.roverPanner.positionY.setValueAtTime(roverY + 0.5, now);
+        this.roverPanner.positionZ.setValueAtTime(roverZ, now);
+      }
+
+      const dist = Math.hypot(roverX - listenerX, roverZ - listenerZ);
+      // Thin CO2 absorption strips highs further with distance
+      const cutoff = Math.max(240, 1600 * Math.exp(-dist * 0.08));
+      this.roverLowpass.frequency.setTargetAtTime(cutoff, now, 0.08);
+      this.roverMotorGain.gain.setTargetAtTime(driving ? 0.032 : 0.0001, now, 0.12);
+
+      // Subtle spatial ping with realistic c_Mars = 240 m/s acoustic propagation lag
+      if (driving && performance.now() - this.lastRoverPingAt > 6500 && dist > 1.5) {
+        this.lastRoverPingAt = performance.now();
+        const acousticDelay = computeSoundDelaySeconds(dist, MARS_FACTS.SPEED_OF_SOUND_LOW_HZ_MS);
+        const pingOsc = ctx.createOscillator();
+        const pingGain = ctx.createGain();
+        const t = now + acousticDelay;
+        pingOsc.type = 'sine';
+        pingOsc.frequency.setValueAtTime(640, t);
+        pingGain.gain.setValueAtTime(0.0001, t);
+        pingGain.gain.exponentialRampToValueAtTime(0.028, t + 0.012);
+        pingGain.gain.exponentialRampToValueAtTime(0.0001, t + 0.11);
+        pingOsc.connect(pingGain);
+        pingGain.connect(this.roverPanner);
+        pingOsc.start(t);
+        pingOsc.stop(t + 0.13);
+      }
+    } catch {
+      // Safe fallback
+    }
+  }
+
   private playTone(
     freq: number,
     duration: number,
@@ -161,7 +408,7 @@ class SoundEngine {
   ): void {
     if (!this.enabled) return;
     const ctx = this.ensureContext();
-    if (!ctx) return;
+    if (!ctx || !this.effectsBus) return;
 
     try {
       const now = ctx.currentTime + delay;
@@ -176,10 +423,97 @@ class SoundEngine {
       gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
 
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(this.effectsBus);
 
       osc.start(now);
       osc.stop(now + duration + 0.02);
+    } catch {
+      // Safe fallback
+    }
+  }
+
+  public playAirlockHiss(): void {
+    if (!this.enabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.effectsBus) return;
+    try {
+      const now = ctx.currentTime;
+      const dur = 0.48;
+      const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) {
+        d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
+      }
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass';
+      bp.frequency.setValueAtTime(920, now);
+      bp.frequency.exponentialRampToValueAtTime(340, now + dur);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.075, now);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      src.connect(bp);
+      bp.connect(g);
+      g.connect(this.effectsBus);
+      src.start(now);
+      src.stop(now + dur);
+    } catch {
+      // Safe fallback
+    }
+  }
+
+  /** Muffled regolith footstep in thin Martian air (no crisp Earth gravel) */
+  public playFootstep(softSandFactor: number, loping: boolean): void {
+    if (!this.enabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.effectsBus) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.setValueAtTime(220 - softSandFactor * 95, now);
+
+      osc.type = 'triangle';
+      const startFreq = loping ? 96 : 78;
+      osc.frequency.setValueAtTime(startFreq, now);
+      osc.frequency.exponentialRampToValueAtTime(36, now + 0.09);
+
+      const amp = (loping ? 0.095 : 0.068) * (1 - softSandFactor * 0.25);
+      g.gain.setValueAtTime(amp, now);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.11);
+
+      osc.connect(lp);
+      lp.connect(g);
+      g.connect(this.effectsBus);
+      osc.start(now);
+      osc.stop(now + 0.12);
+    } catch {
+      // Safe fallback
+    }
+  }
+
+  /** Weighted 160 kg boot landing thud scaled by impact speed */
+  public playLandingThud(impactSpeedMs: number): void {
+    if (!this.enabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.effectsBus) return;
+    try {
+      const now = ctx.currentTime;
+      const weight = Math.max(0.25, Math.min(1.0, impactSpeedMs / 4.2));
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(86, now);
+      osc.frequency.exponentialRampToValueAtTime(28, now + 0.19);
+      g.gain.setValueAtTime(0.15 * weight, now);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.21);
+      osc.connect(g);
+      g.connect(this.effectsBus);
+      osc.start(now);
+      osc.stop(now + 0.22);
     } catch {
       // Safe fallback
     }
@@ -222,7 +556,6 @@ class SoundEngine {
         this.playTone(523.25, 1.1, 'sine', 0.06, 0.22);
         break;
       case 3:
-        // Subtle space-weather radar chime
         this.playTone(698.46, 0.22, 'triangle', 0.07, 0);
         this.playTone(587.33, 0.32, 'triangle', 0.07, 0.24);
         break;
@@ -249,9 +582,6 @@ class SoundEngine {
 
   public playDustDevilAlert(): void {
     if (!this.enabled) return;
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    // Urgent MEDA weather radar beacon + pressure drop whoosh
     this.playTone(784, 0.12, 'triangle', 0.1, 0);
     this.playTone(1046.5, 0.16, 'triangle', 0.1, 0.13);
     this.playTone(784, 0.12, 'triangle', 0.09, 0.3);
@@ -264,7 +594,7 @@ class SoundEngine {
   ): void {
     if (!this.enabled) return;
     const ctx = this.ensureContext();
-    if (!ctx) return;
+    if (!ctx || !this.ambienceBus) return;
 
     this.stopWeatherLoop();
 
@@ -274,9 +604,8 @@ class SoundEngine {
       const master = ctx.createGain();
       master.gain.setValueAtTime(0.0001, now);
       master.gain.exponentialRampToValueAtTime(0.16, now + 0.75);
-      master.connect(ctx.destination);
+      master.connect(this.ambienceBus);
 
-      // Textured pink/brown Martian dust wind buffer
       const bufferSize = ctx.sampleRate * 3;
       const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const data = noiseBuffer.getChannelData(0);
@@ -296,14 +625,12 @@ class SoundEngine {
       noise.buffer = noiseBuffer;
       noise.loop = true;
 
-      // Swirling vortex bandpass filter
       const vortexFilter = ctx.createBiquadFilter();
       vortexFilter.type = 'bandpass';
       const baseFreq = kind === 'katabatic-gust' ? 240 : kind === 'electrostatic-squall' ? 420 : 340;
       vortexFilter.frequency.setValueAtTime(baseFreq, now);
       vortexFilter.Q.setValueAtTime(kind === 'dust-devil' ? 2.6 : 1.7, now);
 
-      // LFO sweeping filter frequency to create spinning dust-devil whoosh
       const lfo = ctx.createOscillator();
       lfo.type = 'sine';
       lfo.frequency.setValueAtTime(kind === 'dust-devil' ? 1.45 : 0.95, now);
@@ -313,7 +640,6 @@ class SoundEngine {
       lfo.connect(lfoFreqGain);
       lfoFreqGain.connect(vortexFilter.frequency);
 
-      // Continuous low-frequency Martian rumble (dual sub-oscillators + brown rumble noise + tremor LFO)
       const rumbleGain = ctx.createGain();
       rumbleGain.gain.setValueAtTime(0.42 * rumbleScale, now);
 
@@ -340,14 +666,6 @@ class SoundEngine {
       const rumbleNoiseGain = ctx.createGain();
       rumbleNoiseGain.gain.setValueAtTime(0.75, now);
 
-      const rumbleLfo = ctx.createOscillator();
-      rumbleLfo.type = 'sine';
-      rumbleLfo.frequency.setValueAtTime(0.28, now);
-      const rumbleLfoGain = ctx.createGain();
-      rumbleLfoGain.gain.setValueAtTime(0.14 * rumbleScale, now);
-      rumbleLfo.connect(rumbleLfoGain);
-      rumbleLfoGain.connect(rumbleGain.gain);
-
       noise.connect(vortexFilter);
       vortexFilter.connect(master);
 
@@ -365,7 +683,6 @@ class SoundEngine {
       rumbleSubOsc.start(now);
       rumbleHarmonicOsc.start(now);
       rumbleNoise.start(now);
-      rumbleLfo.start(now);
 
       this.weatherGain = master;
       this.weatherSources = [
@@ -374,14 +691,12 @@ class SoundEngine {
         rumbleSubOsc,
         rumbleHarmonicOsc,
         rumbleNoise,
-        rumbleLfo,
         vortexFilter,
         lfoFreqGain,
         rumbleFilter,
         rumbleSubGain,
         rumbleHarmonicGain,
         rumbleNoiseGain,
-        rumbleLfoGain,
         rumbleGain,
       ];
     } catch {
@@ -426,14 +741,13 @@ class SoundEngine {
   ): void {
     if (!this.enabled) return;
     const ctx = this.ensureContext();
-    if (!ctx) return;
+    if (!ctx || !this.effectsBus) return;
 
     try {
       const now = ctx.currentTime;
       const s = Math.max(0.35, Math.min(1, strength));
       const dur = 1.85;
 
-      // 1. Pink/white noise buffer for sweeping wind whoosh & airborne grit
       const bufferSize = Math.floor(ctx.sampleRate * (dur + 0.1));
       const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
       const data = noiseBuffer.getChannelData(0);
@@ -468,57 +782,12 @@ class SoundEngine {
 
       windNoise.connect(sweepFilter);
       sweepFilter.connect(windGain);
-      windGain.connect(ctx.destination);
-
-      // 2. Highpass airborne dust grit accent
-      const gritNoise = ctx.createBufferSource();
-      gritNoise.buffer = noiseBuffer;
-
-      const gritFilter = ctx.createBiquadFilter();
-      gritFilter.type = 'highpass';
-      gritFilter.frequency.setValueAtTime(1600, now);
-
-      const gritGain = ctx.createGain();
-      gritGain.gain.setValueAtTime(0.0001, now);
-      gritGain.gain.exponentialRampToValueAtTime(0.045 * s, now + 0.5);
-      gritGain.gain.exponentialRampToValueAtTime(0.0001, now + dur - 0.1);
-
-      gritNoise.connect(gritFilter);
-      gritFilter.connect(gritGain);
-      gritGain.connect(ctx.destination);
-
-      // 3. Low-frequency gust pressure thump
-      const thumpOsc = ctx.createOscillator();
-      thumpOsc.type = 'triangle';
-      thumpOsc.frequency.setValueAtTime(48, now);
-      thumpOsc.frequency.exponentialRampToValueAtTime(34, now + 0.9);
-
-      const thumpGain = ctx.createGain();
-      thumpGain.gain.setValueAtTime(0.0001, now);
-      thumpGain.gain.exponentialRampToValueAtTime(0.11 * s, now + 0.26);
-      thumpGain.gain.exponentialRampToValueAtTime(0.0001, now + 1.25);
-
-      thumpOsc.connect(thumpGain);
-      thumpGain.connect(ctx.destination);
+      windGain.connect(this.effectsBus);
 
       windNoise.start(now);
-      gritNoise.start(now);
-      thumpOsc.start(now);
-
       windNoise.stop(now + dur + 0.05);
-      gritNoise.stop(now + dur + 0.05);
-      thumpOsc.stop(now + 1.3);
 
-      const nodes: AudioNode[] = [
-        windNoise,
-        sweepFilter,
-        windGain,
-        gritNoise,
-        gritFilter,
-        gritGain,
-        thumpOsc,
-        thumpGain,
-      ];
+      const nodes: AudioNode[] = [windNoise, sweepFilter, windGain];
       window.setTimeout(() => {
         nodes.forEach((n) => {
           try {
@@ -536,10 +805,9 @@ class SoundEngine {
   public playShelterSafe(): void {
     if (!this.enabled) return;
     const ctx = this.ensureContext();
-    if (!ctx) return;
+    if (!ctx || !this.effectsBus) return;
 
     try {
-      // Heavy mechanical airlock bulkhead seal thud
       const now = ctx.currentTime;
       const thud = ctx.createOscillator();
       const thudGain = ctx.createGain();
@@ -549,14 +817,13 @@ class SoundEngine {
       thudGain.gain.setValueAtTime(0.18, now);
       thudGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.24);
       thud.connect(thudGain);
-      thudGain.connect(ctx.destination);
+      thudGain.connect(this.effectsBus);
       thud.start(now);
       thud.stop(now + 0.26);
     } catch {
       // Safe fallback
     }
 
-    // Warm safe-in-habitat confirmation chord
     this.playTone(523.25, 0.14, 'sine', 0.08, 0.18);
     this.playTone(659.25, 0.16, 'sine', 0.08, 0.28);
     this.playTone(783.99, 0.28, 'sine', 0.09, 0.38);
@@ -566,30 +833,6 @@ class SoundEngine {
     if (!this.enabled) return;
     this.playTone(233.08, 0.18, 'sawtooth', 0.08, 0);
     this.playTone(174.61, 0.3, 'sawtooth', 0.08, 0.18);
-  }
-
-  public speakCaption(text: string): void {
-    if (!this.enabled || !this.voiceOverEnabled) return;
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.rate = 0.95;
-      utter.pitch = 1.0;
-      utter.volume = 0.8;
-      window.speechSynthesis.speak(utter);
-    } catch {
-      // Ignore speech synthesis errors in restricted sandboxes
-    }
-  }
-
-  public stopNarration(): void {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      // Ignore
-    }
   }
 }
 

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   GameplayInputState,
   GraphicsQuality,
+  LandingTelemetrySummary,
   MarsOutpost3D,
   SimVisualState,
 } from './components/MarsOutpost3D';
@@ -14,6 +15,7 @@ import { CommandModeModal } from './components/CommandModeModal';
 import { CommandersLogModal, DataCreditsModal } from './components/LogCreditsModals';
 import { DebriefScreen } from './components/DebriefScreen';
 import { PauseMenuModal } from './components/PauseMenuModal';
+import { GameplayPoseTelemetry, WristMapModal } from './components/WristMapModal';
 import {
   COMMANDER_CALLSIGNS,
   GamePhase,
@@ -22,8 +24,10 @@ import {
   PROLOGUE_SCENES,
   PowerAllocation,
 } from './data/missionData';
-import { SIM_CONSTANTS } from './sim/constants';
+import { CREW_PROFILES, CrewMemberId, SIM_CONSTANTS } from './sim/constants';
+import { CrewInspectCardData } from './sim/crewAndRoverSim';
 import { MissionZoneId, OptionId } from './sim/missionsData';
+import { GAMEPLAY_LAYOUT } from './sim/outpostLayout';
 import {
   ARCHIVED_DONKI_FALLBACK,
   DonkiSpaceWeather,
@@ -52,11 +56,14 @@ import {
   computeDiurnalMarsWeather,
 } from './sim/marsPhysics';
 import { soundEngine } from './utils/soundEngine';
+import { isDebugModeEnabled } from './debug/diagnostics';
+import { DebugPanel } from './components/DebugPanel';
 
 export default function App() {
+  const [debugMode] = useState<boolean>(() => isDebugModeEnabled());
   const [gamePhase, setGamePhase] = useState<GamePhase>('landing');
+  const [engineReady, setEngineReady] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
-  const [voiceOverEnabled, setVoiceOverEnabled] = useState(true);
   const [subtitlesEnabled, setSubtitlesEnabled] = useState(true);
   const [quality, setQuality] = useState<GraphicsQuality>('high');
   const [hudHidden, setHudHidden] = useState(false);
@@ -85,6 +92,34 @@ export default function App() {
   const simStateRef = useRef(simState);
   simStateRef.current = simState;
   const [cameraMode, setCameraMode] = useState<'3p' | '1p'>('3p');
+  const [lensOpen, setLensOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
+  const [poseTelemetry, setPoseTelemetry] = useState<GameplayPoseTelemetry>(() => ({
+    x: GAMEPLAY_LAYOUT.modules.astroSpawn.x,
+    z: GAMEPLAY_LAYOUT.modules.astroSpawn.z,
+    headingDeg:
+      ((Math.atan2(
+        Math.sin(GAMEPLAY_LAYOUT.modules.astroSpawn.yaw),
+        -Math.cos(GAMEPLAY_LAYOUT.modules.astroSpawn.yaw),
+      ) *
+        180) /
+        Math.PI +
+        360) %
+      360,
+    speedMs: 0,
+    roverX: GAMEPLAY_LAYOUT.modules.roverSpawn.x,
+    roverZ: GAMEPLAY_LAYOUT.modules.roverSpawn.z,
+    crewDots: CREW_PROFILES.map((p) => {
+      const slot = GAMEPLAY_LAYOUT.crewStations[p.id][0];
+      return {
+        id: p.id,
+        name: p.name,
+        color: p.avatarColor,
+        x: slot.x,
+        z: slot.z,
+      };
+    }),
+  }));
   const [commandModeOpen, setCommandModeOpen] = useState(false);
   const [commandInitialTab, setCommandInitialTab] = useState<'look' | 'compare'>('look');
   const [logOpen, setLogOpen] = useState(false);
@@ -97,7 +132,14 @@ export default function App() {
 
   const [nearbyZone, setNearbyZone] = useState<MissionZoneId | null>(null);
   const [nearbyStation, setNearbyStation] = useState<OutpostLandmarkId | null>(null);
+  const [nearbyCrewId, setNearbyCrewId] = useState<CrewMemberId | null>(null);
   const [inspectedStation, setInspectedStation] = useState<OutpostLandmarkId | null>(null);
+  const [inspectedCrew, setInspectedCrew] = useState<CrewInspectCardData | null>(null);
+  const [landingToast, setLandingToast] = useState<LandingTelemetrySummary | null>(null);
+  const [roverTiltWarning, setRoverTiltWarning] = useState<{ active: boolean; deg: number }>({
+    active: false,
+    deg: 0,
+  });
   const [weatherSecondsLeft, setWeatherSecondsLeft] = useState<number>(0);
   const [habitatDistMeters, setHabitatDistMeters] = useState<number>(7);
   const [marsPhysics, setMarsPhysics] = useState<MarsEnvironmentSnapshot>(() =>
@@ -149,7 +191,6 @@ export default function App() {
       setPrologueElapsed((prev) => {
         const next = prev + dt;
         if (next >= PROLOGUE_DURATION_SEC) {
-          soundEngine.stopNarration();
           setGamePhase('briefing');
           return PROLOGUE_DURATION_SEC;
         }
@@ -163,7 +204,7 @@ export default function App() {
     return () => cancelAnimationFrame(rafId);
   }, [gamePhase, prologuePaused]);
 
-  // Trigger timed audio cues & optional voice-over on each Prologue scene boundary
+  // Trigger procedural musical cues on each Prologue scene boundary
   useEffect(() => {
     if (gamePhase !== 'prologue') {
       lastCueSceneRef.current = -1;
@@ -176,11 +217,15 @@ export default function App() {
     if (sceneIdx !== -1 && sceneIdx !== lastCueSceneRef.current) {
       lastCueSceneRef.current = sceneIdx;
       soundEngine.playSceneCue(sceneIdx);
-      if (!prologuePaused) {
-        soundEngine.speakCaption(PROLOGUE_SCENES[sceneIdx].caption);
-      }
     }
-  }, [gamePhase, prologueElapsed, prologuePaused]);
+  }, [gamePhase, prologueElapsed]);
+
+  // Auto-dismiss Mars vs Earth jump/drop comparison toast cleanly
+  useEffect(() => {
+    if (!landingToast) return;
+    const tid = window.setTimeout(() => setLandingToast(null), 4500);
+    return () => window.clearTimeout(tid);
+  }, [landingToast]);
 
   // Global Gameplay Shortcuts: Esc (dismiss modals or toggle Pause Menu), Tab (Log), Q (Rover Hint L1)
   useEffect(() => {
@@ -192,8 +237,11 @@ export default function App() {
       if (ev.key === 'Escape') {
         if (creditsOpen) setCreditsOpen(false);
         else if (logOpen) setLogOpen(false);
+        else if (mapOpen) setMapOpen(false);
         else if (commandModeOpen && simState.phase === 'active-mission') setCommandModeOpen(false);
+        else if (inspectedCrew) setInspectedCrew(null);
         else if (inspectedStation) setInspectedStation(null);
+        else if (lensOpen) setLensOpen(false);
         else setPaused((prev) => !prev);
       } else if (ev.key === 'Tab') {
         ev.preventDefault();
@@ -206,7 +254,17 @@ export default function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [gamePhase, creditsOpen, logOpen, commandModeOpen, inspectedStation, simState.phase]);
+  }, [
+    gamePhase,
+    creditsOpen,
+    logOpen,
+    mapOpen,
+    commandModeOpen,
+    inspectedCrew,
+    inspectedStation,
+    lensOpen,
+    simState.phase,
+  ]);
 
   const handleToggleSound = () => {
     const next = soundEngine.setEnabled(!soundEnabled);
@@ -218,13 +276,6 @@ export default function App() {
         simState.activeWeatherEvent.rumbleIntensity,
       );
     }
-  };
-
-  const handleToggleVoiceOver = () => {
-    const next = !voiceOverEnabled;
-    setVoiceOverEnabled(next);
-    soundEngine.setVoiceOverEnabled(next);
-    soundEngine.playClick();
   };
 
   const handleToggleQuality = () => {
@@ -256,9 +307,10 @@ export default function App() {
   };
 
   const handleReplayPrologue = () => {
-    soundEngine.stopNarration();
     soundEngine.playMissionStart();
     setInspectedStation(null);
+    setInspectedCrew(null);
+    setMapOpen(false);
     setCommandModeOpen(false);
     setLogOpen(false);
     setCreditsOpen(false);
@@ -269,7 +321,6 @@ export default function App() {
   };
 
   const handleSkipPrologue = () => {
-    soundEngine.stopNarration();
     soundEngine.playClick();
     setGamePhase('briefing');
   };
@@ -285,13 +336,18 @@ export default function App() {
       setWeatherSecondsLeft(0);
       setSimState(createInitialCampaignState(nextSeed, callsign, roverName, donkiWeather));
       setCameraMode('3p');
+      setLensOpen(false);
+      setMapOpen(false);
       setInspectedStation(null);
+      setInspectedCrew(null);
+      setLandingToast(null);
       setCommandModeOpen(false);
       setLogOpen(false);
       setCreditsOpen(false);
       setPaused(false);
       setNearbyStation(null);
       setNearbyZone(null);
+      setNearbyCrewId(null);
       setGamePhase('gameplay');
     },
     [callsign, roverName, donkiWeather],
@@ -302,16 +358,20 @@ export default function App() {
   };
 
   const handleReturnTitle = () => {
-    soundEngine.stopNarration();
     soundEngine.stopWeatherLoop();
     soundEngine.playClick();
     setInspectedStation(null);
+    setInspectedCrew(null);
+    setLensOpen(false);
+    setMapOpen(false);
+    setLandingToast(null);
     setCommandModeOpen(false);
     setLogOpen(false);
     setCreditsOpen(false);
     setPaused(false);
     setNearbyStation(null);
     setNearbyZone(null);
+    setNearbyCrewId(null);
     setSelectedLandmark(null);
     setGamePhase('landing');
   };
@@ -347,6 +407,7 @@ export default function App() {
       simState.phase !== 'active-mission' ||
       !activeWx ||
       logOpen ||
+      mapOpen ||
       commandModeOpen ||
       creditsOpen ||
       paused
@@ -381,6 +442,7 @@ export default function App() {
     simState.activeWeatherEvent?.id,
     simState.activeWeatherEvent?.gustIntervalSeconds,
     logOpen,
+    mapOpen,
     commandModeOpen,
     creditsOpen,
     paused,
@@ -393,6 +455,7 @@ export default function App() {
       simState.phase !== 'active-mission' ||
       simState.activeWeatherEvent ||
       commandModeOpen ||
+      mapOpen ||
       logOpen ||
       creditsOpen ||
       paused ||
@@ -413,6 +476,7 @@ export default function App() {
     simState.missionIndex,
     simState.activeWeatherEvent,
     commandModeOpen,
+    mapOpen,
     logOpen,
     creditsOpen,
     paused,
@@ -425,6 +489,7 @@ export default function App() {
       simState.phase !== 'active-mission' ||
       !simState.activeWeatherEvent ||
       logOpen ||
+      mapOpen ||
       commandModeOpen ||
       creditsOpen ||
       paused
@@ -450,6 +515,7 @@ export default function App() {
     simState.phase,
     simState.activeWeatherEvent,
     logOpen,
+    mapOpen,
     commandModeOpen,
     creditsOpen,
     paused,
@@ -514,9 +580,32 @@ export default function App() {
         return;
       }
       soundEngine.playInspect();
+      setInspectedCrew(null);
       setInspectedStation(stationId);
     },
     [activeMission.zoneId, handleOpenCommandMode],
+  );
+
+  const handleInteractCrewFromHud = useCallback(
+    (crewId: CrewMemberId) => {
+      const prof = CREW_PROFILES.find((p) => p.id === crewId);
+      const mem = simState.crew.find((c) => c.id === crewId);
+      if (!prof) return;
+      soundEngine.playInspect();
+      setInspectedStation(null);
+      setInspectedCrew({
+        id: crewId,
+        name: prof.name,
+        role: prof.role,
+        specialty: prof.specialty,
+        modeLabel: simState.activeWeatherEvent ? 'Seek Shelter Protocol' : 'EVA Outpost Duty',
+        health: mem?.health ?? 95,
+        stress: mem?.stress ?? 20,
+        stationLabel: prof.specialty,
+        note: `${prof.name} is monitoring ${prof.specialty.toLowerCase()}.`,
+      });
+    },
+    [simState.crew, simState.activeWeatherEvent],
   );
 
   // Derive 3D visuals directly from Simulation State
@@ -533,11 +622,13 @@ export default function App() {
       roverMood: computeRoverMood(simState),
       roverDamaged: simState.roverDamaged,
       commandModeOpen: commandModeOpen || logOpen || simState.phase !== 'active-mission',
+      mapOpen,
       cameraMode,
       radiationAlert: activeMission.id === 'm5' || simState.eventDoseMsv > 100,
       sol: simState.sol,
       dustTau: simState.dustTau,
       activeWxWindMs: simState.activeWeatherEvent?.lastGustWindMs,
+      crew: simState.crew,
       weatherEvent: simState.activeWeatherEvent
         ? {
             active: true,
@@ -547,7 +638,7 @@ export default function App() {
           }
         : null,
     };
-  }, [gamePhase, activeMission, simState, commandModeOpen, logOpen, cameraMode]);
+  }, [gamePhase, activeMission, simState, commandModeOpen, logOpen, mapOpen, cameraMode]);
 
   const dynamicPowerAlloc: PowerAllocation = useMemo(
     () => ({
@@ -584,11 +675,29 @@ export default function App() {
             soundEngine.playClick();
             setCameraMode((prev) => (prev === '3p' ? '1p' : '3p'));
           }}
+          onToggleLens={() => {
+            soundEngine.playClick();
+            setLensOpen((prev) => !prev);
+          }}
+          onToggleMap={() => {
+            soundEngine.playClick();
+            setMapOpen((prev) => !prev);
+          }}
+          onEngineReady={() => setEngineReady(true)}
           onNearbyZoneChange={setNearbyZone}
           onInteractZone={handleInteractZone}
+          onNearbyCrewChange={setNearbyCrewId}
+          onInteractCrew={(card) => {
+            soundEngine.playInspect();
+            setInspectedStation(null);
+            setInspectedCrew(card);
+          }}
+          onLandingTelemetry={setLandingToast}
+          onRoverTiltAlert={(active, deg) => setRoverTiltWarning({ active, deg })}
           onShelterReached={handleShelterReached}
           onHabitatDistanceChange={setHabitatDistMeters}
           onPhysicsUpdate={setMarsPhysics}
+          onPoseTelemetry={setPoseTelemetry}
           onTutorialMoveDone={() => {}}
           onTutorialLookDone={() => {}}
           onNearbyStationChange={setNearbyStation}
@@ -596,8 +705,21 @@ export default function App() {
           moveInputRef={moveInputRef}
           reducedMotion={reducedMotion}
           quality={quality}
+          debugMode={debugMode}
+          onDebugForcePhase={debugMode ? setGamePhase : undefined}
         />
       </div>
+
+      {/* Non-blocking Physics/WebGL Initialization Pill until Rapier WASM finishes booting */}
+      {!engineReady && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed bottom-4 right-4 z-40 rounded-xl border border-[#FFB703]/45 bg-[#071324]/92 px-3.5 py-2 text-xs font-bold text-[#FFB703] shadow-lg"
+        >
+          Initializing Mars Terrain &amp; 3.73 m/s² Physics…
+        </div>
+      )}
 
       {/* PHASE 1: Title Screen HUD Overlay */}
       {gamePhase === 'landing' && (
@@ -646,17 +768,12 @@ export default function App() {
           paused={prologuePaused}
           onTogglePause={() => {
             soundEngine.playClick();
-            setProloguePaused((prev) => {
-              if (!prev) soundEngine.stopNarration();
-              return !prev;
-            });
+            setProloguePaused((prev) => !prev);
           }}
           onReplay={handleReplayPrologue}
           onSkip={handleSkipPrologue}
           soundEnabled={soundEnabled}
           onToggleSound={handleToggleSound}
-          voiceOverEnabled={voiceOverEnabled}
-          onToggleVoiceOver={handleToggleVoiceOver}
           subtitlesEnabled={subtitlesEnabled}
           onToggleSubtitles={() => {
             soundEngine.playClick();
@@ -696,15 +813,33 @@ export default function App() {
               soundEngine.playClick();
               setCameraMode((prev) => (prev === '3p' ? '1p' : '3p'));
             }}
+            lensOpen={lensOpen}
+            onToggleLens={() => {
+              soundEngine.playClick();
+              setLensOpen((prev) => !prev);
+            }}
+            mapOpen={mapOpen}
+            onToggleMap={() => {
+              soundEngine.playClick();
+              setMapOpen((prev) => !prev);
+            }}
+            poseTelemetry={poseTelemetry}
             nearbyZone={nearbyZone}
             nearbyStation={nearbyStation}
+            nearbyCrewId={nearbyCrewId}
             inspectedStation={inspectedStation}
+            inspectedCrew={inspectedCrew}
             onCloseInspected={() => {
               soundEngine.playClick();
               setInspectedStation(null);
             }}
+            onCloseInspectedCrew={() => {
+              soundEngine.playClick();
+              setInspectedCrew(null);
+            }}
             onInteractZone={handleInteractZone}
             onInteractStation={handleInteractStation}
+            onInteractCrew={handleInteractCrewFromHud}
             onOpenCommandMode={handleOpenCommandMode}
             onOpenLog={() => {
               soundEngine.playClick();
@@ -724,6 +859,8 @@ export default function App() {
             }}
             weatherSecondsLeft={weatherSecondsLeft}
             habitatDistMeters={habitatDistMeters}
+            landingToast={landingToast}
+            roverTiltWarning={roverTiltWarning}
             onTriggerWeatherTest={handleTriggerWeatherTest}
             onShelterClick={handleShelterReached}
             soundEnabled={soundEnabled}
@@ -840,8 +977,23 @@ export default function App() {
             onQuitToTitle={handleReturnTitle}
             reducedMotion={reducedMotion}
           />
+          <WristMapModal
+            open={mapOpen}
+            onClose={() => {
+              soundEngine.playClick();
+              setMapOpen(false);
+            }}
+            telemetry={poseTelemetry}
+            activeMission={activeMission}
+            weatherAlertActive={Boolean(simState.activeWeatherEvent)}
+            quickMode={quickMode}
+            roverName={simState.roverName}
+            reducedMotion={reducedMotion}
+          />
         </>
       )}
+
+      {debugMode && <DebugPanel gamePhase={gamePhase} onStartGameplayDirect={handleStartExploration} />}
     </main>
   );
 }

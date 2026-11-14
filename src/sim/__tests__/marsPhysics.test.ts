@@ -5,10 +5,23 @@ import {
   computeFroudeWalkSpeed,
   computeJumpTelemetry,
   computeMartianWindPhysics,
+  computeSoundDelaySeconds,
   computeWindForceN,
 } from '../marsPhysics';
+import {
+  createInitialCrewAgents,
+  createInitialRoverController,
+  stepCrewAgents,
+  stepRoverController,
+} from '../crewAndRoverSim';
 import { MarsPhysicsWorld } from '../rapierWorld';
-import { groundHeightAt, seededRandom } from '../terrainField';
+import {
+  generateOutpostRockSpecs,
+  golombekExceedanceFraction,
+  golombekQ,
+  groundHeightAt,
+  seededRandom,
+} from '../terrainField';
 
 describe('Mars Physics Constants & Derived Mechanics (B9)', () => {
   it('computes 2.0 m free-fall time (1.036 s) and impact speed (3.86 m/s) vs Earth (0.639 s, 6.26 m/s)', () => {
@@ -328,3 +341,114 @@ describe('Rapier WASM Core Physics, Jump Trajectory & Anti-Clipping (B4, B9)', (
     }
   });
 });
+
+describe('Golombek Rock Distribution, Acoustics, Rover FSM & Autonomous Crew', () => {
+  it('computes Golombek (2012) q(k) & exceedance fraction F_k(D) and spawns rocks down to 0.10 m', () => {
+    expect(golombekQ(0.02)).toBeCloseTo(1.79 + 0.152 / 0.02, 5);
+    expect(golombekQ(0.05)).toBeCloseTo(1.79 + 0.152 / 0.05, 5);
+    expect(golombekQ(0.19)).toBeCloseTo(1.79 + 0.152 / 0.19, 5);
+    expect(golombekExceedanceFraction(0.05, 0.3)).toBeLessThan(0.05);
+    expect(golombekExceedanceFraction(0.19, 0.3)).toBeGreaterThan(
+      golombekExceedanceFraction(0.02, 0.3),
+    );
+
+    const rocks = generateOutpostRockSpecs('high');
+    const minDiameter = Math.min(...rocks.map((r) => r.diameter));
+    const maxDiameter = Math.max(...rocks.map((r) => r.diameter));
+    expect(minDiameter).toBeGreaterThanOrEqual(PHYSICS_CONSTANTS.ROCK_VISUAL_MIN_DIAMETER_M - 0.001);
+    expect(minDiameter).toBeLessThan(PHYSICS_CONSTANTS.ROCK_COLLIDER_MIN_DIAMETER_M);
+    expect(maxDiameter).toBeGreaterThan(PHYSICS_CONSTANTS.ROCK_COLLIDER_MIN_DIAMETER_M);
+  });
+
+  it('computes Mars low-freq sound propagation delay d / 240 m/s (~0.417 s at 100 m)', () => {
+    const delay100m = computeSoundDelaySeconds(100, MARS_FACTS.SPEED_OF_SOUND_LOW_HZ_MS);
+    expect(delay100m).toBeCloseTo(100 / 240, 4);
+  });
+
+  it('steps Rover FSM hysteresis (PARKED <= 8m, FOLLOWING > 8m to <= 4m), soft-sand sinkage & wheel spin', () => {
+    let rover = createInitialRoverController(2.1, 3.25);
+    expect(rover.state).toBe('PARKED');
+
+    // Player within 8.0 m -> stays PARKED
+    rover = stepRoverController(rover, 0.05, {
+      playerX: 6.0,
+      playerZ: 6.0,
+      playerYaw: 0,
+      damaged: false,
+      obstacles: [],
+    });
+    expect(rover.state).toBe('PARKED');
+
+    // Player walks > 8.0 m away -> starts FOLLOWING and rotates wheels
+    for (let i = 0; i < 60; i++) {
+      rover = stepRoverController(rover, 0.05, {
+        playerX: 16.0,
+        playerZ: 14.0,
+        playerYaw: 0.4,
+        damaged: false,
+        obstacles: [],
+      });
+    }
+    expect(rover.wheelSpinRad).toBeGreaterThan(1.0);
+    expect(rover.speedMs).toBeGreaterThan(0.5);
+
+    // Check soft-sand hollow sinkage at (-7.5, 7.5) (curved depression + ~50% wheel radius sinkage)
+    const sandRover = stepRoverController(createInitialRoverController(-7.5, 7.5, 0), 0.016, {
+      playerX: -7.5,
+      playerZ: 7.5,
+      playerYaw: 0,
+      damaged: false,
+      obstacles: [],
+    });
+    expect(sandRover.softSandFactor).toBeGreaterThan(0.9);
+    const wheelCoords: Array<[number, number]> = [
+      [-0.78, -0.66],
+      [-0.78, 0.0],
+      [-0.78, 0.66],
+      [0.78, -0.66],
+      [0.78, 0.0],
+      [0.78, 0.66],
+    ];
+    const wheelGroundAvg =
+      wheelCoords.reduce(
+        (acc, [lx, lz]) => acc + groundHeightAt(sandRover.x + lx, sandRover.z + lz),
+        0,
+      ) / 6;
+    expect(wheelGroundAvg - sandRover.y).toBeCloseTo(
+      PHYSICS_CONSTANTS.ROVER_WHEEL_RADIUS_M * PHYSICS_CONSTANTS.ROVER_SOFT_SAND_SINK_RATIO,
+      2,
+    );
+  });
+
+  it('steps 4 Crew agents with Alarm storm sheltering and < 55 health limping gait', () => {
+    let crew = createInitialCrewAgents();
+    expect(crew).toHaveLength(4);
+
+    // Storm triggers Alarm mode and shelter movement toward Habitat airlock
+    for (let i = 0; i < 120; i++) {
+      crew = stepCrewAgents(crew, 0.05, {
+        weatherAlertActive: true,
+        tank2LeakActive: false,
+        radiationAlert: false,
+        habitatShelterPos: { x: 3.2, z: -1.9 },
+        crewMembers: [
+          { id: 'amara', name: 'Dr. Amara Nwosu', role: 'Medical Officer', health: 40, stress: 25, alive: true },
+          { id: 'kenji', name: 'Kenji Sato', role: 'Flight Engineer', health: 90, stress: 20, alive: true },
+          { id: 'lucia', name: 'Lucia Ferreira', role: 'Science Officer', health: 88, stress: 22, alive: true },
+          { id: 'rafi', name: 'Rafi Chowdhury', role: 'Life-Support & ISRU Engineer', health: 92, stress: 18, alive: true },
+        ],
+        obstacles: [],
+      });
+    }
+
+    const amara = crew.find((c) => c.id === 'amara')!;
+    expect(amara.mode).toBe('Alarm');
+    expect(amara.limping).toBe(true);
+    for (const ag of crew) {
+      expect(Number.isFinite(ag.x)).toBe(true);
+      expect(Number.isFinite(ag.y)).toBe(true);
+      expect(Number.isFinite(ag.z)).toBe(true);
+    }
+  });
+});
+

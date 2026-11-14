@@ -11,23 +11,55 @@ import {
   PowerAllocation,
   TutorialStepId,
 } from '../data/missionData';
-import { PHYSICS_CONSTANTS } from '../sim/constants';
-import { groundHeightAt } from '../sim/terrainField';
+import { CrewMemberId, MARS_FACTS, PHYSICS_CONSTANTS } from '../sim/constants';
+import {
+  CrewAgentState,
+  CrewInspectCardData,
+  RoverControllerState,
+  createInitialCrewAgents,
+  createInitialRoverController,
+  getCrewInspectInfo,
+  stepCrewAgents,
+  stepRoverController,
+} from '../sim/crewAndRoverSim';
+import {
+  GAMEPLAY_LAYOUT,
+  OutpostLayoutConfig,
+  OutpostLayoutMode,
+  SHOWCASE_LAYOUT,
+} from '../sim/outpostLayout';
+import { getSoftSandFactorAt, groundHeightAt } from '../sim/terrainField';
 import { buildMarsEnvironment } from '../three/marsEnvironment';
 import { buildOutpostAssets } from '../three/outpostAssets';
 import { MartianStormShader } from '../three/martianStormShader';
+import {
+  createFootprintDecalTexture,
+  createRoverTrackDecalTexture,
+} from '../three/proceduralTextures';
 import { MarsPhysicsWorld } from '../sim/rapierWorld';
+import { GameplayPoseTelemetry } from './WristMapModal';
 
 import { MissionZoneId } from '../sim/missionsData';
 import { RoverMood } from '../sim/roverData';
-import { WeatherEventKind } from '../sim/simEngine';
+import { CrewMemberState, WeatherEventKind } from '../sim/simEngine';
 import {
   MarsEnvironmentSnapshot,
   MarsJumpTelemetry,
   computeDiurnalMarsWeather,
+  computeFreeFallMetrics,
   computeJumpTelemetry,
   computeLocalMarsGravity,
 } from '../sim/marsPhysics';
+import { soundEngine } from '../utils/soundEngine';
+import {
+  CREW_PROFILES,
+} from '../sim/constants';
+import {
+  DebugOverlayKey,
+  MarsDebugOverlayManager,
+  runLiveDiagnosticsSelfTest,
+} from '../debug/diagnostics';
+import { SelfTestReport, computeModuleAABBs, measurePairwiseSeamGaps } from '../debug/outpostAudit';
 
 export type GraphicsQuality = 'high' | 'low';
 
@@ -41,6 +73,16 @@ export interface GameplayInputState {
   jumpRequested?: boolean;
 }
 
+export interface LandingTelemetrySummary {
+  impactMs: number;
+  fallHeightM: number;
+  marsHangOrFallS: number;
+  earthHangOrFallS: number;
+  apexM: number;
+  earthApexM: number;
+  isJump: boolean;
+}
+
 export interface SimVisualState {
   activeZoneId: MissionZoneId;
   dustFactor: number;
@@ -52,11 +94,13 @@ export interface SimVisualState {
   roverMood: RoverMood;
   roverDamaged: boolean;
   commandModeOpen: boolean;
+  mapOpen?: boolean;
   cameraMode: '3p' | '1p';
   radiationAlert: boolean;
   sol?: number;
   dustTau?: number;
   activeWxWindMs?: number;
+  crew?: CrewMemberState[];
   weatherEvent: {
     active: boolean;
     kind: WeatherEventKind;
@@ -85,13 +129,23 @@ interface MarsOutpost3DProps {
   onShelterReached?: () => void;
   onHabitatDistanceChange?: (meters: number) => void;
   onPhysicsUpdate?: (snapshot: MarsEnvironmentSnapshot) => void;
+  onPoseTelemetry?: (telemetry: GameplayPoseTelemetry) => void;
   onTutorialMoveDone: () => void;
   onTutorialLookDone: () => void;
   onNearbyStationChange: (stationId: OutpostLandmarkId | null) => void;
   onInteractStation: (stationId: OutpostLandmarkId) => void;
+  onEngineReady?: () => void;
+  onNearbyCrewChange?: (crewId: CrewMemberId | null) => void;
+  onInteractCrew?: (crew: CrewInspectCardData) => void;
+  onLandingTelemetry?: (summary: LandingTelemetrySummary) => void;
+  onRoverTiltAlert?: (warning: boolean, tiltDeg: number) => void;
+  onToggleLens?: () => void;
+  onToggleMap?: () => void;
   moveInputRef?: MutableRefObject<GameplayInputState>;
   reducedMotion: boolean;
   quality: GraphicsQuality;
+  debugMode?: boolean;
+  onDebugForcePhase?: (phase: GamePhase) => void;
 }
 
 const CAMERA_PRESETS: Record<
@@ -194,12 +248,34 @@ export function MarsOutpost3D({
   onTutorialLookDone,
   onNearbyStationChange,
   onInteractStation,
+  onEngineReady,
+  onNearbyCrewChange,
+  onInteractCrew,
+  onLandingTelemetry,
+  onRoverTiltAlert,
+  onToggleLens,
+  onToggleMap,
+  onPoseTelemetry,
   moveInputRef,
   reducedMotion,
   quality,
+  debugMode = false,
+  onDebugForcePhase,
 }: MarsOutpost3DProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const rendererQualityRef = useRef<GraphicsQuality>(quality);
   const [webglUnavailable, setWebglUnavailable] = useState(false);
+  const [loadingGameplayOutpost, setLoadingGameplayOutpost] = useState(false);
+  const [curtainOpaque, setCurtainOpaque] = useState(false);
+
+  const layoutMode: OutpostLayoutMode = gamePhase === 'gameplay' ? 'gameplay' : 'showcase';
+
+  const debugModeRef = useRef<boolean>(debugMode);
+  debugModeRef.current = debugMode;
+
+  const onDebugForcePhaseRef = useRef(onDebugForcePhase);
+  onDebugForcePhaseRef.current = onDebugForcePhase;
 
   const gamePhaseRef = useRef<GamePhase>(gamePhase);
   gamePhaseRef.current = gamePhase;
@@ -267,45 +343,106 @@ export function MarsOutpost3D({
   const onInteractRef = useRef(onInteractStation);
   onInteractRef.current = onInteractStation;
 
+  const onEngineReadyRef = useRef(onEngineReady);
+  onEngineReadyRef.current = onEngineReady;
+
+  const onNearbyCrewRef = useRef(onNearbyCrewChange);
+  onNearbyCrewRef.current = onNearbyCrewChange;
+
+  const onInteractCrewRef = useRef(onInteractCrew);
+  onInteractCrewRef.current = onInteractCrew;
+
+  const onLandingTelemetryRef = useRef(onLandingTelemetry);
+  onLandingTelemetryRef.current = onLandingTelemetry;
+
+  const onRoverTiltAlertRef = useRef(onRoverTiltAlert);
+  onRoverTiltAlertRef.current = onRoverTiltAlert;
+
+  const onToggleLensRef = useRef(onToggleLens);
+  onToggleLensRef.current = onToggleLens;
+
+  const onToggleMapRef = useRef(onToggleMap);
+  onToggleMapRef.current = onToggleMap;
+
+  const onPoseTelemetryRef = useRef(onPoseTelemetry);
+  onPoseTelemetryRef.current = onPoseTelemetry;
+
   const reducedMotionRef = useRef(reducedMotion);
   reducedMotionRef.current = reducedMotion;
+
+  // Dispose persistent WebGLRenderer only when MarsOutpost3D unmounts
+  useEffect(() => {
+    return () => {
+      const r = rendererRef.current;
+      if (r) {
+        r.dispose();
+        if (r.domElement.parentNode) {
+          r.domElement.parentNode.removeChild(r.domElement);
+        }
+        rendererRef.current = null;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
 
-    let renderer: THREE.WebGLRenderer;
+    const activeLayout: OutpostLayoutConfig =
+      layoutMode === 'gameplay' ? GAMEPLAY_LAYOUT : SHOWCASE_LAYOUT;
     const isSoftwareGl = detectSoftwareGl();
 
-    try {
-      renderer = new THREE.WebGLRenderer({
-        antialias: quality === 'high' && !isSoftwareGl,
-        powerPreference: 'high-performance',
-        alpha: false,
-      });
-    } catch {
-      setWebglUnavailable(true);
-      return;
+    // Recreate persistent renderer only if uninitialized or graphics quality changed
+    if (rendererRef.current && rendererQualityRef.current !== quality) {
+      const old = rendererRef.current;
+      old.dispose();
+      if (old.domElement.parentNode) {
+        old.domElement.parentNode.removeChild(old.domElement);
+      }
+      rendererRef.current = null;
+    }
+
+    let renderer = rendererRef.current;
+    if (!renderer) {
+      try {
+        renderer = new THREE.WebGLRenderer({
+          antialias: quality === 'high' && !isSoftwareGl,
+          powerPreference: 'high-performance',
+          alpha: false,
+        });
+      } catch {
+        setWebglUnavailable(true);
+        onEngineReadyRef.current?.();
+        return;
+      }
+      renderer.outputColorSpace = THREE.SRGBColorSpace;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.06;
+      renderer.domElement.style.display = 'block';
+      renderer.domElement.style.width = '100%';
+      renderer.domElement.style.height = '100%';
+      renderer.domElement.setAttribute('aria-label', 'Interactive 3D Mars Outpost environment');
+      container.appendChild(renderer.domElement);
+      rendererRef.current = renderer;
+      rendererQualityRef.current = quality;
+    }
+
+    if (layoutMode === 'gameplay') {
+      setCurtainOpaque(true);
+      setLoadingGameplayOutpost(true);
+    } else {
+      setCurtainOpaque(false);
+      setLoadingGameplayOutpost(false);
     }
 
     const width = container.clientWidth || window.innerWidth;
     const height = container.clientHeight || window.innerHeight;
-
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.06;
     const targetPixelRatio =
       isSoftwareGl || quality === 'low' ? 1 : Math.min(window.devicePixelRatio || 1, 2);
     renderer.setPixelRatio(targetPixelRatio);
     renderer.setSize(width, height);
     renderer.shadowMap.enabled = !isSoftwareGl && quality === 'high';
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.domElement.style.display = 'block';
-    renderer.domElement.style.width = '100%';
-    renderer.domElement.style.height = '100%';
-    renderer.domElement.setAttribute('aria-label', 'Interactive 3D Mars Outpost environment');
-
-    container.appendChild(renderer.domElement);
     if (canvasElRef) canvasElRef.current = renderer.domElement;
 
     const handleContextLost = (e: Event) => {
@@ -359,8 +496,21 @@ export function MarsOutpost3D({
     // Full-screen post-processing pipeline on GPU (skipped on software WebGL per Three.js perf budget)
     let composer: EffectComposer | null = null;
     let composerTarget: THREE.WebGLRenderTarget | null = null;
+    let fpRenderPass: RenderPass | null = null;
     let stormPass: ShaderPass | null = null;
     let outputPass: OutputPass | null = null;
+
+    // Build Environment & Detailed Outpost Assets (single-source TerrainHeightGrid per layoutMode)
+    const envBuild = buildMarsEnvironment(scene, renderer, quality, isSoftwareGl, activeLayout);
+    const gAt = (x: number, z: number) => groundHeightAt(x, z, envBuild.terrainGrid);
+    const outpost = buildOutpostAssets(
+      scene,
+      renderer,
+      quality,
+      isSoftwareGl,
+      activeLayout,
+      envBuild.terrainGrid,
+    );
 
     if (!isSoftwareGl) {
       const msaaSamples = renderer.capabilities.isWebGL2 && quality === 'high' ? 4 : 0;
@@ -373,6 +523,12 @@ export function MarsOutpost3D({
       composer.setSize(width, height);
       composer.addPass(new RenderPass(scene, camera));
 
+      fpRenderPass = new RenderPass(outpost.fpScene, outpost.fpCamera);
+      fpRenderPass.clear = false;
+      fpRenderPass.clearDepth = true;
+      fpRenderPass.enabled = false;
+      composer.addPass(fpRenderPass);
+
       stormPass = new ShaderPass(MartianStormShader);
       (stormPass.uniforms.uResolution.value as THREE.Vector2).set(width, height);
       composer.addPass(stormPass);
@@ -381,64 +537,436 @@ export function MarsOutpost3D({
       composer.addPass(outputPass);
     }
 
-    // Build Environment & Detailed Outpost Assets (single-source TerrainHeightGrid)
-    const envBuild = buildMarsEnvironment(scene, renderer, quality, isSoftwareGl);
-    const outpost = buildOutpostAssets(scene, renderer, quality, isSoftwareGl);
+    // Pooled Ground Footprint / Track Decals & Ballistic Kicked Dust Particles (y'' = -3.73)
+    const extraGeos: THREE.BufferGeometry[] = [];
+    const extraMats: THREE.Material[] = [];
+    const extraTexs: THREE.Texture[] = [];
 
-    // Initialize authoritative Rapier WASM physics world
+    const footprintTex = createFootprintDecalTexture();
+    const trackTex = createRoverTrackDecalTexture();
+    extraTexs.push(footprintTex, trackTex);
+
+    const footprintGeo = new THREE.PlaneGeometry(0.18, 0.34);
+    footprintGeo.rotateX(-Math.PI / 2);
+    const trackGeo = new THREE.PlaneGeometry(0.32, 0.56);
+    trackGeo.rotateX(-Math.PI / 2);
+    extraGeos.push(footprintGeo, trackGeo);
+
+    interface DecalSlot {
+      mesh: THREE.Mesh;
+      mat: THREE.MeshBasicMaterial;
+      age: number;
+      maxAge: number;
+    }
+
+    const createDecalPool = (
+      count: number,
+      geo: THREE.BufferGeometry,
+      map: THREE.Texture,
+      maxAge: number,
+    ): DecalSlot[] => {
+      const pool: DecalSlot[] = [];
+      for (let i = 0; i < count; i++) {
+        const mat = new THREE.MeshBasicMaterial({
+          map,
+          transparent: true,
+          opacity: 0,
+          depthWrite: false,
+          polygonOffset: true,
+          polygonOffsetFactor: -2,
+          polygonOffsetUnits: -2,
+        });
+        extraMats.push(mat);
+        const mesh = new THREE.Mesh(geo, mat);
+        mesh.visible = false;
+        scene.add(mesh);
+        pool.push({ mesh, mat, age: maxAge, maxAge });
+      }
+      return pool;
+    };
+
+    const footprintPool = createDecalPool(24, footprintGeo, footprintTex, 18.0);
+    const roverTrackPool = createDecalPool(24, trackGeo, trackTex, 20.0);
+    let footprintCursor = 0;
+    let trackCursor = 0;
+
+    const stampDecal = (
+      pool: DecalSlot[],
+      cursorRef: { idx: number },
+      x: number,
+      z: number,
+      yaw: number,
+    ) => {
+      const slot = pool[cursorRef.idx % pool.length];
+      cursorRef.idx = (cursorRef.idx + 1) % pool.length;
+      slot.mesh.position.set(x, groundHeightAt(x, z, envBuild.terrainGrid) + 0.016, z);
+      slot.mesh.rotation.y = yaw;
+      slot.mesh.visible = true;
+      slot.age = 0;
+      slot.mat.opacity = 0.72;
+    };
+
+    // Ballistic kicked-dust pool (max 60 particles following y'' = -3.73 m/s^2)
+    const KICK_PARTICLE_COUNT = 60;
+    const kickPositions = new Float32Array(KICK_PARTICLE_COUNT * 3);
+    const kickVel = new Float32Array(KICK_PARTICLE_COUNT * 3);
+    const kickAge = new Float32Array(KICK_PARTICLE_COUNT);
+    const kickMaxAge = new Float32Array(KICK_PARTICLE_COUNT);
+    for (let i = 0; i < KICK_PARTICLE_COUNT; i++) {
+      kickAge[i] = 99;
+      kickMaxAge[i] = 1.0;
+      kickPositions[i * 3 + 1] = -999;
+    }
+    const kickGeo = new THREE.BufferGeometry();
+    kickGeo.setAttribute('position', new THREE.BufferAttribute(kickPositions, 3));
+    extraGeos.push(kickGeo);
+    const kickMat = new THREE.PointsMaterial({
+      color: '#d98a5f',
+      size: 0.14,
+      transparent: true,
+      opacity: 0.65,
+      depthWrite: false,
+    });
+    extraMats.push(kickMat);
+    const kickPoints = new THREE.Points(kickGeo, kickMat);
+    kickPoints.frustumCulled = false;
+    scene.add(kickPoints);
+    let kickCursor = 0;
+
+    const spawnBallisticDust = (
+      x: number,
+      y: number,
+      z: number,
+      count: number,
+      speedScale = 1.0,
+    ) => {
+      for (let c = 0; c < count; c++) {
+        const idx = kickCursor;
+        kickCursor = (kickCursor + 1) % KICK_PARTICLE_COUNT;
+        const ang = Math.random() * Math.PI * 2;
+        const horiz = (0.35 + Math.random() * 0.75) * speedScale;
+        kickPositions[idx * 3] = x + Math.cos(ang) * 0.12;
+        kickPositions[idx * 3 + 1] = y + 0.06;
+        kickPositions[idx * 3 + 2] = z + Math.sin(ang) * 0.12;
+        kickVel[idx * 3] = Math.cos(ang) * horiz;
+        kickVel[idx * 3 + 1] = (1.15 + Math.random() * 0.95) * speedScale;
+        kickVel[idx * 3 + 2] = Math.sin(ang) * horiz;
+        kickAge[idx] = 0;
+        kickMaxAge[idx] = 0.75 + Math.random() * 0.45;
+      }
+    };
+
+    // Autonomous 4 Crew Agents + 6-Wheel Rocker-Bogie Rover Controller
+    let crewAgents: CrewAgentState[] = createInitialCrewAgents(envBuild.terrainGrid, activeLayout);
+    let roverController: RoverControllerState = createInitialRoverController(
+      outpost.roverBasePos.x,
+      outpost.roverBasePos.z,
+      activeLayout.modules.roverSpawn.yaw,
+      envBuild.terrainGrid,
+      activeLayout,
+    );
+    const mSpec = activeLayout.modules;
+    const outpostObstacles = [
+      { x: mSpec.habitat.x, z: mSpec.habitat.z, radius: mSpec.habitat.deckRadius + 0.25 },
+      { x: mSpec.chapea.x, z: mSpec.chapea.z, radius: mSpec.chapea.plinthHalfX + 0.35 },
+      { x: mSpec.greenhouse.x, z: mSpec.greenhouse.z, radius: mSpec.greenhouse.floorRadius + 0.35 },
+      { x: mSpec.recycler.x, z: mSpec.recycler.z, radius: 1.2 },
+      { x: mSpec.shelter.x, z: mSpec.shelter.z, radius: 1.7 },
+      { x: mSpec.tank2.x, z: mSpec.tank2.z, radius: 1.6 },
+      { x: outpost.stationInteractPoints.solar.x, z: outpost.stationInteractPoints.solar.z, radius: 2.2 },
+      { x: outpost.stationInteractPoints['ice-drill'].x, z: outpost.stationInteractPoints['ice-drill'].z, radius: 2.2 },
+      { x: outpost.stationInteractPoints.windmill.x, z: outpost.stationInteractPoints.windmill.z, radius: 1.8 },
+      { x: outpost.stationInteractPoints['power-console'].x, z: outpost.stationInteractPoints['power-console'].z, radius: 1.1 },
+      { x: mSpec.commsMast.x, z: mSpec.commsMast.z, radius: mSpec.commsMast.radiusM + 0.35 },
+    ];
+
+    // Initialize authoritative Rapier WASM physics world ONLY for Gameplay layout
     let physicsWorld: MarsPhysicsWorld | null = null;
     let disposed = false;
+    let introGlideActive = false;
+    let introGlideTimer = 0;
+    const INTRO_GLIDE_DURATION_S = 1.35;
 
-    void MarsPhysicsWorld.create({
-      grid: envBuild.terrainGrid,
-      quality,
-      rockSpecs: envBuild.rockSpecs,
-      startX: outpost.astroBasePos.x,
-      startZ: outpost.astroBasePos.z,
-    }).then((pw) => {
-      if (disposed) {
-        pw.dispose();
-        return;
-      }
-      physicsWorld = pw;
-    });
+    if (layoutMode === 'gameplay') {
+      void MarsPhysicsWorld.create({
+        layout: activeLayout,
+        grid: envBuild.terrainGrid,
+        quality,
+        rockSpecs: envBuild.rockSpecs,
+        startX: outpost.astroBasePos.x,
+        startZ: outpost.astroBasePos.z,
+      }).then((pw) => {
+        if (disposed) {
+          pw.dispose();
+          return;
+        }
+        physicsWorld = pw;
+        setLoadingGameplayOutpost(false);
+        setCurtainOpaque(false);
+        if (!reducedMotionRef.current) {
+          introGlideActive = true;
+          introGlideTimer = 0;
+        }
+        onEngineReadyRef.current?.();
+      });
+    } else {
+      // Showcase Landing/Prologue/Briefing runs with zero Rapier overhead
+      onEngineReadyRef.current?.();
+    }
 
-    // Gameplay state driven by Rapier physics
+    // Gameplay state driven by Rapier physics (spawn at Airlock Door facing N/NE when gameplay)
+    const initPlayerYaw =
+      layoutMode === 'gameplay' ? activeLayout.modules.astroSpawn.yaw : THIRD_PERSON_INIT_YAW;
     const playerPos = new THREE.Vector2(outpost.astroBasePos.x, outpost.astroBasePos.z);
-    let playerFootY = groundHeightAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
-    let playerYaw = THIRD_PERSON_INIT_YAW;
+    let playerFootY = gAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
+    let playerYaw = initPlayerYaw;
     let playerGrounded = true;
     let playerJumpQueued = false;
-    let camYaw = THIRD_PERSON_INIT_YAW;
+    let camYaw = initPlayerYaw;
     let camPitch = THIRD_PERSON_INIT_PITCH;
     let camDist = THIRD_PERSON_DIST;
     let walkPhase = 0;
+    let lastStepHalfCycle = 0;
+    let landingDipY = 0;
+    let fpInteractPulse = 0;
     let totalDistanceMoved = 0;
     let totalLookDelta = 0;
     let moveTutorialReported = false;
     let lookTutorialReported = false;
     let lastNearbyId: OutpostLandmarkId | null = null;
     let lastNearbyZoneId: MissionZoneId | null = null;
+    let lastNearbyCrewId: CrewMemberId | null = null;
     let lastHabDistMeters = -1;
     let shelterSentThisEvent = false;
+    let lastRoverTiltWarn = false;
+    let lastRoverTrackPos = new THREE.Vector2(outpost.roverBasePos.x, outpost.roverBasePos.z);
     let prevPhase: GamePhase = gamePhaseRef.current;
     let lastJumpTelemetry: MarsJumpTelemetry | null = null;
     let lastPhysicsPushMs = 0;
+    let lastPoseTelemetryMs = 0;
 
-    const roverPos = new THREE.Vector2(outpost.roverBasePos.x, outpost.roverBasePos.z);
-    let roverYaw = -1.02;
+    // Optional zero-cost-when-off ?debug=1 diagnostics layer
+    let debugSpeedMult = 1;
+    let debugCamOverride: { pos: THREE.Vector3; look: THREE.Vector3 } | null = null;
+    let lastDebugReport: SelfTestReport | null = null;
+    const overlayMgr = debugModeRef.current
+      ? new MarsDebugOverlayManager(scene, outpost, activeLayout)
+      : null;
 
-    // Keyboard state for WASD / Arrow Keys / Shift Lope / Space Jump / V 1P-3P / E Interact
+    if (debugModeRef.current && overlayMgr) {
+      window.__MARS_DEBUG__ = {
+        enabled: true,
+        get player() {
+          const snap = physicsWorld?.getSnapshot();
+          return {
+            x: Number(playerPos.x.toFixed(3)),
+            footY: Number(playerFootY.toFixed(3)),
+            centerY: Number((snap?.centerY ?? playerFootY + 0.92).toFixed(3)),
+            z: Number(playerPos.y.toFixed(3)),
+            vx: Number((snap?.vx ?? 0).toFixed(3)),
+            vy: Number((snap?.vy ?? 0).toFixed(3)),
+            vz: Number((snap?.vz ?? 0).toFixed(3)),
+            grounded: playerGrounded,
+            speedMs: Number((snap?.horizontalSpeedMs ?? 0).toFixed(3)),
+            yawDeg: Number(((playerYaw * 180) / Math.PI).toFixed(1)),
+            capsuleRadiusM: PHYSICS_CONSTANTS.CAPSULE_RADIUS_M,
+            capsuleHeightM: PHYSICS_CONSTANTS.CAPSULE_TOTAL_HEIGHT_M,
+          };
+        },
+        get crew() {
+          const physRegistered = (physicsWorld?.crewBodyIds.length ?? 0) > 0;
+          return crewAgents.map((ag) => {
+            const prof = CREW_PROFILES.find((p) => p.id === ag.id);
+            const curSt =
+              ag.stations[ag.activeStationIndex % ag.stations.length] ?? ag.homeStation;
+            return {
+              id: ag.id,
+              name: prof?.name ?? ag.id,
+              position: { x: Number(ag.x.toFixed(3)), y: Number(ag.y.toFixed(3)), z: Number(ag.z.toFixed(3)) },
+              velocity: { x: Number(ag.vx.toFixed(3)), y: 0, z: Number(ag.vz.toFixed(3)) },
+              speedMs: Number(ag.speedMs.toFixed(3)),
+              state: ag.mode,
+              currentStation: curSt.label,
+              targetStation: curSt.label,
+              path: ag.path.map((pt) => ({
+                x: Number(pt.x.toFixed(3)),
+                y: Number(
+                  (physicsWorld
+                    ? physicsWorld.getGroundSupportHeightAt(pt.x, pt.z)
+                    : groundHeightAt(pt.x, pt.z, envBuild.terrainGrid)
+                  ).toFixed(3),
+                ),
+                z: Number(pt.z.toFixed(3)),
+              })),
+              physicsRegistered: physRegistered,
+            };
+          });
+        },
+        get rover() {
+          return {
+            x: Number(roverController.x.toFixed(3)),
+            y: Number(roverController.y.toFixed(3)),
+            z: Number(roverController.z.toFixed(3)),
+            yawRad: Number(roverController.yaw.toFixed(3)),
+            speedMs: Number(roverController.speedMs.toFixed(3)),
+            tiltDeg: roverController.tiltDeg,
+            state: roverController.state,
+          };
+        },
+        get camera() {
+          return {
+            x: Number(camera.position.x.toFixed(3)),
+            y: Number(camera.position.y.toFixed(3)),
+            z: Number(camera.position.z.toFixed(3)),
+            yawRad: Number(camYaw.toFixed(3)),
+            pitchRad: Number(camPitch.toFixed(3)),
+            mode: simVisualsRef.current?.cameraMode ?? '3p',
+            overridden: Boolean(debugCamOverride),
+          };
+        },
+        get overlays() {
+          return { ...overlayMgr.flags };
+        },
+        setOverlay(key, value) {
+          overlayMgr.setFlag(key, value);
+          window.dispatchEvent(new Event('mars-debug-sync'));
+        },
+        toggleOverlay(key) {
+          const next = !overlayMgr.flags[key];
+          overlayMgr.setFlag(key, next);
+          window.dispatchEvent(new Event('mars-debug-sync'));
+          return next;
+        },
+        getSelectedCrewId() {
+          return overlayMgr.selectedCrewId;
+        },
+        cycleSelectedCrew() {
+          const id = overlayMgr.cycleSelectedCrew();
+          window.dispatchEvent(new Event('mars-debug-sync'));
+          return id;
+        },
+        setGameSpeed(mult) {
+          debugSpeedMult = Math.max(0.1, Math.min(20, Number.isFinite(mult) ? mult : 1));
+          window.dispatchEvent(new Event('mars-debug-sync'));
+        },
+        getGameSpeed() {
+          return debugSpeedMult;
+        },
+        setPhase(nextPhase) {
+          onDebugForcePhaseRef.current?.(nextPhase);
+        },
+        teleport(opts) {
+          if (opts.kind === 'camera-reset') {
+            debugCamOverride = null;
+          } else if (opts.kind === 'camera') {
+            const x = opts.x ?? camera.position.x;
+            const y = opts.y ?? camera.position.y;
+            const z = opts.z ?? camera.position.z;
+            const look = opts.lookAt
+              ? new THREE.Vector3(opts.lookAt.x, opts.lookAt.y, opts.lookAt.z)
+              : new THREE.Vector3(4.4, 1.2, -3.4);
+            debugCamOverride = { pos: new THREE.Vector3(x, y, z), look };
+            currentCamPos.copy(debugCamOverride.pos);
+            currentLookAt.copy(debugCamOverride.look);
+          } else if (opts.kind === 'player' && opts.x !== undefined && opts.z !== undefined) {
+            debugCamOverride = null;
+            playerPos.set(opts.x, opts.z);
+            playerFootY = gAt(opts.x, opts.z);
+            if (opts.yaw !== undefined) {
+              playerYaw = opts.yaw;
+              camYaw = opts.yaw;
+            }
+            if (opts.pitch !== undefined) camPitch = opts.pitch;
+            physicsWorld?.teleportPlayer(opts.x, opts.z);
+          } else if (opts.kind === 'crew' && opts.x !== undefined && opts.z !== undefined) {
+            const targetId = opts.crewId ?? overlayMgr.selectedCrewId;
+            const synced = physicsWorld?.teleportCrewMember(targetId, opts.x, opts.z);
+            crewAgents = crewAgents.map((ag) =>
+              ag.id === targetId
+                ? {
+                    ...ag,
+                    x: synced ? synced.x : opts.x!,
+                    z: synced ? synced.z : opts.z!,
+                    y: synced ? synced.footY : gAt(opts.x!, opts.z!),
+                    lastGoalKey: '',
+                  }
+                : ag,
+            );
+          }
+          window.dispatchEvent(new Event('mars-debug-sync'));
+        },
+        getModuleList() {
+          return {
+            modules: computeModuleAABBs(outpost, physicsWorld),
+            seams: measurePairwiseSeamGaps(outpost, physicsWorld, activeLayout),
+          };
+        },
+        getStaticColliders() {
+          return {
+            staticColliders: physicsWorld ? physicsWorld.getStaticColliderRecords() : [],
+            roverCollider: physicsWorld ? physicsWorld.getRoverColliderState() : null,
+            activeRocks: physicsWorld ? physicsWorld.getActiveRockSpecs() : [],
+          };
+        },
+        async runSelfTest() {
+          const rep = await runLiveDiagnosticsSelfTest({
+            outpost,
+            physicsWorld,
+            crewAgents,
+            roverState: roverController,
+            cameraMode: simVisualsRef.current?.cameraMode ?? '3p',
+            layout: activeLayout,
+          });
+          lastDebugReport = rep;
+          window.dispatchEvent(new Event('mars-debug-sync'));
+          return rep;
+        },
+        getLastReport() {
+          return lastDebugReport;
+        },
+      };
+    }
+
+    // Keyboard state for WASD / Arrow Keys / Shift Lope / Space Jump / V 1P-3P / F Lens / E Interact
     const keysDown = new Set<string>();
     const handleKeyDown = (ev: KeyboardEvent) => {
-      if (gamePhaseRef.current !== 'gameplay') return;
       const target = ev.target as HTMLElement | null;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return;
+
+      // ?debug=1 overlay hotkeys work in any phase when not typing
+      if (debugModeRef.current && overlayMgr && !ev.repeat) {
+        const keyLower = ev.key.toLowerCase();
+        const map: Record<string, DebugOverlayKey> = {
+          '1': 'colliders',
+          '2': 'crewGizmos',
+          '3': 'navGraph',
+          '4': 'moduleBounds',
+          '5': 'stationSlots',
+          '6': 'doorways',
+        };
+        if (map[keyLower]) {
+          overlayMgr.setFlag(map[keyLower], !overlayMgr.flags[map[keyLower]]);
+          window.dispatchEvent(new Event('mars-debug-sync'));
+          return;
+        }
+        if (keyLower === 'n') {
+          overlayMgr.cycleSelectedCrew();
+          window.dispatchEvent(new Event('mars-debug-sync'));
+          return;
+        }
+      }
+
+      if (gamePhaseRef.current !== 'gameplay') return;
 
       const simState = simVisualsRef.current;
       if (simState?.commandModeOpen || pausedRef.current) return;
 
       const k = ev.key.toLowerCase();
+      if (k === 'm' && !ev.repeat) {
+        onToggleMapRef.current?.();
+        return;
+      }
+      if (simState?.mapOpen) return;
       if (['w', 'a', 's', 'd', 'shift', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
         keysDown.add(k);
       } else if (k === ' ' && !ev.repeat) {
@@ -448,7 +976,7 @@ export function MarsOutpost3D({
           const localGrav = computeLocalMarsGravity(
             playerPos.x,
             playerPos.y,
-            groundHeightAt(playerPos.x, playerPos.y),
+            gAt(playerPos.x, playerPos.y),
           );
           lastJumpTelemetry = computeJumpTelemetry(
             PHYSICS_CONSTANTS.SUITED_TAKEOFF_MS,
@@ -457,9 +985,18 @@ export function MarsOutpost3D({
         }
       } else if (k === 'v' && !ev.repeat) {
         onToggleCamRef.current?.();
+      } else if (k === 'f' && !ev.repeat) {
+        onToggleLensRef.current?.();
       } else if (k === 'e' && !ev.repeat) {
+        fpInteractPulse = 1.0;
         if (simState?.weatherEvent?.active && lastNearbyId === 'habitat') {
           onShelterReachedRef.current?.();
+        } else if (lastNearbyCrewId && onInteractCrewRef.current) {
+          const ag = crewAgents.find((c) => c.id === lastNearbyCrewId);
+          if (ag) {
+            const mem = simState?.crew?.find((m) => m.id === ag.id);
+            onInteractCrewRef.current(getCrewInspectInfo(ag, mem));
+          }
         } else if (lastNearbyZoneId && onInteractZoneRef.current) {
           onInteractZoneRef.current(lastNearbyZoneId);
         } else if (lastNearbyId) {
@@ -575,11 +1112,23 @@ export function MarsOutpost3D({
     const triggerRaycastInteract = (ndcX: number, ndcY: number) => {
       pointerNdc.set(ndcX, ndcY);
       raycaster.setFromCamera(pointerNdc, camera);
-      const zoneTargets = Object.values(outpost.zonePositions).length > 0 ? scene.children : [];
-      const hits = raycaster.intersectObjects(zoneTargets, true);
+      const hits = raycaster.intersectObjects(scene.children, true);
+      const hitCrew = hits.find((h) => h.object.userData.crewId)?.object.userData.crewId as
+        | CrewMemberId
+        | undefined;
+      if (hitCrew && onInteractCrewRef.current) {
+        const ag = crewAgents.find((c) => c.id === hitCrew);
+        if (ag) {
+          const mem = simVisualsRef.current?.crew?.find((m) => m.id === ag.id);
+          fpInteractPulse = 1.0;
+          onInteractCrewRef.current(getCrewInspectInfo(ag, mem));
+          return;
+        }
+      }
       const hitZone = hits.find((h) => h.object.userData.missionZoneId)?.object.userData
         .missionZoneId as MissionZoneId | undefined;
       if (hitZone && onInteractZoneRef.current) {
+        fpInteractPulse = 1.0;
         onInteractZoneRef.current(hitZone);
         return;
       }
@@ -587,6 +1136,7 @@ export function MarsOutpost3D({
       if (landmarkHits.length > 0) {
         const hitId = landmarkHits[0].object.userData.landmarkId as OutpostLandmarkId | undefined;
         if (hitId && hitId !== 'astronaut') {
+          fpInteractPulse = 1.0;
           onInteractRef.current(hitId);
         }
       }
@@ -594,7 +1144,7 @@ export function MarsOutpost3D({
 
     const handlePointerMove = (ev: PointerEvent) => {
       if (gamePhaseRef.current === 'gameplay') {
-        if (simVisualsRef.current?.commandModeOpen || pausedRef.current) {
+        if (simVisualsRef.current?.commandModeOpen || simVisualsRef.current?.mapOpen || pausedRef.current) {
           renderer.domElement.style.cursor = 'default';
           return;
         }
@@ -641,7 +1191,7 @@ export function MarsOutpost3D({
 
     const handlePointerDown = (ev: PointerEvent) => {
       if (gamePhaseRef.current === 'gameplay') {
-        if (simVisualsRef.current?.commandModeOpen || pausedRef.current) return;
+        if (simVisualsRef.current?.commandModeOpen || simVisualsRef.current?.mapOpen || pausedRef.current) return;
 
         // If already pointer-locked, a click interacts via centered reticle (0, 0)
         if (pointerLocked) {
@@ -721,6 +1271,8 @@ export function MarsOutpost3D({
       isMobile = w < 768;
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
+      outpost.fpCamera.aspect = w / h;
+      outpost.fpCamera.updateProjectionMatrix();
       renderer.setSize(w, h);
       if (composer) {
         composer.setPixelRatio(targetPixelRatio);
@@ -754,7 +1306,7 @@ export function MarsOutpost3D({
 
       const cx = px - fwdX * camDist * cosP;
       const cz = pz - fwdZ * camDist * cosP;
-      const minFloorY = groundHeightAt(cx, cz) + 0.58;
+      const minFloorY = gAt(cx, cz) + 0.58;
       const cy = Math.max(footY + 1.48 + sinP * camDist, minFloorY);
 
       outCam.set(cx, cy, cz);
@@ -770,6 +1322,8 @@ export function MarsOutpost3D({
     const _lookB = new THREE.Vector3();
     const _tpCam = new THREE.Vector3();
     const _tpLook = new THREE.Vector3();
+    const _introCamStart = new THREE.Vector3(0.0, 10.6, 22.5);
+    const _introLookStart = new THREE.Vector3(0.0, 2.0, 1.5);
     const _clearFogColor = new THREE.Color('#5c2e26');
     const _stormFogColor = new THREE.Color('#8f4722');
     const _tintDustDevil = new THREE.Vector3(1.24, 0.78, 0.50);
@@ -781,7 +1335,7 @@ export function MarsOutpost3D({
     const clock = new THREE.Clock();
 
     function afterDraw(cb: () => void) {
-      const gl = renderer.getContext() as WebGL2RenderingContext;
+      const gl = renderer!.getContext() as WebGL2RenderingContext;
       const sync = gl.fenceSync?.(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
       gl.flush();
       const poll = () => {
@@ -798,7 +1352,7 @@ export function MarsOutpost3D({
     }
 
     function tick() {
-      if (disposed) return;
+      if (disposed || !renderer) return;
       const delta = Math.min(clock.getDelta(), isSoftwareGl ? 0.35 : 0.12);
       const elapsed = clock.getElapsedTime();
       const isStatic = reducedMotionRef.current;
@@ -808,9 +1362,9 @@ export function MarsOutpost3D({
       if (phase !== prevPhase) {
         if (phase === 'landing' || phase === 'prologue') {
           playerPos.set(outpost.astroBasePos.x, outpost.astroBasePos.z);
-          playerFootY = groundHeightAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
+          playerFootY = gAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
           playerYaw = outpost.astroBasePos.yaw;
-          camYaw = THIRD_PERSON_INIT_YAW;
+          camYaw = initPlayerYaw;
           camPitch = THIRD_PERSON_INIT_PITCH;
           totalDistanceMoved = 0;
           totalLookDelta = 0;
@@ -823,9 +1377,9 @@ export function MarsOutpost3D({
           }
         } else if (phase === 'briefing') {
           playerPos.set(outpost.astroBasePos.x, outpost.astroBasePos.z);
-          playerFootY = groundHeightAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
-          playerYaw = THIRD_PERSON_INIT_YAW;
-          camYaw = THIRD_PERSON_INIT_YAW;
+          playerFootY = gAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
+          playerYaw = initPlayerYaw;
+          camYaw = initPlayerYaw;
           camPitch = THIRD_PERSON_INIT_PITCH;
           physicsWorld?.teleportPlayer(outpost.astroBasePos.x, outpost.astroBasePos.z);
           computeThirdPersonRig(
@@ -839,17 +1393,60 @@ export function MarsOutpost3D({
           );
         } else if (phase === 'gameplay' && prevPhase !== 'briefing') {
           playerPos.set(outpost.astroBasePos.x, outpost.astroBasePos.z);
-          playerFootY = groundHeightAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
-          playerYaw = THIRD_PERSON_INIT_YAW;
-          camYaw = THIRD_PERSON_INIT_YAW;
+          playerFootY = gAt(outpost.astroBasePos.x, outpost.astroBasePos.z);
+          playerYaw = initPlayerYaw;
+          camYaw = initPlayerYaw;
           camPitch = THIRD_PERSON_INIT_PITCH;
           physicsWorld?.teleportPlayer(outpost.astroBasePos.x, outpost.astroBasePos.z);
         }
         prevPhase = phase;
       }
 
-      // Live lighting & environmental hazards driven by Simulation State
+      // Live celestial sky (Phobos 7.65h + Deimos 30.3h + Henyey-Greenstein blue aureole & Beer-Lambert tau)
       const sim = simVisualsRef.current;
+      envBuild.updateCelestialAndSky(isStatic ? 0 : elapsed, sim?.dustTau ?? 1.0);
+
+      // Update decal fades & ballistic kicked dust (y'' = -3.73 m/s^2)
+      const updateDecalFade = (pool: DecalSlot[]) => {
+        for (const slot of pool) {
+          if (!slot.mesh.visible) continue;
+          slot.age += delta;
+          if (slot.age >= slot.maxAge) {
+            slot.mesh.visible = false;
+          } else {
+            slot.mat.opacity = 0.72 * (1 - slot.age / slot.maxAge);
+          }
+        }
+      };
+      updateDecalFade(footprintPool);
+      updateDecalFade(roverTrackPool);
+
+      let anyDustMoved = false;
+      for (let i = 0; i < KICK_PARTICLE_COUNT; i++) {
+        if (kickAge[i] >= kickMaxAge[i]) continue;
+        anyDustMoved = true;
+        kickAge[i] += delta;
+        if (kickAge[i] >= kickMaxAge[i]) {
+          kickPositions[i * 3 + 1] = -999;
+          continue;
+        }
+        kickVel[i * 3 + 1] -= MARS_FACTS.GRAVITY_MS2 * delta;
+        kickPositions[i * 3] += kickVel[i * 3] * delta;
+        kickPositions[i * 3 + 1] += kickVel[i * 3 + 1] * delta;
+        kickPositions[i * 3 + 2] += kickVel[i * 3 + 2] * delta;
+        const gy = groundHeightAt(kickPositions[i * 3], kickPositions[i * 3 + 2], envBuild.terrainGrid);
+        if (kickPositions[i * 3 + 1] < gy + 0.02) {
+          kickPositions[i * 3 + 1] = gy + 0.02;
+          kickVel[i * 3] *= 0.45;
+          kickVel[i * 3 + 1] = 0;
+          kickVel[i * 3 + 2] *= 0.45;
+        }
+      }
+      if (anyDustMoved) {
+        (kickGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+      }
+
+      // Live lighting & environmental hazards driven by Simulation State
       const alloc = powerAllocRef.current;
       const habFactor = 0.55 + (alloc.habitat / 6) * 0.85;
       const ghFactor = 0.55 + (alloc.greenhouse / 6) * 0.95;
@@ -988,7 +1585,7 @@ export function MarsOutpost3D({
       if (wxActive && sim?.weatherEvent) {
         const wxX = sim.weatherEvent.x + (isStatic ? 0 : Math.sin(elapsed * 0.45) * 1.45);
         const wxZ = sim.weatherEvent.z + (isStatic ? 0 : Math.cos(elapsed * 0.38) * 1.45);
-        outpost.dustDevilGroup.position.set(wxX, groundHeightAt(wxX, wxZ), wxZ);
+        outpost.dustDevilGroup.position.set(wxX, gAt(wxX, wxZ), wxZ);
 
         if (!isStatic) {
           const speedScale = sim.weatherEvent.kind === 'dust-devil' ? 1.0 : 0.72;
@@ -1014,7 +1611,7 @@ export function MarsOutpost3D({
         outpost.habShelterDiamond.rotation.y += delta * 2.8;
       }
 
-      // Power Console Beacon pulse
+      // Power Console Beacon pulse + Perimeter Solar Bollards
       const isTutorial4 = phase === 'gameplay' && tutorialStepRef.current === 4;
       const beaconPulse = 0.5 + 0.5 * Math.sin(elapsed * 4.2);
       outpost.powerBeaconRingMat.opacity = isTutorial4 ? 0.55 + beaconPulse * 0.35 : 0.22;
@@ -1023,6 +1620,10 @@ export function MarsOutpost3D({
       outpost.powerBeaconDiamond.position.y = 1.82 + Math.sin(elapsed * 2.8) * 0.12;
       outpost.powerBeaconDiamond.rotation.y += delta * 1.6;
       outpost.matConsoleScreen.emissiveIntensity = isTutorial4 ? 1.8 + beaconPulse * 0.6 : 1.35;
+      if (outpost.bollardLampMat) {
+        outpost.bollardLampMat.emissiveIntensity =
+          wxActive || sim?.radiationAlert ? 2.3 + Math.sin(elapsed * 5.0) * 0.4 : 1.15;
+      }
 
       // Solar-wind aurora & space weather cue (Prologue Scene 4 OR M5 Radiation Alert)
       let auroraTarget = 0.0;
@@ -1097,7 +1698,7 @@ export function MarsOutpost3D({
         // Idle natural human pose & elbow-articulated wave
         outpost.astroGroup.position.set(
           outpost.astroBasePos.x,
-          groundHeightAt(outpost.astroBasePos.x, outpost.astroBasePos.z),
+          gAt(outpost.astroBasePos.x, outpost.astroBasePos.z),
           outpost.astroBasePos.z,
         );
         outpost.astroGroup.rotation.y = outpost.astroBasePos.yaw;
@@ -1184,7 +1785,7 @@ export function MarsOutpost3D({
         const t = THREE.MathUtils.clamp(prologueElapsedRef.current, 0, PROLOGUE_DURATION_SEC);
         const ax = outpost.astroBasePos.x;
         const az = outpost.astroBasePos.z;
-        const ay = groundHeightAt(ax, az);
+        const ay = gAt(ax, az);
 
         outpost.astroGroup.position.set(ax, ay, az);
         outpost.astroPelvisGroup.position.y = isStatic ? 0.86 : 0.858 + Math.sin(elapsed * 1.9) * 0.007;
@@ -1307,7 +1908,7 @@ export function MarsOutpost3D({
       else if (phase === 'briefing') {
         outpost.astroGroup.position.set(
           playerPos.x,
-          groundHeightAt(playerPos.x, playerPos.y),
+          gAt(playerPos.x, playerPos.y),
           playerPos.y,
         );
         outpost.astroGroup.rotation.y = playerYaw;
@@ -1352,7 +1953,7 @@ export function MarsOutpost3D({
 
         computeThirdPersonRig(
           playerPos.x,
-          groundHeightAt(playerPos.x, playerPos.y),
+          gAt(playerPos.x, playerPos.y),
           playerPos.y,
           camYaw,
           camPitch,
@@ -1370,7 +1971,8 @@ export function MarsOutpost3D({
       // =========================================================================
       else if (phase === 'gameplay') {
         const simState = simVisualsRef.current;
-        const isFrozenInCommandMode = Boolean(simState?.commandModeOpen) || pausedRef.current;
+        const isFrozenInCommandMode =
+          Boolean(simState?.commandModeOpen) || Boolean(simState?.mapOpen) || pausedRef.current;
         if (isFrozenInCommandMode && document.pointerLockElement === renderer.domElement) {
           document.exitPointerLock?.();
         }
@@ -1383,7 +1985,7 @@ export function MarsOutpost3D({
             const localGrav = computeLocalMarsGravity(
               playerPos.x,
               playerPos.y,
-              groundHeightAt(playerPos.x, playerPos.y),
+              gAt(playerPos.x, playerPos.y),
             );
             lastJumpTelemetry = computeJumpTelemetry(
               PHYSICS_CONSTANTS.SUITED_TAKEOFF_MS,
@@ -1419,15 +2021,47 @@ export function MarsOutpost3D({
           const jumpReq = playerJumpQueued;
           playerJumpQueued = false;
 
-          const snap = physicsWorld.stepFrame(delta, {
-            moveFwd,
-            moveStrafe,
-            camYaw,
-            sprint: isSprinting,
-            jumpRequested: jumpReq,
-            quickMode: quickModeRef.current,
-          });
-          physicsWorld.consumeLastLanding();
+          const subSteps = debugModeRef.current && debugSpeedMult > 1 ? Math.ceil(debugSpeedMult) : 1;
+          const simStepDt = (delta * (debugModeRef.current ? debugSpeedMult : 1)) / subSteps;
+          let snap = physicsWorld.getSnapshot();
+          for (let sIdx = 0; sIdx < subSteps; sIdx++) {
+            snap = physicsWorld.stepFrame(simStepDt, {
+              moveFwd,
+              moveStrafe,
+              camYaw,
+              sprint: isSprinting,
+              jumpRequested: sIdx === 0 ? jumpReq : false,
+              quickMode: quickModeRef.current,
+            });
+          }
+          const landingEv = physicsWorld.consumeLastLanding();
+          if (landingEv) {
+            soundEngine.playLandingThud(landingEv.impactSpeedMs);
+            landingDipY = isStatic ? 0 : Math.min(0.16, landingEv.impactSpeedMs * 0.032);
+            spawnBallisticDust(snap.x, snap.footY, snap.z, 8, Math.min(1.5, landingEv.impactSpeedMs * 0.32));
+
+            if (lastJumpTelemetry || landingEv.fallHeightM >= 0.32) {
+              const ff = computeFreeFallMetrics(landingEv.fallHeightM, MARS_FACTS.GRAVITY_MS2);
+              onLandingTelemetryRef.current?.({
+                impactMs: Number(landingEv.impactSpeedMs.toFixed(2)),
+                fallHeightM: Number(landingEv.fallHeightM.toFixed(2)),
+                marsHangOrFallS: Number(
+                  (lastJumpTelemetry ? lastJumpTelemetry.hangTimeSeconds : ff.fallTimeSeconds).toFixed(2),
+                ),
+                earthHangOrFallS: Number(
+                  (lastJumpTelemetry ? lastJumpTelemetry.earthHangTimeSeconds : ff.earthFallTimeSeconds).toFixed(2),
+                ),
+                apexM: Number(
+                  (lastJumpTelemetry ? lastJumpTelemetry.peakHeightMeters : landingEv.fallHeightM).toFixed(2),
+                ),
+                earthApexM: Number(
+                  (lastJumpTelemetry ? lastJumpTelemetry.earthPeakHeightMeters : landingEv.fallHeightM * (MARS_FACTS.GRAVITY_MS2 / MARS_FACTS.EARTH_GRAVITY_MS2)).toFixed(2),
+                ),
+                isJump: Boolean(lastJumpTelemetry),
+              });
+              lastJumpTelemetry = null;
+            }
+          }
 
           playerPos.set(snap.x, snap.z);
           playerFootY = snap.footY;
@@ -1441,7 +2075,7 @@ export function MarsOutpost3D({
             onMoveDoneRef.current();
           }
         } else {
-          playerFootY = groundHeightAt(playerPos.x, playerPos.y);
+          playerFootY = gAt(playerPos.x, playerPos.y);
         }
 
         const isMoving = horizontalSpeed > 0.08 || moveFwd !== 0 || moveStrafe !== 0;
@@ -1461,6 +2095,23 @@ export function MarsOutpost3D({
 
           const strideCadence = Math.max(2.5, horizontalSpeed * 3.8);
           walkPhase += delta * strideCadence;
+
+          // Footstep bootprint decals, ballistic kicked dust & thin-CO2 footstep audio on half-cycle crossings
+          const halfCycle = Math.floor(walkPhase / Math.PI);
+          if (playerGrounded && horizontalSpeed > 0.14 && halfCycle !== lastStepHalfCycle) {
+            lastStepHalfCycle = halfCycle;
+            const side = halfCycle % 2 === 0 ? 1 : -1;
+            const stepRightX = -Math.cos(playerYaw) * 0.14 * side;
+            const stepRightZ = Math.sin(playerYaw) * 0.14 * side;
+            const fx = playerPos.x + stepRightX;
+            const fz = playerPos.y + stepRightZ;
+            stampDecal(footprintPool, { idx: footprintCursor++ }, fx, fz, playerYaw);
+            spawnBallisticDust(fx, playerFootY, fz, 2, horizontalSpeed > 1.1 ? 1.15 : 0.75);
+            soundEngine.playFootstep(
+              getSoftSandFactorAt(playerPos.x, playerPos.y, activeLayout.mode),
+              horizontalSpeed > PHYSICS_CONSTANTS.MARS_SUITED_TRANSITION_MS,
+            );
+          }
 
           if (!playerGrounded) {
             // Mars 0.38g athletic jump tuck driven by grounded state
@@ -1637,7 +2288,7 @@ export function MarsOutpost3D({
           );
         }
 
-        const baseGroundY = groundHeightAt(playerPos.x, playerPos.y);
+        const baseGroundY = gAt(playerPos.x, playerPos.y);
         outpost.astroGroup.position.set(playerPos.x, playerFootY, playerPos.y);
         outpost.astroGroup.rotation.y = playerYaw;
         outpost.astroHeadGroup.rotation.y = THREE.MathUtils.damp(
@@ -1659,18 +2310,69 @@ export function MarsOutpost3D({
           delta,
         );
 
-        // Camera Mode: Command Mode Focus vs First-Person (1P) vs Third-Person (3P)
+        // Camera Mode: Command Mode Focus vs First-Person (1P) vs Third-Person (3P) + Intro Airlock Glide
         const isFirstPerson = simState?.cameraMode === '1p' && !isFrozenInCommandMode;
         outpost.astroGroup.visible = !isFirstPerson;
+        if (fpRenderPass) fpRenderPass.enabled = isFirstPerson;
 
-        if (isFrozenInCommandMode && simState && !pausedRef.current) {
+        // Smooth decay of landing dip & 1P interact pulse + dynamic lope FOV widening (40° -> 45°)
+        landingDipY *= Math.exp(-delta * 9.5);
+        fpInteractPulse = Math.max(0, fpInteractPulse - delta * 3.2);
+        const lopingNow =
+          horizontalSpeed > PHYSICS_CONSTANTS.MARS_SUITED_TRANSITION_MS &&
+          !isStatic &&
+          !isFrozenInCommandMode;
+        const targetFov = lopingNow ? 45 : 40;
+        const nextFov = THREE.MathUtils.damp(camera.fov, targetFov, 7.0, delta);
+        if (Math.abs(camera.fov - nextFov) > 0.01) {
+          camera.fov = nextFov;
+          camera.updateProjectionMatrix();
+        }
+
+        const headBobY =
+          !isStatic && playerGrounded && horizontalSpeed > 0.14
+            ? Math.sin(walkPhase * 2.0) * 0.026 * Math.min(1, horizontalSpeed / 1.4)
+            : 0;
+
+        if (isFirstPerson) {
+          const strideAmp = THREE.MathUtils.clamp(horizontalSpeed / 1.4, 0, 1);
+          const armSwing = !isStatic && playerGrounded ? Math.sin(walkPhase) * 0.045 * strideAmp : 0;
+          const jumpTuckY = !playerGrounded ? -0.055 : 0;
+          const reachZ = -Math.sin(fpInteractPulse * Math.PI) * 0.14;
+          const breathBob = isStatic ? 0 : Math.sin(elapsed * 2.1) * 0.006;
+
+          outpost.fpArmsGroup.position.set(
+            !isStatic && playerGrounded ? Math.cos(walkPhase) * 0.016 * strideAmp : 0,
+            -0.01 + breathBob + jumpTuckY - landingDipY * 0.6,
+            0,
+          );
+          outpost.fpLeftArm.position.y = armSwing;
+          outpost.fpRightArm.position.y = -armSwing;
+          outpost.fpRightArm.position.z = reachZ;
+        }
+
+        if (introGlideActive && (moveFwd !== 0 || moveStrafe !== 0 || isFirstPerson || isFrozenInCommandMode)) {
+          introGlideActive = false;
+        }
+
+        if (introGlideActive) {
+          introGlideTimer += delta;
+          const u = easeInOutCubic(introGlideTimer / INTRO_GLIDE_DURATION_S);
+          computeThirdPersonRig(playerPos.x, playerFootY, playerPos.y, camYaw, camPitch, _tpCam, _tpLook);
+          currentCamPos.lerpVectors(_introCamStart, _tpCam, u);
+          currentLookAt.lerpVectors(_introLookStart, _tpLook, u);
+          if (introGlideTimer >= INTRO_GLIDE_DURATION_S) {
+            introGlideActive = false;
+          }
+        } else if (isFrozenInCommandMode && simState && !pausedRef.current && !simState.mapOpen) {
           const zp = outpost.zonePositions[simState.activeZoneId];
           _targetCam.set(zp.x - 2.6, zp.y + 2.35, zp.z + 3.85);
           _targetLook.set(zp.x, zp.y + 0.95, zp.z);
           currentCamPos.lerp(_targetCam, isStatic ? 1 : Math.min(1, delta * 5.0));
           currentLookAt.lerp(_targetLook, isStatic ? 1 : Math.min(1, delta * 5.0));
         } else if (isFirstPerson) {
-          const eyeY = playerFootY + PHYSICS_CONSTANTS.FIRST_PERSON_EYE_HEIGHT_M;
+          const eyeY =
+            playerFootY + PHYSICS_CONSTANTS.FIRST_PERSON_EYE_HEIGHT_M + headBobY - landingDipY;
           const cosP = Math.cos(camPitch);
           const fwdX = Math.sin(camYaw) * cosP;
           const fwdZ = Math.cos(camYaw) * cosP;
@@ -1681,13 +2383,20 @@ export function MarsOutpost3D({
           currentLookAt.lerp(_tpLook, isStatic ? 1 : Math.min(1, delta * 24.0));
         } else {
           computeThirdPersonRig(playerPos.x, playerFootY, playerPos.y, camYaw, camPitch, _tpCam, _tpLook);
+          _tpCam.y -= landingDipY * 0.65;
+          _tpLook.y -= landingDipY * 0.45;
           currentCamPos.lerp(_tpCam, isStatic ? 1 : Math.min(1, delta * 18.0));
           currentLookAt.lerp(_tpLook, isStatic ? 1 : Math.min(1, delta * 18.0));
         }
-        camera.position.copy(currentCamPos);
-        camera.lookAt(currentLookAt);
+        if (debugModeRef.current && debugCamOverride) {
+          camera.position.copy(debugCamOverride.pos);
+          camera.lookAt(debugCamOverride.look);
+        } else {
+          camera.position.copy(currentCamPos);
+          camera.lookAt(currentLookAt);
+        }
 
-        // Proximity detection to active Mission Zones & Outpost Stations
+        // Proximity detection to active Mission Zones, Crew Members & Outpost Stations
         if (onNearbyZoneRef.current) {
           const zIds: MissionZoneId[] = ['tank2', 'solar', 'recycler', 'greenhouse', 'shelter'];
           let nearZone: MissionZoneId | null = null;
@@ -1705,6 +2414,23 @@ export function MarsOutpost3D({
             lastNearbyZoneId = nearZone;
             onNearbyZoneRef.current(nearZone);
           }
+        }
+
+        // Nearby autonomous Crew Member check (<= 2.6 m)
+        let nearCrew: CrewMemberId | null = null;
+        let nearCrewDist = Infinity;
+        for (const ag of crewAgents) {
+          const mem = simState?.crew?.find((m) => m.id === ag.id);
+          if (mem && !mem.alive) continue;
+          const d = Math.hypot(playerPos.x - ag.x, playerPos.y - ag.z);
+          if (d <= 2.6 && d < nearCrewDist) {
+            nearCrewDist = d;
+            nearCrew = ag.id;
+          }
+        }
+        if (nearCrew !== lastNearbyCrewId) {
+          lastNearbyCrewId = nearCrew;
+          onNearbyCrewRef.current?.(nearCrew);
         }
 
         const stationIds: OutpostLandmarkId[] = [
@@ -1744,7 +2470,7 @@ export function MarsOutpost3D({
           onNearbyRef.current(nearestId);
         }
 
-        // Habitat Airlock Shelter proximity tracking during active localized weather event
+        // Habitat Airlock Shelter proximity & pressurized interior Web Audio state
         const habShelterPt = outpost.stationInteractPoints.habitat;
         const habDist = Math.hypot(playerPos.x - habShelterPt.x, playerPos.y - habShelterPt.z);
         const habMeters = Math.max(0, Math.round(habDist));
@@ -1752,6 +2478,9 @@ export function MarsOutpost3D({
           lastHabDistMeters = habMeters;
           onHabitatDistRef.current?.(habMeters);
         }
+        soundEngine.setOutsideEvaActive(true);
+        soundEngine.setInsideHabitat(habDist <= 3.1);
+
         if (simState?.weatherEvent?.active && !isFrozenInCommandMode && !shelterSentThisEvent) {
           if (habDist <= 4.35) {
             shelterSentThisEvent = true;
@@ -1759,7 +2488,7 @@ export function MarsOutpost3D({
           }
         }
 
-        // Emit throttled real-time Mars environmental physics telemetry (~4 Hz)
+        // Emit throttled real-time Mars environmental physics telemetry (~4 Hz) + pose telemetry (~10 Hz)
         const nowMs = performance.now();
         if (nowMs - lastPhysicsPushMs > 250) {
           lastPhysicsPushMs = nowMs;
@@ -1777,11 +2506,108 @@ export function MarsOutpost3D({
             ),
           );
         }
+        if (onPoseTelemetryRef.current && nowMs - lastPoseTelemetryMs > 95) {
+          lastPoseTelemetryMs = nowMs;
+          const headingDeg =
+            ((Math.atan2(Math.sin(camYaw), -Math.cos(camYaw)) * 180) / Math.PI + 360) % 360;
+          onPoseTelemetryRef.current({
+            x: playerPos.x,
+            z: playerPos.y,
+            headingDeg,
+            speedMs: horizontalSpeed,
+            roverX: roverController.x,
+            roverZ: roverController.z,
+            crewDots: crewAgents.map((ag) => {
+              const prof = CREW_PROFILES.find((p) => p.id === ag.id);
+              return {
+                id: ag.id,
+                name: prof?.name ?? ag.id,
+                color: prof?.avatarColor ?? '#38BDF8',
+                x: ag.x,
+                z: ag.z,
+              };
+            }),
+          });
+        }
       } else {
+        if (fpRenderPass) fpRenderPass.enabled = false;
         outpost.astroGroup.visible = true;
+        soundEngine.setOutsideEvaActive(false);
+        soundEngine.setInsideHabitat(false);
       }
 
-      // Shared Ambient Outpost Motion + Wind Turbines + Companion Rover Follow & Beam
+      // Autonomous 4-Crew EVA Rig Simulation & Pose Updates (driven by Rapier Character Controllers)
+      if (
+        phase === 'gameplay' &&
+        !isStatic &&
+        !(Boolean(sim?.commandModeOpen) || Boolean(sim?.mapOpen) || pausedRef.current)
+      ) {
+        const subSteps = debugModeRef.current && debugSpeedMult > 1 ? Math.ceil(debugSpeedMult) : 1;
+        const simStepDt = (delta * (debugModeRef.current ? debugSpeedMult : 1)) / subSteps;
+        for (let sIdx = 0; sIdx < subSteps; sIdx++) {
+          crewAgents = stepCrewAgents(crewAgents, simStepDt, {
+            weatherAlertActive: Boolean(sim?.weatherEvent?.active),
+            tank2LeakActive: Boolean(sim?.tank2LeakActive),
+            radiationAlert: Boolean(sim?.radiationAlert),
+            habitatShelterPos: {
+              x: outpost.stationInteractPoints.habitat.x,
+              z: outpost.stationInteractPoints.habitat.z,
+            },
+            crewMembers: sim?.crew ?? [],
+            obstacles: outpostObstacles,
+            grid: envBuild.terrainGrid,
+            layout: activeLayout,
+            moveCrewViaPhysics: physicsWorld
+              ? (id, desiredDx, desiredDz, dtStep) => physicsWorld!.stepCrewMember(id, desiredDx, desiredDz, dtStep)
+              : undefined,
+            afterPhysicsCrewStep: physicsWorld ? () => physicsWorld!.stepWorldOnly() : undefined,
+          });
+        }
+      }
+      crewAgents.forEach((ag, idx) => {
+        const rig = outpost.crewRigs[idx];
+        if (!rig) return;
+        const mem = sim?.crew?.find((m) => m.id === ag.id);
+        rig.group.visible = mem ? mem.alive : true;
+        rig.group.position.set(ag.x, ag.y, ag.z);
+        rig.group.rotation.y = ag.yaw;
+
+        if (!isStatic && ag.speedMs > 0.08) {
+          const s = Math.sin(ag.walkPhase);
+          const c = Math.cos(ag.walkPhase);
+          const amp = THREE.MathUtils.clamp(ag.speedMs / 1.2, 0.35, 1.0);
+          const limpRightScale = ag.limping ? 0.52 : 1.0;
+
+          rig.leftLeg.rotation.x = s * 0.48 * amp;
+          rig.rightLeg.rotation.x = -s * 0.48 * amp * limpRightScale;
+          rig.leftKnee.rotation.x = 0.08 + Math.max(0, -c) * 0.72 * amp;
+          rig.rightKnee.rotation.x = 0.1 + Math.max(0, c) * 0.72 * amp * limpRightScale;
+          rig.leftArm.rotation.x = -s * 0.38 * amp;
+          rig.rightArm.rotation.x = s * 0.38 * amp;
+          rig.leftElbow.rotation.x = -0.38;
+          rig.rightElbow.rotation.x = -0.38;
+          rig.pelvis.position.y = 0.85 + Math.abs(c) * 0.022 * amp;
+          rig.pelvis.rotation.z = ag.limping ? 0.065 + s * 0.04 : c * 0.02 * amp;
+          rig.torso.rotation.x = ag.mode === 'Alarm' ? 0.14 : 0.04;
+          rig.head.rotation.y = 0;
+        } else {
+          const breath = isStatic ? 0 : Math.sin(elapsed * 1.9 + idx * 1.1);
+          rig.pelvis.position.y = 0.858 + breath * 0.006;
+          rig.pelvis.rotation.z = 0;
+          rig.torso.rotation.x = breath * 0.015;
+          rig.leftLeg.rotation.x = -0.04;
+          rig.rightLeg.rotation.x = -0.04;
+          rig.leftKnee.rotation.x = 0.06;
+          rig.rightKnee.rotation.x = 0.06;
+          rig.leftArm.rotation.x = 0.03;
+          rig.rightArm.rotation.x = ag.mode === 'CheckingConsole' ? -0.35 : 0.03;
+          rig.leftElbow.rotation.x = -0.35;
+          rig.rightElbow.rotation.x = ag.mode === 'CheckingConsole' ? -0.65 : -0.35;
+          rig.head.rotation.y = isStatic ? 0 : Math.sin(elapsed * 0.65 + idx * 1.7) * 0.18;
+        }
+      });
+
+      // Shared Ambient Outpost Motion + Wind Turbines + 6-Wheel Rocker-Bogie Rover FSM
       if (!isStatic) {
         outpost.dishMast.rotation.y = Math.sin(elapsed * 0.42) * 0.6;
         const activeWindSpeed = simVisualsRef.current?.activeWxWindMs
@@ -1799,31 +2625,91 @@ export function MarsOutpost3D({
           wing.rotation.x = 0.42 + Math.sin(elapsed * 0.32 + idx * 0.8) * 0.08;
         });
 
-        const sim = simVisualsRef.current;
         if (phase === 'gameplay' && sim) {
-          // Companion Rover follows player smoothly at ~2.6m side-trailing distance
-          const followTargetX = playerPos.x - Math.sin(playerYaw + 0.65) * 2.6;
-          const followTargetZ = playerPos.y - Math.cos(playerYaw + 0.65) * 2.6;
-          const dx = followTargetX - roverPos.x;
-          const dz = followTargetZ - roverPos.y;
-          const dist = Math.hypot(dx, dz);
-
-          if (dist > 0.35) {
-            const roverSpeed = sim.roverDamaged ? 1.55 : 2.65;
-            const step = Math.min(dist, roverSpeed * delta);
-            roverPos.x += (dx / dist) * step;
-            roverPos.y += (dz / dist) * step;
-            const targetYaw = Math.atan2(dx, dz);
-            roverYaw += shortestAngleDiff(roverYaw, targetYaw) * Math.min(1, delta * 5.5);
-            outpost.roverWheels.forEach((w) => {
-              w.rotation.x += step * 3.8;
+          const roverSubSteps = debugModeRef.current && debugSpeedMult > 1 ? Math.ceil(debugSpeedMult) : 1;
+          const roverDt = (delta * (debugModeRef.current ? debugSpeedMult : 1)) / roverSubSteps;
+          for (let sIdx = 0; sIdx < roverSubSteps; sIdx++) {
+            roverController = stepRoverController(roverController, roverDt, {
+              playerX: playerPos.x,
+              playerZ: playerPos.y,
+              playerYaw,
+              damaged: sim.roverDamaged,
+              holdPosition: Boolean(sim.commandModeOpen) || Boolean(sim.mapOpen) || pausedRef.current,
+              obstacles: outpostObstacles,
+              grid: envBuild.terrainGrid,
+              layout: activeLayout,
             });
           }
-          const ry = groundHeightAt(roverPos.x, roverPos.y);
-          outpost.roverGroup.position.set(roverPos.x, ry, roverPos.y);
-          outpost.roverGroup.rotation.y = roverYaw;
-          outpost.roverGroup.rotation.z = sim.roverDamaged ? Math.sin(elapsed * 6.5) * 0.045 : 0;
-          physicsWorld?.updateRoverTransform(roverPos.x, ry, roverPos.y, roverYaw);
+
+          outpost.roverGroup.position.set(roverController.x, roverController.y, roverController.z);
+          outpost.roverGroup.rotation.order = 'YXZ';
+          outpost.roverGroup.rotation.set(
+            roverController.pitchRad,
+            roverController.yaw,
+            roverController.rollRad + (sim.roverDamaged ? Math.sin(elapsed * 6.5) * 0.045 : 0),
+          );
+          outpost.roverLeftRockerPivot.rotation.x = roverController.leftRockerRad;
+          outpost.roverRightRockerPivot.rotation.x = roverController.rightRockerRad;
+          outpost.roverDiffBar.rotation.z =
+            (roverController.leftRockerRad - roverController.rightRockerRad) * 0.5;
+          roverController.wheelOffsetsM.forEach((off, idx) => {
+            if (outpost.roverWheelOffsets[idx]) {
+              outpost.roverWheelOffsets[idx].position.y = off;
+            }
+          });
+          outpost.roverWheels.forEach((w) => {
+            w.rotation.x = roverController.wheelSpinRad;
+          });
+          physicsWorld?.updateRoverTransform(
+            roverController.x,
+            roverController.y,
+            roverController.z,
+            roverController.yaw,
+          );
+
+          if (roverController.tiltWarning !== lastRoverTiltWarn) {
+            lastRoverTiltWarn = roverController.tiltWarning;
+            onRoverTiltAlertRef.current?.(roverController.tiltWarning, roverController.tiltDeg);
+          }
+
+          if (roverController.isDriving) {
+            const movedSinceStamp = Math.hypot(
+              roverController.x - lastRoverTrackPos.x,
+              roverController.z - lastRoverTrackPos.y,
+            );
+            if (movedSinceStamp >= 0.58) {
+              lastRoverTrackPos.set(roverController.x, roverController.z);
+              const rx = Math.cos(roverController.yaw) * 0.72;
+              const rz = -Math.sin(roverController.yaw) * 0.72;
+              stampDecal(
+                roverTrackPool,
+                { idx: trackCursor++ },
+                roverController.x - rx,
+                roverController.z - rz,
+                roverController.yaw,
+              );
+              stampDecal(
+                roverTrackPool,
+                { idx: trackCursor++ },
+                roverController.x + rx,
+                roverController.z + rz,
+                roverController.yaw,
+              );
+              spawnBallisticDust(roverController.x - rx, roverController.y, roverController.z - rz, 1, 0.7);
+              spawnBallisticDust(roverController.x + rx, roverController.y, roverController.z + rz, 1, 0.7);
+            }
+          }
+
+          soundEngine.updateRoverSpatialAudio(
+            roverController.x,
+            roverController.y,
+            roverController.z,
+            playerPos.x,
+            playerFootY + 1.5,
+            playerPos.y,
+            camYaw,
+            roverController.isDriving,
+          );
 
           // Aim Rover camera head & guide beam toward Habitat Shelter during weather alert, else active zone
           const activeTarget = sim.weatherEvent?.active
@@ -1831,21 +2717,28 @@ export function MarsOutpost3D({
             : outpost.zonePositions[sim.activeZoneId];
           outpost.roverGuideBeamMat.color.set(sim.weatherEvent?.active ? '#22C55E' : '#FFB703');
           const toZoneAngle =
-            Math.atan2(activeTarget.x - roverPos.x, activeTarget.z - roverPos.y) - roverYaw;
+            Math.atan2(activeTarget.x - roverController.x, activeTarget.z - roverController.z) -
+            roverController.yaw;
           outpost.roverHead.rotation.y = shortestAngleDiff(0, toZoneAngle) * 0.85;
           outpost.roverHead.rotation.x = 0.05;
           outpost.roverGuideBeam.visible = !sim.commandModeOpen;
         } else {
-          roverPos.set(outpost.roverBasePos.x, outpost.roverBasePos.z);
+          roverController = createInitialRoverController(
+            outpost.roverBasePos.x,
+            outpost.roverBasePos.z,
+            activeLayout.modules.roverSpawn.yaw,
+            envBuild.terrainGrid,
+            activeLayout,
+          );
           outpost.roverGuideBeam.visible = false;
           const patrolOffset = Math.sin(elapsed * 0.34) * 0.68;
           const rx = outpost.roverBasePos.x + patrolOffset * 0.86;
           const rz = outpost.roverBasePos.z - patrolOffset * 0.44;
-          const ry = groundHeightAt(rx, rz);
+          const ry = gAt(rx, rz);
           outpost.roverGroup.position.set(rx, ry, rz);
-          outpost.roverGroup.rotation.y = -1.02;
-          outpost.roverGroup.rotation.z = 0;
-          physicsWorld?.updateRoverTransform(rx, ry, rz, -1.02);
+          outpost.roverGroup.rotation.order = 'YXZ';
+          outpost.roverGroup.rotation.set(0, activeLayout.modules.roverSpawn.yaw, 0);
+          physicsWorld?.updateRoverTransform(rx, ry, rz, activeLayout.modules.roverSpawn.yaw);
           outpost.roverHead.rotation.y = Math.sin(elapsed * 0.85) * 0.42;
           outpost.roverHead.rotation.x = Math.sin(elapsed * 1.15) * 0.09;
           const wheelSpin = Math.cos(elapsed * 0.34) * 0.9;
@@ -1855,19 +2748,35 @@ export function MarsOutpost3D({
         }
 
         const dustWind = 0.55 + (1 - (sim?.dustFactor ?? 1)) * 2.1;
+        const dustSpan = activeLayout.mode === 'gameplay' ? 42 : 19;
         const dAttr = envBuild.dustPoints.geometry.attributes.position as THREE.BufferAttribute;
         for (let i = 0; i < envBuild.dustCount; i++) {
           let x = dAttr.getX(i) + delta * dustWind;
-          if (x > 19) x = -15;
+          if (x > dustSpan) x = -dustSpan;
           dAttr.setX(i, x);
         }
         dAttr.needsUpdate = true;
+      }
+
+      if (debugModeRef.current && overlayMgr) {
+        if (debugCamOverride) {
+          camera.position.copy(debugCamOverride.pos);
+          camera.lookAt(debugCamOverride.look);
+        }
+        overlayMgr.update(physicsWorld, crewAgents);
       }
 
       if (composer) {
         composer.render();
       } else {
         renderer.render(scene, camera);
+        if (phase === 'gameplay' && simVisualsRef.current?.cameraMode === '1p' && !Boolean(simVisualsRef.current?.commandModeOpen || pausedRef.current)) {
+          const prevAutoClear = renderer.autoClear;
+          renderer.autoClear = false;
+          renderer.clearDepth();
+          renderer.render(outpost.fpScene, outpost.fpCamera);
+          renderer.autoClear = prevAutoClear;
+        }
       }
 
       if (isSoftwareGl) {
@@ -1900,20 +2809,24 @@ export function MarsOutpost3D({
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored);
 
+      if (debugModeRef.current) {
+        overlayMgr?.dispose();
+        delete window.__MARS_DEBUG__;
+      }
       physicsWorld?.dispose();
       physicsWorld = null;
+      if (fpRenderPass) fpRenderPass.dispose();
       if (stormPass) stormPass.dispose();
       if (outputPass) outputPass.dispose();
       if (composerTarget) composerTarget.dispose();
       if (composer) composer.dispose();
+      extraGeos.forEach((g) => g.dispose());
+      extraMats.forEach((m) => m.dispose());
+      extraTexs.forEach((t) => t.dispose());
       outpost.dispose();
       envBuild.dispose();
-      renderer.dispose();
-      if (renderer.domElement.parentNode === container) {
-        container.removeChild(renderer.domElement);
-      }
     };
-  }, [quality]);
+  }, [quality, layoutMode]);
 
   if (webglUnavailable) {
     return (
@@ -1924,5 +2837,27 @@ export function MarsOutpost3D({
     );
   }
 
-  return <div ref={mountRef} className="w-full h-full touch-none select-none" />;
+  return (
+    <div className="relative w-full h-full touch-none select-none">
+      <div ref={mountRef} className="w-full h-full touch-none select-none" />
+
+      {/* Start Mission Fade-to-Black Transition Curtain + Outpost Loading Pill */}
+      <div
+        aria-hidden={!curtainOpaque && !loadingGameplayOutpost}
+        className={`pointer-events-none fixed inset-0 z-30 flex items-end justify-end bg-[#040812] p-5 transition-opacity duration-500 ${
+          curtainOpaque ? 'opacity-100' : 'opacity-0'
+        }`}
+      >
+        {loadingGameplayOutpost && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="rounded-xl border border-[#FFB703]/55 bg-[#071324]/95 px-4 py-2 text-xs font-extrabold text-[#FFB703] shadow-lg"
+          >
+            Loading spacious outpost &amp; 3.73 m/s² Mars physics…
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }

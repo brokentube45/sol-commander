@@ -1075,7 +1075,7 @@ const WEATHER_EVENT_TEMPLATES: Record<
     title: 'Mars Dust Devil',
     windRange: [24, 34],
     dropRange: [4, 9],
-    durationSeconds: 18,
+    durationSeconds: 25,
     scienceNote:
       '[REAL] Dust devils spin across sunny Mars craters—thin air pushes less than Earth, but sharp dust can jam spacesuit seals!',
   },
@@ -1083,7 +1083,7 @@ const WEATHER_EVENT_TEMPLATES: Record<
     title: 'Crater Wind Gust',
     windRange: [22, 31],
     dropRange: [3, 6],
-    durationSeconds: 18,
+    durationSeconds: 25,
     scienceNote:
       '[REAL] Cold air rushing down Mars crater slopes creates sudden gusts that kick up rusty red dust.',
   },
@@ -1091,7 +1091,7 @@ const WEATHER_EVENT_TEMPLATES: Record<
     title: 'Static Dust Squall',
     windRange: [26, 36],
     dropRange: [5, 11],
-    durationSeconds: 18,
+    durationSeconds: 25,
     scienceNote:
       '[REAL] Swishing Mars dust grains build static electricity that causes radio static and sticks to visors.',
   },
@@ -1117,7 +1117,7 @@ export function triggerLocalizedWeatherEvent(
   // Spawn vortex in the outpost yard away from inside the habitat itself
   const spawnAngles = [-2.2, -1.35, 0.85, 2.35];
   const angle = spawnAngles[pickInt(0, spawnAngles.length - 1)];
-  const dist = pickInt(5, 9);
+  const dist = pickInt(6, 12);
   const worldPos = {
     x: Number((3.5 + Math.cos(angle) * dist).toFixed(2)),
     z: Number((0.8 + Math.sin(angle) * dist).toFixed(2)),
@@ -1144,7 +1144,7 @@ export function triggerLocalizedWeatherEvent(
     worldPos,
     scienceNote: template.scienceNote,
     shelterInstruction:
-      'Run back to the Mars Habitat 01 Airlock (green beacon) before time runs out!',
+      'Hold [Shift] to lope back to the Mars Habitat 01 Airlock (green beacon) before time runs out!',
     triggeredAtSol: state.sol,
   };
 

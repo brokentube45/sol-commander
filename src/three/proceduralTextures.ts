@@ -693,3 +693,272 @@ export function createRoverNameplateTexture(maxAniso: number): THREE.CanvasTextu
   tex.anisotropy = maxAniso;
   return tex;
 }
+
+/** Perseverance-inspired aluminum wheel tread (48 grouser ticks + 6 curved titanium spokes) */
+export function createRoverWheelTextures(maxAniso: number): {
+  treadMap: THREE.CanvasTexture;
+  treadBump: THREE.CanvasTexture;
+  spokeAlpha: THREE.CanvasTexture;
+} {
+  const w = 512;
+  const h = 128;
+  const treadCanvas = document.createElement('canvas');
+  treadCanvas.width = w;
+  treadCanvas.height = h;
+  const tCtx = treadCanvas.getContext('2d')!;
+
+  const bumpCanvas = document.createElement('canvas');
+  bumpCanvas.width = w;
+  bumpCanvas.height = h;
+  const bCtx = bumpCanvas.getContext('2d')!;
+
+  tCtx.fillStyle = '#252930';
+  tCtx.fillRect(0, 0, w, h);
+  bCtx.fillStyle = '#404040';
+  bCtx.fillRect(0, 0, w, h);
+
+  // 48 machined titanium grousers with slight chevron bend & Morse-free structural pattern
+  const grousers = 48;
+  for (let i = 0; i < grousers; i++) {
+    const x = (i / grousers) * w;
+    const isAccent = i % 6 === 0;
+    tCtx.fillStyle = isAccent ? '#8d96a5' : '#58606d';
+    bCtx.fillStyle = '#f2f2f2';
+
+    tCtx.fillRect(x, 6, 4.5, h * 0.44);
+    tCtx.fillRect(x + 2.5, h * 0.5, 4.5, h * 0.44);
+    bCtx.fillRect(x, 6, 4.5, h * 0.44);
+    bCtx.fillRect(x + 2.5, h * 0.5, 4.5, h * 0.44);
+  }
+
+  // Rim flange edges
+  tCtx.fillStyle = '#9aa3b2';
+  tCtx.fillRect(0, 0, w, 8);
+  tCtx.fillRect(0, h - 8, w, 8);
+
+  const treadMap = new THREE.CanvasTexture(treadCanvas);
+  treadMap.colorSpace = THREE.SRGBColorSpace;
+  treadMap.wrapS = THREE.RepeatWrapping;
+  treadMap.anisotropy = maxAniso;
+
+  const treadBump = new THREE.CanvasTexture(bumpCanvas);
+  treadBump.wrapS = THREE.RepeatWrapping;
+
+  // Radial wheel hub & 6 curved titanium flex-spokes texture
+  const spSize = 256;
+  const spCanvas = document.createElement('canvas');
+  spCanvas.width = spSize;
+  spCanvas.height = spSize;
+  const sCtx = spCanvas.getContext('2d')!;
+  sCtx.clearRect(0, 0, spSize, spSize);
+  sCtx.fillStyle = '#18202c';
+  sCtx.beginPath();
+  sCtx.arc(128, 128, 122, 0, Math.PI * 2);
+  sCtx.fill();
+
+  sCtx.strokeStyle = '#c4cedb';
+  sCtx.lineWidth = 14;
+  sCtx.lineCap = 'round';
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    sCtx.beginPath();
+    sCtx.moveTo(128 + Math.cos(a) * 32, 128 + Math.sin(a) * 32);
+    sCtx.quadraticCurveTo(
+      128 + Math.cos(a + 0.38) * 76,
+      128 + Math.sin(a + 0.38) * 76,
+      128 + Math.cos(a + 0.14) * 114,
+      128 + Math.sin(a + 0.14) * 114,
+    );
+    sCtx.stroke();
+  }
+  sCtx.fillStyle = '#d4a348';
+  sCtx.beginPath();
+  sCtx.arc(128, 128, 34, 0, Math.PI * 2);
+  sCtx.fill();
+
+  const spokeAlpha = new THREE.CanvasTexture(spCanvas);
+  spokeAlpha.colorSpace = THREE.SRGBColorSpace;
+  spokeAlpha.anisotropy = maxAniso;
+
+  return { treadMap, treadBump, spokeAlpha };
+}
+
+/** Crew member suit ID badge texture (non-branded initials + role color bar) */
+export function createCrewBadgeTexture(
+  initials: string,
+  accentHex: string,
+  maxAniso: number,
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 192;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = '#0b1d36';
+  ctx.fillRect(0, 0, 192, 128);
+  ctx.fillStyle = accentHex;
+  ctx.fillRect(0, 0, 192, 24);
+  ctx.strokeStyle = accentHex;
+  ctx.lineWidth = 5;
+  ctx.strokeRect(5, 5, 182, 118);
+
+  ctx.fillStyle = '#f8f9fa';
+  ctx.font = 'bold 54px Orbitron, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(initials, 96, 76);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = maxAniso;
+  return tex;
+}
+
+/** Bootprint decal in loose Martian dust */
+export function createFootprintDecalTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, 64, 128);
+
+  ctx.fillStyle = 'rgba(72, 32, 18, 0.58)';
+  ctx.beginPath();
+  ctx.ellipse(32, 42, 18, 32, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(32, 96, 15, 22, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'rgba(165, 88, 52, 0.45)';
+  ctx.lineWidth = 4;
+  for (let y = 22; y <= 108; y += 16) {
+    ctx.beginPath();
+    ctx.moveTo(16, y);
+    ctx.lineTo(48, y);
+    ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Rover grouser track imprint decal in Martian dust */
+export function createRoverTrackDecalTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, 64, 128);
+
+  ctx.fillStyle = 'rgba(68, 30, 18, 0.45)';
+  ctx.fillRect(8, 0, 48, 128);
+  ctx.fillStyle = 'rgba(130, 62, 36, 0.65)';
+  for (let y = 6; y < 128; y += 16) {
+    ctx.fillRect(10, y, 20, 6);
+    ctx.fillRect(34, y + 6, 20, 6);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** Crisp text-only directional base signpost plaque (strictly zero agency logos or flags) */
+export function createOutpostSignTexture(
+  title: string,
+  subtitle: string | undefined,
+  maxAniso: number,
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = '#0d1b2a';
+  ctx.fillRect(0, 0, 256, 128);
+  ctx.fillStyle = '#e85d04';
+  ctx.fillRect(0, 0, 256, 18);
+  ctx.strokeStyle = '#ffb703';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(4, 4, 248, 120);
+
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = 'bold 28px Orbitron, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(title.toUpperCase().slice(0, 14), 128, subtitle ? 58 : 74);
+
+  if (subtitle) {
+    ctx.fillStyle = '#ffd166';
+    ctx.font = 'bold 17px Orbitron, sans-serif';
+    ctx.fillText(subtitle.toUpperCase().slice(0, 18), 128, 96);
+  }
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = maxAniso;
+  return tex;
+}
+
+/** Compacted dark basalt regolith road surface texture + micro-roughness variation */
+export function createRoadSurfaceTextures(maxAniso: number): {
+  map: THREE.CanvasTexture;
+  roughnessMap: THREE.CanvasTexture;
+} {
+  const size = 256;
+  const cMap = document.createElement('canvas');
+  cMap.width = size;
+  cMap.height = size;
+  const mCtx = cMap.getContext('2d')!;
+
+  const cRough = document.createElement('canvas');
+  cRough.width = size;
+  cRough.height = size;
+  const rCtx = cRough.getContext('2d')!;
+
+  mCtx.fillStyle = '#4f3b36';
+  mCtx.fillRect(0, 0, size, size);
+  rCtx.fillStyle = '#cfcfcf';
+  rCtx.fillRect(0, 0, size, size);
+
+  let seed = 7919;
+  const rnd = () => {
+    seed = (seed * 16807) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+
+  for (let i = 0; i < 2400; i++) {
+    const x = rnd() * size;
+    const y = rnd() * size;
+    const s = 1 + rnd() * 2.5;
+    const v = Math.floor(64 + rnd() * 34);
+    mCtx.fillStyle = `rgb(${v + 12}, ${v}, ${v - 4})`;
+    mCtx.fillRect(x, y, s, s);
+    const rv = Math.floor(175 + rnd() * 65);
+    rCtx.fillStyle = `rgb(${rv}, ${rv}, ${rv})`;
+    rCtx.fillRect(x, y, s, s);
+  }
+
+  // Subtle compacted tire track streaks along longitudinal U/V axis
+  mCtx.fillStyle = 'rgba(42, 30, 26, 0.25)';
+  mCtx.fillRect(size * 0.22, 0, size * 0.14, size);
+  mCtx.fillRect(size * 0.64, 0, size * 0.14, size);
+
+  const map = new THREE.CanvasTexture(cMap);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.repeat.set(1, 3);
+  map.anisotropy = maxAniso;
+
+  const roughnessMap = new THREE.CanvasTexture(cRough);
+  roughnessMap.wrapS = THREE.RepeatWrapping;
+  roughnessMap.wrapT = THREE.RepeatWrapping;
+  roughnessMap.repeat.set(1, 3);
+  roughnessMap.anisotropy = maxAniso;
+
+  return { map, roughnessMap };
+}
+

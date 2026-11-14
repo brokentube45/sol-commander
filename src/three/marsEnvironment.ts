@@ -1,9 +1,18 @@
 import * as THREE from 'three';
+import { MARS_FACTS } from '../sim/constants';
+import {
+  OutpostLayoutConfig,
+  SHOWCASE_CRATES,
+  SHOWCASE_LAYOUT,
+  isOnPavedSurface,
+} from '../sim/outpostLayout';
 import {
   RockColliderSpec,
   TerrainHeightGrid,
   generateOutpostRockSpecs,
   getDefaultTerrainGrid,
+  getLocalRockFractionK,
+  getSoftSandFactorAt,
   groundHeightAt,
   seededRandom,
 } from '../sim/terrainField';
@@ -22,7 +31,6 @@ function buildStratifiedRockGeometry(): THREE.BufferGeometry {
   const v = new THREE.Vector3();
   for (let i = 0; i < pos.count; i++) {
     v.fromBufferAttribute(pos, i);
-    // Flatten top into mesa-like outcrop & terrace horizontal strata
     if (v.y > 0.22) v.y = 0.22 + (v.y - 0.22) * 0.35;
     if (v.y < -0.25) v.y = -0.25 + (v.y + 0.25) * 0.45;
     const strata = Math.sin(v.y * 14.0) * 0.08;
@@ -58,7 +66,7 @@ function buildJaggedBasaltGeometry(): THREE.BufferGeometry {
   return geo;
 }
 
-/** Sculpted layered canyon mesa ridge geometry (replaces primitive cones/cylinders) */
+/** Sculpted layered canyon mesa ridge geometry */
 function buildMesaFormationGeometry(seed: number, width: number, height: number): THREE.BufferGeometry {
   const geo = new THREE.CylinderGeometry(width * 0.42, width, height, 18, 6);
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -67,7 +75,6 @@ function buildMesaFormationGeometry(seed: number, width: number, height: number)
     v.fromBufferAttribute(pos, i);
     const angle = Math.atan2(v.z, v.x);
     const normY = (v.y + height * 0.5) / height;
-    // Stepped canyon terraces
     const terrace = Math.sin(normY * Math.PI * 5.0) * 0.12;
     const crag =
       Math.sin(angle * 3.0 + seed) * 0.24 +
@@ -75,7 +82,6 @@ function buildMesaFormationGeometry(seed: number, width: number, height: number)
     const scaleXZ = 1.0 + crag + terrace;
     v.x *= scaleXZ;
     v.z *= scaleXZ * 0.85;
-    // Slight plateau unevenness
     if (normY > 0.92) {
       v.y += Math.sin(angle * 2.0 + seed) * (height * 0.06);
     }
@@ -96,6 +102,9 @@ export interface EnvironmentBuildResult {
   beaconLights: THREE.Mesh[];
   skyMat: THREE.ShaderMaterial;
   auroraMat: THREE.ShaderMaterial;
+  phobosMesh: THREE.Mesh;
+  deimosMesh: THREE.Mesh;
+  updateCelestialAndSky: (elapsedSec: number, dustTau: number) => void;
   envTexture: THREE.Texture;
   dispose: () => void;
 }
@@ -105,6 +114,7 @@ export function buildMarsEnvironment(
   renderer: THREE.WebGLRenderer,
   quality: 'high' | 'low',
   isSoftwareGl: boolean,
+  layout: OutpostLayoutConfig = SHOWCASE_LAYOUT,
 ): EnvironmentBuildResult {
   const geometries: THREE.BufferGeometry[] = [];
   const materials: THREE.Material[] = [];
@@ -127,17 +137,19 @@ export function buildMarsEnvironment(
   const sunDirection = new THREE.Vector3(24, 9.5, -24).normalize();
 
   // 1. Atmospheric Martian Sunset Sky Dome
-  const skyGeo = trackGeo(new THREE.SphereGeometry(115, 36, 24));
+  const skyGeo = trackGeo(new THREE.SphereGeometry(125, 40, 26));
   const skyMat = trackMat(
     new THREE.ShaderMaterial({
       side: THREE.BackSide,
       depthWrite: false,
       uniforms: {
-        uZenith: { value: new THREE.Color('#091529') },
-        uMidSky: { value: new THREE.Color('#1B3A5F') },
-        uDuskBand: { value: new THREE.Color('#7a2f27') },
-        uHorizon: { value: new THREE.Color('#d9682b') },
+        uZenith: { value: new THREE.Color('#28212e') },
+        uMidSky: { value: new THREE.Color('#6f4938') },
+        uDuskBand: { value: new THREE.Color('#b66a41') },
+        uHorizon: { value: new THREE.Color('#e08b4f') },
         uSunDir: { value: sunDirection },
+        uDustTau: { value: 1.0 },
+        uHgG: { value: MARS_FACTS.HG_ASYMMETRY_G },
       },
       vertexShader: `
         varying vec3 vWorldDir;
@@ -153,24 +165,39 @@ export function buildMarsEnvironment(
         uniform vec3 uDuskBand;
         uniform vec3 uHorizon;
         uniform vec3 uSunDir;
+        uniform float uDustTau;
+        uniform float uHgG;
         varying vec3 vWorldDir;
+
+        float henyeyGreenstein(float cosTheta, float g) {
+          float g2 = g * g;
+          return (1.0 - g2) / (4.0 * 3.14159265 * pow(max(0.05, 1.0 + g2 - 2.0 * g * cosTheta), 1.5));
+        }
 
         void main() {
           float h = clamp(vWorldDir.y, -0.05, 1.0);
-          vec3 sky = mix(uHorizon, uDuskBand, smoothstep(0.0, 0.14, h));
-          sky = mix(sky, uMidSky, smoothstep(0.11, 0.36, h));
-          sky = mix(sky, uZenith, smoothstep(0.32, 0.82, h));
+          float stormShift = clamp((uDustTau - 0.8) / 2.8, 0.0, 1.0);
 
-          // Golden sunset scatter halo around Sol
-          float sunDot = max(dot(vWorldDir, uSunDir), 0.0);
-          sky += vec3(1.0, 0.56, 0.18) * pow(sunDot, 10.0) * 0.45;
-          sky += vec3(1.0, 0.78, 0.38) * pow(sunDot, 64.0) * 0.65;
-          sky += vec3(1.0, 0.94, 0.80) * pow(sunDot, 420.0) * 1.45;
+          vec3 sky = mix(uHorizon, uDuskBand, smoothstep(0.0, 0.16, h));
+          sky = mix(sky, uMidSky, smoothstep(0.14, 0.42, h));
+          sky = mix(sky, uZenith, smoothstep(0.36, 0.85, h));
+          sky = mix(sky, vec3(0.76, 0.41, 0.22), stormShift * 0.48);
 
-          // Subtle high-altitude Martian cirrus wisps
+          float cosTheta = clamp(dot(normalize(vWorldDir), normalize(uSunDir)), -1.0, 1.0);
+          float hgHalo = henyeyGreenstein(cosTheta, uHgG);
+          float hgWide = smoothstep(0.65, 0.995, cosTheta);
+          float cosZenith = max(normalize(uSunDir).y, 0.05);
+          float beerAtten = exp(-uDustTau * 0.35 / cosZenith);
+
+          vec3 blueSunsetTint = vec3(0.42, 0.64, 0.88) * clamp(hgHalo * 0.24, 0.0, 0.72) * (1.0 - stormShift * 0.55);
+          sky += blueSunsetTint * (0.55 + 0.45 * hgWide);
+
+          float sunDisc = smoothstep(0.99965, 0.99993, cosTheta);
+          sky += vec3(1.0, 0.96, 0.88) * sunDisc * 2.2 * max(0.25, beerAtten);
+
           float wisp = sin(vWorldDir.x * 9.0 + vWorldDir.z * 5.0) * cos(vWorldDir.z * 7.0 - vWorldDir.x * 3.0);
           float wispMask = smoothstep(0.06, 0.25, h) * (1.0 - smoothstep(0.25, 0.55, h));
-          sky += vec3(0.95, 0.55, 0.32) * max(wisp, 0.0) * wispMask * 0.11;
+          sky += vec3(0.92, 0.62, 0.42) * max(wisp, 0.0) * wispMask * 0.09;
 
           gl_FragColor = vec4(sky, 1.0);
         }
@@ -180,8 +207,64 @@ export function buildMarsEnvironment(
   const skyDome = new THREE.Mesh(skyGeo, skyMat);
   scene.add(skyDome);
 
-  // Subtle High-Altitude Solar-Wind Aurora Shimmer (activated subtly during Scene 4 advisory)
-  const auroraGeo = trackGeo(new THREE.SphereGeometry(108, 32, 18, 0, Math.PI * 2, 0.08, Math.PI * 0.34));
+  const phobosMesh = new THREE.Mesh(
+    trackGeo(new THREE.DodecahedronGeometry(0.68, 1)),
+    trackMat(
+      new THREE.MeshStandardMaterial({
+        color: '#a89f96',
+        roughness: 0.92,
+        metalness: 0.04,
+        emissive: '#3a302b',
+        emissiveIntensity: 0.45,
+        fog: false,
+      }),
+    ),
+  );
+  phobosMesh.scale.set(1.22, 0.92, 0.98);
+  scene.add(phobosMesh);
+
+  const deimosMesh = new THREE.Mesh(
+    trackGeo(new THREE.DodecahedronGeometry(0.32, 0)),
+    trackMat(
+      new THREE.MeshStandardMaterial({
+        color: '#c9bfb2',
+        roughness: 0.88,
+        metalness: 0.04,
+        emissive: '#4d443c',
+        emissiveIntensity: 0.6,
+        fog: false,
+      }),
+    ),
+  );
+  scene.add(deimosMesh);
+
+  const updateCelestialAndSky = (elapsedSec: number, dustTau: number) => {
+    skyMat.uniforms.uDustTau.value = dustTau;
+
+    const compressedHours = (elapsedSec * 180) / 3600;
+    const phobosAng = (compressedHours / MARS_FACTS.PHOBOS_ORBIT_HOURS) * Math.PI * 2 + 0.85;
+    const deimosAng = -(compressedHours / MARS_FACTS.DEIMOS_ORBIT_HOURS) * Math.PI * 2 + 2.1;
+
+    const skyR = 104;
+    const pElev = 0.28 + Math.abs(Math.sin(phobosAng)) * 0.45;
+    phobosMesh.position.set(
+      -Math.cos(phobosAng) * skyR * Math.cos(pElev),
+      Math.max(14, Math.sin(pElev) * skyR),
+      Math.sin(phobosAng) * skyR * 0.55 - 18,
+    );
+    phobosMesh.rotation.y = phobosAng * 1.4;
+
+    const dElev = 0.42 + Math.abs(Math.cos(deimosAng)) * 0.25;
+    deimosMesh.position.set(
+      Math.cos(deimosAng) * skyR * Math.cos(dElev),
+      Math.max(22, Math.sin(dElev) * skyR),
+      -Math.sin(deimosAng) * skyR * 0.6 - 12,
+    );
+    deimosMesh.rotation.y = deimosAng;
+  };
+  updateCelestialAndSky(0, 1.0);
+
+  const auroraGeo = trackGeo(new THREE.SphereGeometry(116, 32, 18, 0, Math.PI * 2, 0.08, Math.PI * 0.34));
   const auroraMat = trackMat(
     new THREE.ShaderMaterial({
       side: THREE.BackSide,
@@ -216,7 +299,7 @@ export function buildMarsEnvironment(
   const auroraDome = new THREE.Mesh(auroraGeo, auroraMat);
   scene.add(auroraDome);
 
-  // Build custom Martian Sunset PMREM Environment Map directly from the sky dome + warm ground bounce!
+  // PMREM Martian Sunset Environment Map
   const envScene = new THREE.Scene();
   const envSky = new THREE.Mesh(skyGeo, skyMat);
   envScene.add(envSky);
@@ -234,14 +317,14 @@ export function buildMarsEnvironment(
   scene.environment = envTexture;
   scene.environmentIntensity = 0.92;
 
-  // Upper space starfield
+  // Starfield
   const starCount = quality === 'high' ? 360 : 180;
   const starPos = new Float32Array(starCount * 3);
   const randStars = seededRandom(2026);
   for (let i = 0; i < starCount; i++) {
     const theta = randStars() * Math.PI * 2;
     const phi = randStars() * Math.PI * 0.38;
-    const r = 104;
+    const r = 112;
     starPos[i * 3] = r * Math.sin(phi) * Math.cos(theta);
     starPos[i * 3 + 1] = r * Math.cos(phi) + 8;
     starPos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
@@ -259,14 +342,15 @@ export function buildMarsEnvironment(
   );
   scene.add(new THREE.Points(starGeo, starMat));
 
-  // 2. High-Detail Martian Terrain with PBR Maps + Slope-Dependent Vertex Colors + AO
-  const regolith = createMarsRegolithTextures(maxAniso, 20);
+  // 2. Martian Terrain with PBR Maps + Slope-Dependent / Compacted-Pad Vertex Colors
+  const regolith = createMarsRegolithTextures(maxAniso, layout.mode === 'gameplay' ? 24 : 20);
   trackTex(regolith.map);
   trackTex(regolith.normalMap);
   trackTex(regolith.roughnessMap);
   if (regolith.aoMap) trackTex(regolith.aoMap);
 
-  const terrainGrid = getDefaultTerrainGrid();
+  const terrainGrid = getDefaultTerrainGrid(layout.mode);
+  const gAt = (x: number, z: number) => groundHeightAt(x, z, terrainGrid);
   const segments = terrainGrid.segments;
   const terrainGeo = trackGeo(
     new THREE.PlaneGeometry(terrainGrid.sizeMeters, terrainGrid.sizeMeters, segments, segments),
@@ -277,27 +361,40 @@ export function buildMarsEnvironment(
   for (let i = 0; i < posAttr.count; i++) {
     const vx = posAttr.getX(i);
     const vz = posAttr.getZ(i);
-    posAttr.setY(i, groundHeightAt(vx, vz));
+    posAttr.setY(i, gAt(vx, vz));
   }
   terrainGeo.computeVertexNormals();
   terrainGeo.setAttribute('uv2', terrainGeo.attributes.uv);
 
-  // Vertex color tinting by elevation, slope & crater depth
   const normAttr = terrainGeo.attributes.normal as THREE.BufferAttribute;
   const vColors = new Float32Array(posAttr.count * 3);
   const cDust = new THREE.Color('#f0c8b0');
   const cSlope = new THREE.Color('#8e4838');
   const cBasin = new THREE.Color('#c88266');
+  const cSoftSand = new THREE.Color('#e39c68');
+  const cRockyPatch = new THREE.Color('#6a4842');
+  const cCompactedPad = new THREE.Color('#854f3c');
   const tmpC = new THREE.Color();
 
   for (let i = 0; i < posAttr.count; i++) {
+    const vx = posAttr.getX(i);
     const vy = posAttr.getY(i);
-    const ny = normAttr.getY(i); // 1 = flat, < 0.9 = steep slope
+    const vz = posAttr.getZ(i);
+    const ny = normAttr.getY(i);
     const slopeFactor = THREE.MathUtils.clamp((1.0 - ny) * 4.5, 0, 1);
     const heightFactor = THREE.MathUtils.clamp((vy + 0.9) / 2.2, 0, 1);
+    const softSand = getSoftSandFactorAt(vx, vz, layout.mode);
+    const { k } = getLocalRockFractionK(vx, vz, layout.mode);
+    const rockyFactor = THREE.MathUtils.clamp((k - 0.05) / 0.14, 0, 1);
 
     tmpC.copy(cBasin).lerp(cDust, heightFactor);
     tmpC.lerp(cSlope, slopeFactor);
+    if (softSand > 0.01) tmpC.lerp(cSoftSand, softSand * 0.72);
+    if (rockyFactor > 0.01) tmpC.lerp(cRockyPatch, rockyFactor * 0.55);
+    if (layout.mode === 'gameplay' && isOnPavedSurface(vx, vz, layout)) {
+      tmpC.lerp(cCompactedPad, 0.55);
+    }
+
     vColors[i * 3] = tmpC.r;
     vColors[i * 3 + 1] = tmpC.g;
     vColors[i * 3 + 2] = tmpC.b;
@@ -340,7 +437,6 @@ export function buildMarsEnvironment(
     }),
   );
 
-  // Continuous inner canyon cliff ridge ring (r ~ 44..54) eliminating flat plane horizon gaps
   const buildContinuousRidgeRing = (
     innerR: number,
     outerR: number,
@@ -357,7 +453,7 @@ export function buildMarsEnvironment(
     for (let i = 0; i < p.count; i++) {
       v.fromBufferAttribute(p, i);
       const ang = Math.atan2(v.z, v.x);
-      const ny = (v.y + baseHeight * 0.5) / baseHeight; // 0 bottom .. 1 top
+      const ny = (v.y + baseHeight * 0.5) / baseHeight;
       const ridgeWave =
         Math.sin(ang * 4.0 + seedOffset) * 0.45 +
         Math.cos(ang * 9.0 - seedOffset * 1.4) * 0.3 +
@@ -365,8 +461,8 @@ export function buildMarsEnvironment(
         Math.cos(ang * 29.0) * 0.1;
       const terrace = Math.sin(ny * Math.PI * 4.0) * 0.65;
       const rScale = 1.0 + ridgeWave * 0.08 + (1.0 - ny) * 0.14;
-      v.x = v.x * rScale + 2.0;
-      v.z = v.z * rScale - 2.0;
+      v.x = v.x * rScale + layout.walkableCenter.x;
+      v.z = v.z * rScale + layout.walkableCenter.z;
       if (ny > 0.05) {
         v.y += ny * (ridgeWave * peakAmp + terrace * 0.45);
       }
@@ -379,41 +475,59 @@ export function buildMarsEnvironment(
     scene.add(mesh);
   };
 
-  buildContinuousRidgeRing(58, 70, 8.2, 4.6, 1.2, mesaMat);
-  buildContinuousRidgeRing(
-    74,
-    88,
-    13.5,
-    7.2,
-    3.7,
-    trackMat(
-      new THREE.MeshStandardMaterial({
-        color: '#6e2e24',
-        roughness: 0.96,
-        metalness: 0.02,
-        side: THREE.DoubleSide,
-      }),
-    ),
-  );
+  if (layout.mode === 'gameplay') {
+    buildContinuousRidgeRing(66, 78, 9.2, 5.0, 1.2, mesaMat);
+    buildContinuousRidgeRing(
+      82,
+      96,
+      15.0,
+      7.6,
+      3.7,
+      trackMat(
+        new THREE.MeshStandardMaterial({
+          color: '#6e2e24',
+          roughness: 0.96,
+          metalness: 0.02,
+          side: THREE.DoubleSide,
+        }),
+      ),
+    );
+  } else {
+    buildContinuousRidgeRing(58, 70, 8.2, 4.6, 1.2, mesaMat);
+    buildContinuousRidgeRing(
+      74,
+      88,
+      13.5,
+      7.2,
+      3.7,
+      trackMat(
+        new THREE.MeshStandardMaterial({
+          color: '#6e2e24',
+          roughness: 0.96,
+          metalness: 0.02,
+          side: THREE.DoubleSide,
+        }),
+      ),
+    );
+  }
 
-  // Hero terraced mesa landmarks framing the sunset vista
   const randMesa = seededRandom(512);
   const heroMesaAngles = [-1.9, -1.05, -0.35, 0.3, 2.5];
   heroMesaAngles.forEach((angle, i) => {
-    const dist = 46 + (i % 2) * 5;
+    const dist = (layout.mode === 'gameplay' ? 58 : 46) + (i % 2) * 5;
     const width = 6.8 + randMesa() * 3.8;
     const height = 7.4 + randMesa() * 4.5;
     const mesaGeo = trackGeo(buildMesaFormationGeometry(i * 3.1, width, height));
     const mesa = new THREE.Mesh(mesaGeo, mesaMat);
     const mx = Math.cos(angle) * dist + 2;
     const mz = Math.sin(angle) * dist - 4;
-    mesa.position.set(mx, groundHeightAt(mx, mz) + height * 0.32 - 1.4, mz);
+    mesa.position.set(mx, gAt(mx, mz) + height * 0.32 - 1.4, mz);
     mesa.rotation.y = randMesa() * Math.PI * 2;
     mesa.receiveShadow = true;
     scene.add(mesa);
   });
 
-  // 4. Sculpted Rock Formations via InstancedMesh (Outcrops + Jagged Basalt + Framing Boulders)
+  // 4. Sculpted Rock Formations via InstancedMesh
   const outcropGeo = trackGeo(buildStratifiedRockGeometry());
   const basaltGeo = trackGeo(buildJaggedBasaltGeometry());
 
@@ -429,20 +543,12 @@ export function buildMarsEnvironment(
     }),
   );
 
-  const rockSpecs = generateOutpostRockSpecs(quality, terrainGrid);
+  const rockSpecs = generateOutpostRockSpecs(quality, terrainGrid, layout.mode);
   const outcropSpecs = rockSpecs.filter((r) => r.kind === 'outcrop');
   const basaltSpecs = rockSpecs.filter((r) => r.kind === 'basalt');
 
-  const outcropInst = new THREE.InstancedMesh(
-    outcropGeo,
-    rockMat,
-    Math.max(1, outcropSpecs.length),
-  );
-  const basaltInst = new THREE.InstancedMesh(
-    basaltGeo,
-    rockMat,
-    Math.max(1, basaltSpecs.length),
-  );
+  const outcropInst = new THREE.InstancedMesh(outcropGeo, rockMat, Math.max(1, outcropSpecs.length));
+  const basaltInst = new THREE.InstancedMesh(basaltGeo, rockMat, Math.max(1, basaltSpecs.length));
   outcropInst.castShadow = !isSoftwareGl && quality === 'high';
   outcropInst.receiveShadow = true;
   basaltInst.castShadow = !isSoftwareGl && quality === 'high';
@@ -482,7 +588,7 @@ export function buildMarsEnvironment(
   basaltInst.computeBoundingSphere();
   scene.add(basaltInst);
 
-  // 5. Environmental Storytelling Props (Catenary Umbilical Cables, Guide Beacons, Weather Mast, Supply Crates)
+  // 5. Environmental Storytelling Props & Comms/Weather Mast
   const matDarkMetal = trackMat(
     new THREE.MeshStandardMaterial({ color: '#24364d', roughness: 0.45, metalness: 0.65 }),
   );
@@ -498,66 +604,93 @@ export function buildMarsEnvironment(
     }),
   );
 
-  // Ground power umbilical cables connecting Solar Arrays, Wind Turbines & Battery Bank -> Habitat
-  const cablePaths: [THREE.Vector3, THREE.Vector3, THREE.Vector3][] = [
-    [
-      new THREE.Vector3(8.8, groundHeightAt(8.8, -4.8) + 0.06, -4.8),
-      new THREE.Vector3(7.2, groundHeightAt(7.2, -4.4) + 0.05, -4.4),
-      new THREE.Vector3(6.2, groundHeightAt(6.2, -3.7) + 0.08, -3.7),
-    ],
-    [
-      new THREE.Vector3(11.1, groundHeightAt(11.1, -3.0) + 0.06, -3.0),
-      new THREE.Vector3(9.6, groundHeightAt(9.6, -3.2) + 0.05, -3.2),
-      new THREE.Vector3(8.8, groundHeightAt(8.8, -4.6) + 0.06, -4.6),
-    ],
-    [
-      new THREE.Vector3(14.3, groundHeightAt(14.3, -3.6) + 0.06, -3.6),
-      new THREE.Vector3(12.6, groundHeightAt(12.6, -3.1) + 0.05, -3.1),
-      new THREE.Vector3(11.4, groundHeightAt(11.4, -2.4) + 0.06, -2.4),
-    ],
-    [
-      new THREE.Vector3(-10.0, groundHeightAt(-10.0, -7.8) + 0.06, -7.8),
-      new THREE.Vector3(-4.2, groundHeightAt(-4.2, -6.2) + 0.05, -6.2),
-      new THREE.Vector3(1.8, groundHeightAt(1.8, -4.8) + 0.08, -4.8),
-    ],
-    [
-      new THREE.Vector3(16.6, groundHeightAt(16.6, -8.2) + 0.06, -8.2),
-      new THREE.Vector3(15.2, groundHeightAt(15.2, -5.8) + 0.05, -5.8),
-      new THREE.Vector3(14.4, groundHeightAt(14.4, -3.8) + 0.06, -3.8),
-    ],
-  ];
-  cablePaths.forEach(([p0, p1, p2]) => {
-    const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
-    const tube = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(curve, 16, 0.045, 8, false)), matDarkMetal);
-    tube.castShadow = !isSoftwareGl;
-    scene.add(tube);
-  });
-
-  // Walkway guide beacons along path from Habitat Airlock to Rover, Greenhouse, Ice Drill & Landing Pad
-  const beaconSpots: [number, number][] = [
-    [1.4, -0.4],
-    [3.8, 1.3],
-    [6.1, 0.9],
-    [-4.8, -5.4],
-    [-9.6, -8.2],
-    [10.8, 3.8],
-    [13.6, 6.6],
-  ];
   const beaconLights: THREE.Mesh[] = [];
-  beaconSpots.forEach(([bx, bz]) => {
-    const bGroup = new THREE.Group();
-    bGroup.position.set(bx, groundHeightAt(bx, bz), bz);
-    const post = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.05, 0.08, 0.42, 8)), matDarkMetal);
-    post.position.y = 0.21;
-    bGroup.add(post);
-    const lens = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.055, 0.055, 0.08, 8)), matAmberLens);
-    lens.position.y = 0.45;
-    bGroup.add(lens);
-    beaconLights.push(lens);
-    scene.add(bGroup);
-  });
 
-  // 3 Gravity Survey Marker Stakes highlighting localized Mars gravity variations
+  if (layout.mode === 'showcase') {
+    const cablePaths: [THREE.Vector3, THREE.Vector3, THREE.Vector3][] = [
+      [
+        new THREE.Vector3(8.8, gAt(8.8, -4.8) + 0.06, -4.8),
+        new THREE.Vector3(7.2, gAt(7.2, -4.4) + 0.05, -4.4),
+        new THREE.Vector3(6.2, gAt(6.2, -3.7) + 0.08, -3.7),
+      ],
+      [
+        new THREE.Vector3(11.1, gAt(11.1, -3.0) + 0.06, -3.0),
+        new THREE.Vector3(9.6, gAt(9.6, -3.2) + 0.05, -3.2),
+        new THREE.Vector3(8.8, gAt(8.8, -4.6) + 0.06, -4.6),
+      ],
+      [
+        new THREE.Vector3(14.3, gAt(14.3, -3.6) + 0.06, -3.6),
+        new THREE.Vector3(12.6, gAt(12.6, -3.1) + 0.05, -3.1),
+        new THREE.Vector3(11.4, gAt(11.4, -2.4) + 0.06, -2.4),
+      ],
+      [
+        new THREE.Vector3(-10.0, gAt(-10.0, -7.8) + 0.06, -7.8),
+        new THREE.Vector3(-4.2, gAt(-4.2, -6.2) + 0.05, -6.2),
+        new THREE.Vector3(1.8, gAt(1.8, -4.8) + 0.08, -4.8),
+      ],
+      [
+        new THREE.Vector3(16.6, gAt(16.6, -8.2) + 0.06, -8.2),
+        new THREE.Vector3(15.2, gAt(15.2, -5.8) + 0.05, -5.8),
+        new THREE.Vector3(14.4, gAt(14.4, -3.8) + 0.06, -3.8),
+      ],
+    ];
+    cablePaths.forEach(([p0, p1, p2]) => {
+      const curve = new THREE.CatmullRomCurve3([p0, p1, p2]);
+      const tube = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(curve, 16, 0.045, 8, false)), matDarkMetal);
+      tube.castShadow = !isSoftwareGl;
+      scene.add(tube);
+    });
+
+    const beaconSpots: [number, number][] = [
+      [1.4, -0.4],
+      [3.8, 1.3],
+      [6.1, 0.9],
+      [-4.8, -5.4],
+      [-9.6, -8.2],
+      [10.8, 3.8],
+      [13.6, 6.6],
+    ];
+    beaconSpots.forEach(([bx, bz]) => {
+      const bGroup = new THREE.Group();
+      bGroup.position.set(bx, gAt(bx, bz), bz);
+      const post = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.05, 0.08, 0.42, 8)), matDarkMetal);
+      post.position.y = 0.21;
+      bGroup.add(post);
+      const lens = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.055, 0.055, 0.08, 8)), matAmberLens);
+      lens.position.y = 0.45;
+      bGroup.add(lens);
+      beaconLights.push(lens);
+      scene.add(bGroup);
+    });
+
+    const crateShape = new THREE.Shape();
+    crateShape.moveTo(-0.32, -0.22);
+    crateShape.lineTo(0.32, -0.22);
+    crateShape.lineTo(0.32, 0.22);
+    crateShape.lineTo(-0.32, 0.22);
+    crateShape.closePath();
+    const crateGeo = trackGeo(
+      new THREE.ExtrudeGeometry(crateShape, {
+        depth: 0.42,
+        bevelEnabled: true,
+        bevelThickness: 0.03,
+        bevelSize: 0.03,
+        bevelSegments: 2,
+      }),
+    );
+    crateGeo.center();
+
+    SHOWCASE_CRATES.forEach((cr, idx) => {
+      const crate = new THREE.Mesh(crateGeo, idx === 0 ? matOrangeAccent : matDarkMetal);
+      crate.position.set(cr.x, gAt(cr.x, cr.z) + 0.24, cr.z);
+      crate.rotation.y = cr.yaw;
+      crate.castShadow = !isSoftwareGl;
+      crate.receiveShadow = true;
+      scene.add(crate);
+    });
+  }
+
+  // Gravity Survey Marker Stakes
   const matSkyBeacon = trackMat(
     new THREE.MeshStandardMaterial({
       color: '#38BDF8',
@@ -566,14 +699,21 @@ export function buildMarsEnvironment(
       roughness: 0.25,
     }),
   );
-  const gravMarkers: [number, number][] = [
-    [-10.5, -3.2], // Crater Mascon Basin (+Gravity)
-    [3.2, 1.5], // Mid-Latitude Outpost Plain
-    [16.5, -8.5], // High Wind Ridge (-Gravity)
-  ];
+  const gravMarkers: [number, number][] =
+    layout.mode === 'gameplay'
+      ? [
+          [-29.5, 16.0],
+          [16.0, 29.0],
+          [32.0, -24.0],
+        ]
+      : [
+          [-10.5, -3.2],
+          [3.2, 1.5],
+          [16.5, -8.5],
+        ];
   gravMarkers.forEach(([gx, gz]) => {
     const gStake = new THREE.Group();
-    gStake.position.set(gx, groundHeightAt(gx, gz), gz);
+    gStake.position.set(gx, gAt(gx, gz), gz);
     const pole = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.025, 0.035, 0.95, 8)), matDarkMetal);
     pole.position.y = 0.475;
     gStake.add(pole);
@@ -583,61 +723,61 @@ export function buildMarsEnvironment(
     scene.add(gStake);
   });
 
-  // Rugged Beveled Supply Crates near Habitat Airlock
-  const crateShape = new THREE.Shape();
-  crateShape.moveTo(-0.32, -0.22);
-  crateShape.lineTo(0.32, -0.22);
-  crateShape.lineTo(0.32, 0.22);
-  crateShape.lineTo(-0.32, 0.22);
-  crateShape.closePath();
-  const crateGeo = trackGeo(
-    new THREE.ExtrudeGeometry(crateShape, {
-      depth: 0.42,
-      bevelEnabled: true,
-      bevelThickness: 0.03,
-      bevelSize: 0.03,
-      bevelSegments: 2,
-    }),
-  );
-  crateGeo.center();
-
-  const crateSpots: [number, number, number][] = [
-    [1.65, -2.05, 0.3],
-    [1.25, -1.65, -0.4],
-  ];
-  crateSpots.forEach(([cx, cz, rotY], idx) => {
-    const crate = new THREE.Mesh(crateGeo, idx === 0 ? matOrangeAccent : matDarkMetal);
-    crate.position.set(cx, groundHeightAt(cx, cz) + 0.24, cz);
-    crate.rotation.y = rotY;
-    crate.castShadow = !isSoftwareGl;
-    crate.receiveShadow = true;
-    scene.add(crate);
-  });
-
-  // Outpost Weather & Solar Radiation Sensor Mast
+  // Outpost Weather / Comms Sensor Mast (compact in Showcase, tall relay tower in Gameplay)
+  const mastSpec = layout.modules.commsMast;
   const mastGroup = new THREE.Group();
-  const mx = -0.6;
-  const mz = 1.4;
-  mastGroup.position.set(mx, groundHeightAt(mx, mz), mz);
-  const tripodPts = [0, 1, 2].map((i) => {
+  const mx = mastSpec.x;
+  const mz = mastSpec.z;
+  mastGroup.position.set(mx, gAt(mx, mz), mz);
+
+  const legRadius = mastSpec.tall ? 0.58 : 0.35;
+  const tripodJoinY = mastSpec.tall ? 1.85 : 0.65;
+  const mastHeight = mastSpec.tall ? 5.6 : 1.85;
+  const mastCenterY = mastSpec.tall ? 3.2 : 1.05;
+  const anemometerY = mastSpec.tall ? 6.08 : 2.02;
+
+  [0, 1, 2].forEach((i) => {
     const a = (i / 3) * Math.PI * 2;
-    return new THREE.CatmullRomCurve3([
-      new THREE.Vector3(Math.cos(a) * 0.35, 0, Math.sin(a) * 0.35),
-      new THREE.Vector3(0, 0.65, 0),
+    const c = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(Math.cos(a) * legRadius, 0, Math.sin(a) * legRadius),
+      new THREE.Vector3(0, tripodJoinY, 0),
     ]);
-  });
-  tripodPts.forEach((c) => {
-    const leg = new THREE.Mesh(trackGeo(new THREE.TubeGeometry(c, 6, 0.03, 6, false)), matDarkMetal);
+    const leg = new THREE.Mesh(
+      trackGeo(new THREE.TubeGeometry(c, 6, mastSpec.tall ? 0.055 : 0.03, 6, false)),
+      matDarkMetal,
+    );
     leg.castShadow = !isSoftwareGl;
     mastGroup.add(leg);
   });
-  const mastPole = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.035, 0.045, 1.85, 8)), matDarkMetal);
-  mastPole.position.y = 1.05;
+
+  if (mastSpec.tall) {
+    const plinth = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.76, 0.84, 0.28, 12)), matDarkMetal);
+    plinth.position.y = 0.14;
+    plinth.castShadow = !isSoftwareGl;
+    mastGroup.add(plinth);
+  }
+
+  const mastPole = new THREE.Mesh(
+    trackGeo(new THREE.CylinderGeometry(mastSpec.tall ? 0.065 : 0.035, mastSpec.tall ? 0.095 : 0.045, mastHeight, 8)),
+    matDarkMetal,
+  );
+  mastPole.position.y = mastCenterY;
   mastPole.castShadow = !isSoftwareGl;
   mastGroup.add(mastPole);
 
+  if (mastSpec.tall) {
+    const dish = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.45, 0.12, 0.25, 14)), matOrangeAccent);
+    dish.rotation.x = 0.85;
+    dish.position.set(0.18, 4.85, 0.22);
+    mastGroup.add(dish);
+    const beacon = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.11, 10, 8)), matAmberLens);
+    beacon.position.set(0, 6.22, 0);
+    beaconLights.push(beacon);
+    mastGroup.add(beacon);
+  }
+
   const anemometerHead = new THREE.Group();
-  anemometerHead.position.y = 2.02;
+  anemometerHead.position.y = anemometerY;
   for (let i = 0; i < 3; i++) {
     const a = (i / 3) * Math.PI * 2;
     const arm = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.012, 0.012, 0.28, 6)), matDarkMetal);
@@ -659,10 +799,13 @@ export function buildMarsEnvironment(
   const dustCount = quality === 'high' ? 240 : 100;
   const dustPositions = new Float32Array(dustCount * 3);
   const randDust = seededRandom(99);
+  const spanX = layout.mode === 'gameplay' ? 76 : 34;
+  const spanZ = layout.mode === 'gameplay' ? 68 : 26;
+  const offsetX = layout.mode === 'gameplay' ? 0 : 2;
   for (let i = 0; i < dustCount; i++) {
-    dustPositions[i * 3] = (randDust() - 0.5) * 34 + 2;
+    dustPositions[i * 3] = (randDust() - 0.5) * spanX + offsetX;
     dustPositions[i * 3 + 1] = 0.2 + randDust() * 6.5;
-    dustPositions[i * 3 + 2] = (randDust() - 0.5) * 26;
+    dustPositions[i * 3 + 2] = (randDust() - 0.5) * spanZ;
   }
   const dustGeo = trackGeo(new THREE.BufferGeometry());
   dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPositions, 3));
@@ -691,6 +834,9 @@ export function buildMarsEnvironment(
     beaconLights,
     skyMat,
     auroraMat,
+    phobosMesh,
+    deimosMesh,
+    updateCelestialAndSky,
     envTexture,
     dispose: () => {
       geometries.forEach((g) => g.dispose());

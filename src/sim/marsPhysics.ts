@@ -1,4 +1,9 @@
 import { MARS_FACTS, PHYSICS_CONSTANTS } from './constants';
+import {
+  computeTerrainSlopeDeg,
+  getLocalRockFractionK,
+  getSoftSandFactorAt,
+} from './terrainField';
 
 export interface LocalMarsGravityInfo {
   gravityMs2: number;
@@ -42,9 +47,22 @@ export interface MarsEnvironmentSnapshot {
   airTempC: number;
   pressurePa: number;
   solarIrradianceWm2: number;
+  rockFractionK: number;
+  terrainZoneName: string;
+  softSandFactor: number;
+  slopeDeg: number;
+  soundDelay100mS: number;
   gravity: LocalMarsGravityInfo;
   wind: MartianWindPhysics;
   lastJump: MarsJumpTelemetry | null;
+}
+
+/** [DERIVED] Sound propagation delay d / c_Mars on Mars (~240 m/s low-freq). */
+export function computeSoundDelaySeconds(
+  distanceMeters: number,
+  speedOfSoundMs = MARS_FACTS.SPEED_OF_SOUND_LOW_HZ_MS,
+): number {
+  return Math.max(0, distanceMeters) / Math.max(50, speedOfSoundMs);
 }
 
 /**
@@ -237,12 +255,20 @@ export function computeDiurnalMarsWeather(
 
   const baseWind = dustTau > 1.8 ? 14.8 : 6.4 + Math.sin(elapsedSec * 0.25 + sol) * 1.4;
   const windMs = activeWxWindMs ? activeWxWindMs : baseWind;
+  const { k, zoneLabel: terrainZoneName } = getLocalRockFractionK(terrainX, terrainZ);
+  const softSandFactor = Number(getSoftSandFactorAt(terrainX, terrainZ).toFixed(2));
+  const slopeDeg = Number(computeTerrainSlopeDeg(terrainX, terrainZ).toFixed(1));
 
   return {
     localTimeLabel: `${hh}:${mm} LMST`,
     airTempC,
     pressurePa,
     solarIrradianceWm2,
+    rockFractionK: k,
+    terrainZoneName,
+    softSandFactor,
+    slopeDeg,
+    soundDelay100mS: Number(computeSoundDelaySeconds(100).toFixed(3)),
     gravity: computeLocalMarsGravity(terrainX, terrainZ, terrainY),
     wind: computeMartianWindPhysics(windMs, dustTau),
     lastJump,

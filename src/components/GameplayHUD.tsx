@@ -32,23 +32,33 @@ import {
   Droplets,
   Sprout,
   Crosshair,
+  ScanEye,
+  Users,
+  Map as MapIcon,
+  MapPin,
 } from 'lucide-react';
 import { OUTPOST_LANDMARKS, OutpostLandmarkId } from '../data/missionData';
 import {
   CREW_PROFILES,
+  CrewMemberId,
+  MARS_FACTS,
+  PHYSICS_CONSTANTS,
   ResourceStatus,
   SIM_CONSTANTS,
   getResourceStatus,
 } from '../sim/constants';
+import { CrewInspectCardData } from '../sim/crewAndRoverSim';
 import { MarsEnvironmentSnapshot } from '../sim/marsPhysics';
 import { MissionDefinition, MissionZoneId } from '../sim/missionsData';
+import { GAMEPLAY_LAYOUT } from '../sim/outpostLayout';
 import {
   CampaignState,
   computeRoverMood,
   getResourceDaysSummary,
 } from '../sim/simEngine';
-import { GameplayInputState } from './MarsOutpost3D';
+import { GameplayInputState, LandingTelemetrySummary } from './MarsOutpost3D';
 import { RoverAssistant } from './RoverAssistant';
+import { GameplayPoseTelemetry } from './WristMapModal';
 
 interface GameplayHUDProps {
   simState: CampaignState;
@@ -56,12 +66,21 @@ interface GameplayHUDProps {
   marsPhysics: MarsEnvironmentSnapshot;
   cameraMode: '3p' | '1p';
   onToggleCameraMode: () => void;
+  lensOpen?: boolean;
+  onToggleLens?: () => void;
+  mapOpen?: boolean;
+  onToggleMap?: () => void;
+  poseTelemetry?: GameplayPoseTelemetry;
   nearbyZone: MissionZoneId | null;
   nearbyStation: OutpostLandmarkId | null;
+  nearbyCrewId?: CrewMemberId | null;
   inspectedStation: OutpostLandmarkId | null;
+  inspectedCrew?: CrewInspectCardData | null;
   onCloseInspected: () => void;
+  onCloseInspectedCrew?: () => void;
   onInteractZone: (zoneId: MissionZoneId) => void;
   onInteractStation: (id: OutpostLandmarkId) => void;
+  onInteractCrew?: (id: CrewMemberId) => void;
   onOpenCommandMode: (tab?: 'look' | 'compare') => void;
   onOpenLog: () => void;
   onOpenCredits: () => void;
@@ -69,6 +88,8 @@ interface GameplayHUDProps {
   onToggleRoverHush: () => void;
   weatherSecondsLeft: number;
   habitatDistMeters: number;
+  landingToast?: LandingTelemetrySummary | null;
+  roverTiltWarning?: { active: boolean; deg: number };
   onTriggerWeatherTest: () => void;
   onShelterClick: () => void;
   soundEnabled: boolean;
@@ -98,12 +119,21 @@ export function GameplayHUD({
   marsPhysics,
   cameraMode,
   onToggleCameraMode,
+  lensOpen = false,
+  onToggleLens,
+  mapOpen = false,
+  onToggleMap,
+  poseTelemetry,
   nearbyZone,
   nearbyStation,
+  nearbyCrewId = null,
   inspectedStation,
+  inspectedCrew = null,
   onCloseInspected,
+  onCloseInspectedCrew,
   onInteractZone,
   onInteractStation,
+  onInteractCrew,
   onOpenCommandMode,
   onOpenLog,
   onOpenCredits,
@@ -111,6 +141,8 @@ export function GameplayHUD({
   onToggleRoverHush,
   weatherSecondsLeft,
   habitatDistMeters,
+  landingToast = null,
+  roverTiltWarning,
   onTriggerWeatherTest,
   onShelterClick,
   soundEnabled,
@@ -128,6 +160,9 @@ export function GameplayHUD({
 
   const inspectedInfo = inspectedStation ? OUTPOST_LANDMARKS[inspectedStation] : null;
   const nearbyInfo = nearbyStation ? OUTPOST_LANDMARKS[nearbyStation] : null;
+  const nearbyCrewProfile = nearbyCrewId
+    ? CREW_PROFILES.find((p) => p.id === nearbyCrewId) ?? null
+    : null;
   const days = getResourceDaysSummary(simState);
   const roverMood = computeRoverMood(simState);
   const currentHintLevel = simState.roverHintLevelUsed[activeMission.id] ?? 0;
@@ -192,6 +227,38 @@ export function GameplayHUD({
     shelter: 'Storm Shelter',
   };
 
+  // Top-center Compass Strip + Diegetic Visor Waypoint calculation
+  const px = poseTelemetry?.x ?? GAMEPLAY_LAYOUT.modules.astroSpawn.x;
+  const pz = poseTelemetry?.z ?? GAMEPLAY_LAYOUT.modules.astroSpawn.z;
+  const headingDeg = poseTelemetry?.headingDeg ?? 180;
+  const activeGoal = simState.activeWeatherEvent
+    ? { label: 'Habitat Shelter', x: GAMEPLAY_LAYOUT.destinationWaypoints.airlock.x, z: GAMEPLAY_LAYOUT.destinationWaypoints.airlock.z }
+    : { label: zoneTitleMap[activeMission.zoneId], x: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].x, z: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].z };
+  const waypointDistM = Math.max(0, Math.round(Math.hypot(activeGoal.x - px, activeGoal.z - pz)));
+  const baselineWalkMs =
+    PHYSICS_CONSTANTS.MARS_WALK_SPEED_MS * (quickMode ? PHYSICS_CONSTANTS.QUICK_MODE_SPEED_MULT : 1);
+  const effectiveSpeedMs = Math.max(poseTelemetry?.speedMs ?? 0, baselineWalkMs);
+  const waypointEtaS = waypointDistM <= 2 ? 0 : Math.max(1, Math.round(waypointDistM / effectiveSpeedMs));
+  const targetBearingDeg =
+    ((Math.atan2(activeGoal.x - px, -(activeGoal.z - pz)) * 180) / Math.PI + 360) % 360;
+  const wrapRelDeg = (deg: number) => {
+    let d = ((deg - headingDeg + 540) % 360) - 180;
+    if (d < -180) d += 360;
+    return d;
+  };
+  const compassTicks: Array<{ label: string; deg: number }> = [
+    { label: 'N', deg: 0 },
+    { label: 'NE', deg: 45 },
+    { label: 'E', deg: 90 },
+    { label: 'SE', deg: 135 },
+    { label: 'S', deg: 180 },
+    { label: 'SW', deg: 225 },
+    { label: 'W', deg: 270 },
+    { label: 'NW', deg: 315 },
+  ];
+  const goalRelDeg = wrapRelDeg(targetBearingDeg);
+  const clampedGoalRelDeg = Math.max(-72, Math.min(72, goalRelDeg));
+
   return (
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-3 sm:p-4 font-[family-name:var(--font-game)]">
       {/* Centered Crosshair Reticle (1P always; 3P when pointer locked) */}
@@ -207,6 +274,57 @@ export function GameplayHUD({
           )}
         </div>
       )}
+
+      {/* TOP-CENTER COMPASS STRIP + DIEGETIC VISOR WAYPOINT */}
+      <div className="pointer-events-none fixed left-1/2 top-3 z-20 hidden -translate-x-1/2 flex-col items-center gap-1 md:flex">
+        <div className="relative h-6 w-[236px] overflow-hidden rounded-lg border border-[#E85D04]/45 bg-[#071324]/82 shadow-[0_0_16px_rgba(7,19,36,0.55)]">
+          {/* Center hairline */}
+          <span
+            aria-hidden="true"
+            className="absolute left-1/2 top-0 h-2 w-0.5 -translate-x-1/2 bg-[#FFB703]"
+          />
+          {compassTicks.map((tick) => {
+            const rel = wrapRelDeg(tick.deg);
+            if (Math.abs(rel) > 78) return null;
+            const leftPct = 50 + (rel / 80) * 50;
+            const isMajor = tick.label.length === 1;
+            return (
+              <span
+                key={tick.label}
+                style={{ left: `${leftPct}%` }}
+                className={`absolute top-1.5 -translate-x-1/2 text-[10px] font-extrabold tabular-nums ${
+                  tick.label === 'N'
+                    ? 'text-[#FFB703]'
+                    : isMajor
+                      ? 'text-[#F8F9FA]/90'
+                      : 'text-[#F8F9FA]/55'
+                }`}
+              >
+                {tick.label}
+              </span>
+            );
+          })}
+          {/* Active Mission / Shelter Target Chevron on Compass */}
+          <span
+            title={`${activeGoal.label} (${Math.round(targetBearingDeg)}°)`}
+            style={{ left: `${50 + (clampedGoalRelDeg / 80) * 50}%` }}
+            className={`absolute bottom-0.5 h-2 w-2 -translate-x-1/2 rotate-45 ${
+              simState.activeWeatherEvent
+                ? 'bg-[#22C55E] shadow-[0_0_8px_#22C55E]'
+                : 'bg-[#FFB703] shadow-[0_0_8px_#FFB703]'
+            }`}
+          />
+        </div>
+        <div className="inline-flex items-center gap-1.5 text-[11px] font-extrabold tracking-wide text-[#F8F9FA] drop-shadow-[0_1px_4px_rgba(0,0,0,0.9)] tabular-nums">
+          <MapPin
+            className={`h-3.5 w-3.5 ${simState.activeWeatherEvent ? 'text-[#22C55E]' : 'text-[#FFB703]'}`}
+            aria-hidden="true"
+          />
+          <span>
+            {activeGoal.label} · {waypointDistM} m · {waypointEtaS}s ETA
+          </span>
+        </div>
+      </div>
 
       {/* TOP HUD ROW: Minecraft-Style Resource Bars (Left) + Compact Objective Card (Right) */}
       <div className="flex flex-col items-start justify-between gap-2.5 lg:flex-row">
@@ -450,6 +568,40 @@ export function GameplayHUD({
             >
               <Home className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
             </button>
+            {onToggleMap && (
+              <button
+                type="button"
+                onClick={onToggleMap}
+                aria-pressed={mapOpen}
+                title="Open Outpost Wrist Map [M]"
+                className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg border px-2.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                  mapOpen
+                    ? 'border-[#FFB703] bg-[#FFB703] text-[#071324]'
+                    : 'border-[#E85D04]/35 bg-[#071324]/88 text-[#FFB703] hover:border-[#FFB703]'
+                }`}
+              >
+                <MapIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Map [M]</span>
+              </button>
+            )}
+
+            {onToggleLens && (
+              <button
+                type="button"
+                onClick={onToggleLens}
+                aria-pressed={lensOpen}
+                title="Toggle Mars Science Lens [F]"
+                className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg border px-2.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                  lensOpen
+                    ? 'border-[#38BDF8] bg-[#38BDF8] text-[#071324]'
+                    : 'border-[#E85D04]/35 bg-[#071324]/88 text-[#38BDF8] hover:border-[#38BDF8]'
+                }`}
+              >
+                <ScanEye className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>Lens [F]</span>
+              </button>
+            )}
+
             {onOpenPauseMenu && (
               <button
                 type="button"
@@ -461,6 +613,80 @@ export function GameplayHUD({
               </button>
             )}
           </div>
+
+          {/* Mars Science Lens Telemetry Overlay ([F]) */}
+          <AnimatePresence>
+            {lensOpen && (
+              <motion.aside
+                key="mars-science-lens"
+                initial={reducedMotion ? false : { opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.16 }}
+                className="w-full rounded-xl border border-[#38BDF8]/60 bg-[#071324]/94 p-3 text-[11px] shadow-[0_0_26px_rgba(56,189,248,0.24)]"
+              >
+                <div className="flex items-center justify-between border-b border-white/10 pb-1.5">
+                  <span className="inline-flex items-center gap-1.5 font-extrabold uppercase tracking-wider text-[#38BDF8]">
+                    <ScanEye className="h-3.5 w-3.5" aria-hidden="true" />
+                    Mars Science Lens [F]
+                  </span>
+                  {onToggleLens && (
+                    <button
+                      type="button"
+                      onClick={onToggleLens}
+                      aria-label="Close Mars Lens"
+                      className="text-[#F8F9FA]/70 hover:text-[#FFB703] cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5 tabular-nums">
+                  <div>
+                    <p className="text-[#F8F9FA]/60">Gravity [REAL]</p>
+                    <p className="font-bold text-[#F8F9FA]">
+                      {marsPhysics.gravity.gravityMs2} m/s² ({marsPhysics.gravity.earthRatioPct}% Earth)
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[#F8F9FA]/60">Atmosphere &amp; Wind [REAL]</p>
+                    <p className="font-bold text-[#F8F9FA]">
+                      {MARS_FACTS.SURFACE_PRESSURE_MB} mb · {MARS_FACTS.MARS_AIR_DENSITY_KGM3} vs{' '}
+                      {MARS_FACTS.EARTH_AIR_DENSITY_KGM3} kg/m³ (~76× thinner)
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[#F8F9FA]/60">Sunlight [REAL]</p>
+                    <p className="font-bold text-[#FFB703]">
+                      {marsPhysics.solarIrradianceWm2} W/m² ({MARS_FACTS.SOLAR_EARTH_PERCENT}% Earth)
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-[#F8F9FA]/60">Sound @ 100 m [DERIVED]</p>
+                    <p className="font-bold text-[#38BDF8]">
+                      {MARS_FACTS.SPEED_OF_SOUND_LOW_HZ_MS} m/s ({marsPhysics.soundDelay100mS.toFixed(2)}s lag)
+                    </p>
+                  </div>
+                  <div className="col-span-2 border-t border-white/10 pt-1">
+                    <p className="text-[#F8F9FA]/60">Surface Regolith (Golombek k)</p>
+                    <p className="font-bold text-[#F8F9FA]">
+                      {marsPhysics.terrainZoneName} · k={marsPhysics.rockFractionK.toFixed(2)} · Sand{' '}
+                      {Math.round(marsPhysics.softSandFactor * 100)}% · Slope {marsPhysics.slopeDeg}°
+                    </p>
+                  </div>
+                  <div className="col-span-2">
+                    <p className="text-[#F8F9FA]/60">Earth vs Mars Walk Speed [DERIVED]</p>
+                    <p className="font-semibold text-[#F8F9FA]/90">
+                      Mars {PHYSICS_CONSTANTS.MARS_WALK_SPEED_MS.toFixed(2)} m/s vs{' '}
+                      {PHYSICS_CONSTANTS.EARTH_PREFERRED_WALK_MS.toFixed(1)} m/s Earth (hold [Shift] to lope{' '}
+                      {PHYSICS_CONSTANTS.MARS_LOPE_SPEED_MS.toFixed(2)} m/s) · Rover{' '}
+                      {PHYSICS_CONSTANTS.ROVER_SIM_DRIVE_SPEED_MS.toFixed(1)} m/s [SIM] vs 0.042 m/s [REAL]
+                    </p>
+                  </div>
+                </div>
+              </motion.aside>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Top-Right: Compact Mission Objective Card + Optional Docked Station Info */}
@@ -505,47 +731,90 @@ export function GameplayHUD({
             </div>
           </section>
 
-          {/* Right-Docked Station Inspection Card (No overlapping modal!) */}
+          {/* Right-Docked Station or Crew Inspection Card */}
           <AnimatePresence>
-            {inspectedInfo && (
+            {inspectedCrew ? (
               <motion.aside
-                key={inspectedInfo.id}
+                key={`crew-${inspectedCrew.id}`}
                 initial={reducedMotion ? false : { opacity: 0, x: 16 }}
                 animate={{ opacity: 1, x: 0 }}
                 exit={{ opacity: 0, x: 16 }}
                 transition={{ duration: 0.18 }}
-                className="w-full rounded-xl border border-[#E85D04]/55 bg-[#071324]/92 p-3 shadow-[0_0_24px_rgba(232,93,4,0.22)]"
+                className="w-full rounded-xl border border-[#38BDF8]/65 bg-[#071324]/92 p-3 shadow-[0_0_24px_rgba(56,189,248,0.22)]"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <p className="text-[11px] font-bold text-[#FFB703]">{inspectedInfo.role}</p>
+                    <p className="inline-flex items-center gap-1 text-[11px] font-bold text-[#38BDF8]">
+                      <Users className="h-3.5 w-3.5" aria-hidden="true" />
+                      {inspectedCrew.role}
+                    </p>
                     <h3 className="mt-0.5 text-sm font-extrabold text-[#F8F9FA]">
-                      {inspectedInfo.name}
+                      {inspectedCrew.name}
                     </h3>
                   </div>
-                  <button
-                    type="button"
-                    onClick={onCloseInspected}
-                    aria-label="Close station info"
-                    className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
-                  >
-                    <X className="h-3.5 w-3.5" aria-hidden="true" />
-                  </button>
+                  {onCloseInspectedCrew && (
+                    <button
+                      type="button"
+                      onClick={onCloseInspectedCrew}
+                      aria-label="Close crew info"
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+                <p className="mt-1 text-[11px] font-bold text-[#FFB703]">
+                  Status: {inspectedCrew.modeLabel} · {inspectedCrew.stationLabel}
+                </p>
+                <div className="mt-1.5 flex items-center gap-3 text-[11px] font-bold tabular-nums">
+                  <span className="text-[#22C55E]">Health {inspectedCrew.health}%</span>
+                  <span className="text-[#38BDF8]">Stress {inspectedCrew.stress}%</span>
                 </div>
                 <p className="mt-1.5 text-xs leading-relaxed text-[#F8F9FA]/88">
-                  {inspectedInfo.description}
-                </p>
-                <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-[#FFB703]/25 bg-[#0E2038]/85 px-2.5 py-1.5 text-[11px] font-semibold text-[#FFB703]">
-                  <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>{inspectedInfo.funFact}</span>
+                  {inspectedCrew.note}
                 </p>
               </motion.aside>
+            ) : (
+              inspectedInfo && (
+                <motion.aside
+                  key={inspectedInfo.id}
+                  initial={reducedMotion ? false : { opacity: 0, x: 16 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 16 }}
+                  transition={{ duration: 0.18 }}
+                  className="w-full rounded-xl border border-[#E85D04]/55 bg-[#071324]/92 p-3 shadow-[0_0_24px_rgba(232,93,4,0.22)]"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="text-[11px] font-bold text-[#FFB703]">{inspectedInfo.role}</p>
+                      <h3 className="mt-0.5 text-sm font-extrabold text-[#F8F9FA]">
+                        {inspectedInfo.name}
+                      </h3>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={onCloseInspected}
+                      aria-label="Close station info"
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    </button>
+                  </div>
+                  <p className="mt-1.5 text-xs leading-relaxed text-[#F8F9FA]/88">
+                    {inspectedInfo.description}
+                  </p>
+                  <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-[#FFB703]/25 bg-[#0E2038]/85 px-2.5 py-1.5 text-[11px] font-semibold text-[#FFB703]">
+                    <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>{inspectedInfo.funFact}</span>
+                  </p>
+                </motion.aside>
+              )
             )}
           </AnimatePresence>
         </div>
       </div>
 
-      {/* LIVE WEATHER EVENT: SEEK SHELTER HUD BAR */}
+      {/* LIVE WEATHER EVENT, ROVER TILT & EARTH-COMPARISON LANDING TOAST */}
       <AnimatePresence>
         {simState.activeWeatherEvent && (
           <motion.div
@@ -596,6 +865,46 @@ export function GameplayHUD({
             </div>
           </motion.div>
         )}
+
+        {roverTiltWarning?.active && (
+          <motion.div
+            key="rover-tilt-warning"
+            role="status"
+            initial={reducedMotion ? false : { opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className="mx-auto mt-1 inline-flex items-center gap-2 rounded-lg border border-[#FFB703]/70 bg-[#2A190C]/90 px-3 py-1 text-[11px] font-bold text-[#FFB703] tabular-nums"
+          >
+            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>
+              Rover Slope Caution ({roverTiltWarning.deg}° &gt; 30° — Safe limit 45°)
+            </span>
+          </motion.div>
+        )}
+
+        {landingToast && (
+          <motion.div
+            key="landing-comparison-toast"
+            role="status"
+            initial={reducedMotion ? false : { opacity: 0, y: -6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            className="mx-auto mt-1 inline-flex items-center gap-2.5 rounded-xl border border-[#38BDF8]/55 bg-[#071324]/92 px-3.5 py-1.5 text-xs font-bold text-[#F8F9FA] shadow-lg tabular-nums"
+          >
+            <ArrowUpFromLine className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+            <span>
+              {landingToast.isJump ? 'Jump' : `Drop ${landingToast.fallHeightM}m`}:{' '}
+              <strong className="text-[#FFB703]">
+                {landingToast.apexM}m Mars ({landingToast.marsHangOrFallS}s)
+              </strong>{' '}
+              vs{' '}
+              <strong className="text-[#38BDF8]">
+                {landingToast.earthApexM}m Earth ({landingToast.earthHangOrFallS}s)
+              </strong>{' '}
+              · Impact {landingToast.impactMs} m/s
+            </span>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {/* BOTTOM HUD ROW: Rover Bubble (Left) + Interaction Keycap (Center) + Control Hints (Right) */}
@@ -631,6 +940,22 @@ export function GameplayHUD({
                   <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
                 </span>
                 <span>E · Enter Shelter</span>
+              </motion.button>
+            ) : nearbyCrewProfile && onInteractCrew ? (
+              <motion.button
+                key={`crew-${nearbyCrewProfile.id}`}
+                type="button"
+                initial={reducedMotion ? false : { opacity: 0, y: 8, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 6, scale: 0.96 }}
+                transition={{ duration: 0.15 }}
+                onClick={() => onInteractCrew(nearbyCrewProfile.id)}
+                className="pointer-events-auto inline-flex min-h-[44px] items-center gap-2.5 rounded-xl border border-[#38BDF8] bg-[#071324]/92 px-3.5 py-2 text-sm font-extrabold text-[#F8F9FA] shadow-[0_0_24px_rgba(56,189,248,0.32)] hover:scale-[1.03] cursor-pointer whitespace-nowrap"
+              >
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded bg-[#38BDF8] text-xs font-black text-[#071324]">
+                  E
+                </span>
+                <span>Check in: {nearbyCrewProfile.name}</span>
               </motion.button>
             ) : nearbyZone ? (
               <motion.button
@@ -831,6 +1156,10 @@ export function GameplayHUD({
             <span><strong className="text-[#FFB703]">Space</strong> Jump</span>
             <span className="text-white/25">·</span>
             <span><strong className="text-[#FFB703]">E</strong> Inspect</span>
+            <span className="text-white/25">·</span>
+            <span><strong className="text-[#FFB703]">M</strong> Map</span>
+            <span className="text-white/25">·</span>
+            <span><strong className="text-[#38BDF8]">F</strong> Lens</span>
             <span className="text-white/25">·</span>
             <span><strong className="text-[#FFB703]">Esc</strong> Pause</span>
           </div>

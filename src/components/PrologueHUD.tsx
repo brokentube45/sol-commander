@@ -7,8 +7,6 @@ import {
   Volume2,
   VolumeX,
   Subtitles,
-  Mic,
-  MicOff,
   Sun,
 } from 'lucide-react';
 import { PROLOGUE_DURATION_SEC, PROLOGUE_SCENES } from '../data/missionData';
@@ -21,8 +19,6 @@ interface PrologueHUDProps {
   onSkip: () => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
-  voiceOverEnabled: boolean;
-  onToggleVoiceOver: () => void;
   subtitlesEnabled: boolean;
   onToggleSubtitles: () => void;
   reducedMotion: boolean;
@@ -36,8 +32,6 @@ export function PrologueHUD({
   onSkip,
   soundEnabled,
   onToggleSound,
-  voiceOverEnabled,
-  onToggleVoiceOver,
   subtitlesEnabled,
   onToggleSubtitles,
   reducedMotion,
@@ -116,25 +110,6 @@ export function PrologueHUD({
                 <VolumeX className="h-4 w-4" aria-hidden="true" />
               )}
               <span className="hidden md:inline">{soundEnabled ? 'Sound On' : 'Mute'}</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={onToggleVoiceOver}
-              aria-pressed={voiceOverEnabled}
-              aria-label={voiceOverEnabled ? 'Disable voice-over narration' : 'Enable voice-over narration'}
-              className={`inline-flex min-h-[48px] items-center gap-1.5 rounded-xl border px-3 text-xs font-bold transition-colors focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer ${
-                voiceOverEnabled
-                  ? 'border-[#FFB703]/70 bg-[#0B1D36] text-[#FFB703]'
-                  : 'border-white/15 bg-[#1B3A5F]/80 text-[#F8F9FA]/80 hover:border-[#FFB703]'
-              }`}
-            >
-              {voiceOverEnabled ? (
-                <Mic className="h-4 w-4" aria-hidden="true" />
-              ) : (
-                <MicOff className="h-4 w-4" aria-hidden="true" />
-              )}
-              <span className="hidden lg:inline">Voice</span>
             </button>
 
             <button
