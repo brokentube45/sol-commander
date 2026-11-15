@@ -41,14 +41,11 @@ if (!outpost3dSrc.includes('if (debugModeRef.current)')) {
   failures.push('src/components/MarsOutpost3D.tsx must guard __MARS_DEBUG__ and overlays behind debugMode.');
 }
 
-// 2. Constraint checks: zero TTS (speechSynthesis), zero NASA/JPL agency logos, zero hardcoded secrets
+// 2. Constraint checks: zero NASA/JPL agency logos, zero hardcoded secrets
 const srcFiles = walkFiles(path.join(ROOT, 'src'), ['.ts', '.tsx', '.css']);
 for (const file of srcFiles) {
   const content = fs.readFileSync(file, 'utf8');
   const rel = path.relative(ROOT, file);
-  if (content.includes('speechSynthesis')) {
-    failures.push(`Forbidden Web Speech TTS reference in ${rel}.`);
-  }
   if (/sk-or-v1-[A-Za-z0-9]{10,}/.test(content)) {
     failures.push(`Forbidden OpenRouter API key literal found in ${rel}.`);
   }

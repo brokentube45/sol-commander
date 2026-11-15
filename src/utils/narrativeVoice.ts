@@ -19,6 +19,7 @@ interface CharacterVoiceProfile {
   name: string;
   role: string;
   speakerId: 'rusty' | 'hab' | 'amara' | 'kenji' | 'lucia' | 'rafi' | 'earth' | 'log';
+  gender?: 'male' | 'female';
 }
 
 const CHARACTERS: Record<string, CharacterVoiceProfile> = {
@@ -26,46 +27,92 @@ const CHARACTERS: Record<string, CharacterVoiceProfile> = {
     name: '{roverName}',
     role: 'Rover Friend',
     speakerId: 'rusty',
+    gender: 'male',
   },
   rafi: {
     name: 'Rafi',
     role: 'Botanist',
     speakerId: 'rafi',
+    gender: 'male',
   },
   amara: {
     name: 'Amara',
     role: 'Doctor',
     speakerId: 'amara',
+    gender: 'female',
   },
   kenji: {
     name: 'Kenji',
     role: 'Engineer',
     speakerId: 'kenji',
+    gender: 'male',
   },
   lucia: {
     name: 'Lucía',
     role: 'Geologist',
     speakerId: 'lucia',
+    gender: 'female',
   },
   capcom: {
     name: 'Hab Computer',
     role: 'Base System',
     speakerId: 'hab',
+    gender: 'male',
   },
   hab: {
     name: 'Hab Computer',
     role: 'Base System',
     speakerId: 'hab',
+    gender: 'male',
   },
   earth: {
     name: 'Earth Team',
     role: 'Mission Control',
     speakerId: 'earth',
+    gender: 'male',
   },
 };
 
 export function cleanTextForSpeech(text: string): string {
-  return normalizeForSpeech(text);
+  if (!text) return '';
+  const normalized = normalizeForSpeech(text);
+  return normalized
+    .replace(/\[REAL[^\]]*\]/gi, '')
+    .replace(/\[SIM[^\]]*\]/gi, '')
+    .replace(/\[DERIVED[^\]]*\]/gi, '')
+    .replace(/\[[A-Z0-9_\s-]{1,12}\]/gi, '')
+    .replace(/(\d+)\s*m\/s\^?2/gi, '$1 meters per second squared')
+    .replace(/m\/s\^?2/gi, 'meters per second squared')
+    .replace(/(\d+)\s*m\/s²/gi, '$1 meters per second squared')
+    .replace(/m\/s²/gi, 'meters per second squared')
+    .replace(/(\d+)\s*m\/s\b/gi, '$1 meters per second')
+    .replace(/m\/s\b/gi, 'meters per second')
+    .replace(/(\d+)\s*kg\/sol/gi, '$1 kilograms per sol')
+    .replace(/kg\/sol/gi, 'kilograms per sol')
+    .replace(/(\d+)\s*kg\b/gi, '$1 kilograms')
+    .replace(/kg\b/gi, 'kilograms')
+    .replace(/(\d+)\s*km\/h/gi, '$1 kilometers per hour')
+    .replace(/(\d+)\s*km\b/gi, '$1 kilometers')
+    .replace(/(\d+)\s*kPa\b/gi, '$1 kilopascals')
+    .replace(/kPa\b/gi, 'kilopascals')
+    .replace(/(\d+)\s*Pa\b/g, '$1 pascals')
+    .replace(/\bPa\b/g, 'pascals')
+    .replace(/(\d+)\s*mSv\b/gi, '$1 millisieverts')
+    .replace(/mSv\b/gi, 'millisieverts')
+    .replace(/(\d+)\s*kWh\b/gi, '$1 kilowatt hours')
+    .replace(/kWh\b/gi, 'kilowatt hours')
+    .replace(/CO[2₂]/g, 'carbon dioxide')
+    .replace(/O[2₂]/g, 'oxygen')
+    .replace(/H2O|H₂O/g, 'water')
+    .replace(/-(\d+)\s*°?C\b/gi, 'minus $1 degrees')
+    .replace(/(\d+)\s*°?C\b/gi, '$1 degrees Celsius')
+    .replace(/(\d+)%/g, '$1 percent')
+    .replace(/\bWASD\b/g, 'W, A, S, D')
+    .replace(/\bD-Pad\b/gi, 'D-pad')
+    .replace(/[*_#`~«»]/g, '')
+    .replace(/["“”]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 interface QueuedVoiceItem {
@@ -89,12 +136,73 @@ class NarrativeVoiceManager {
   private isSpeakingNow = false;
   private waitingQueue: QueuedVoiceItem[] = [];
 
+  constructor() {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.onvoiceschanged = () => {
+          // Preload voices in browser
+        };
+      } catch {}
+    }
+  }
+
   public setRoverName(name: string): void {
     this.roverName = name.trim() || 'Rusty';
   }
 
   public getRoverName(): string {
     return this.roverName;
+  }
+
+  /**
+   * Select best natural, warm, human-sounding male neural voice
+   */
+  private getBestNaturalVoice(gender: 'male' | 'female' = 'male'): SpeechSynthesisVoice | null {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) return null;
+
+    if (gender === 'male') {
+      // 1. Natural Neural Expressive Male voices (Microsoft Guy, Christopher, Eric, Ryan)
+      const neuralMale = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('Guy') ||
+            v.name.includes('Christopher') ||
+            v.name.includes('Eric') ||
+            v.name.includes('Ryan') ||
+            (v.name.includes('Natural') && v.name.includes('Male'))),
+      );
+      if (neuralMale) return neuralMale;
+
+      // 2. High-quality standard male voices
+      const goodMale = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('Google UK English Male') ||
+            v.name.includes('Google US English') ||
+            v.name.includes('Mark') ||
+            v.name.includes('Daniel') ||
+            v.name.includes('Oliver') ||
+            v.name.includes('George') ||
+            v.name.includes('David')),
+      );
+      if (goodMale) return goodMale;
+
+      const anyEnglish = voices.find((v) => v.lang.startsWith('en'));
+      return anyEnglish ?? voices[0];
+    } else {
+      const female = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('Jenny') ||
+            v.name.includes('Aria') ||
+            v.name.includes('Zira') ||
+            v.name.includes('Google UK English Female') ||
+            (v.name.includes('Natural') && v.name.includes('Female'))),
+      );
+      return female ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
+    }
   }
 
   /**
@@ -141,21 +249,79 @@ class NarrativeVoiceManager {
     const char = CHARACTERS[characterKey] ?? CHARACTERS.rusty;
     soundEngine.playSpeakerChime(char.speakerId);
 
-    const readingDurationMs = Math.min(3200, Math.max(850, text.length * 36));
-    if (typeof window !== 'undefined') {
-      this.activeTimer = window.setTimeout(() => {
-        this.activeTimer = null;
+    // Speak with Web Speech API natural voice if supported & enabled
+    let speechActive = false;
+    if (
+      typeof window !== 'undefined' &&
+      'speechSynthesis' in window &&
+      !soundEngine.isRoverHushed() &&
+      soundEngine.isRoverVoiceEnabled()
+    ) {
+      try {
+        window.speechSynthesis.cancel();
+        const spokenText = cleanTextForSpeech(text);
+        if (spokenText) {
+          const utterance = new SpeechSynthesisUtterance(spokenText);
+          utterance.rate = 0.96; // Clear, friendly cadence for kids
+          utterance.pitch = 1.0; // Natural, warm human tone
+          utterance.volume = 1.0;
+          const voice = this.getBestNaturalVoice(char.gender ?? 'male');
+          if (voice) utterance.voice = voice;
+
+          utterance.onend = () => {
+            this.isSpeakingNow = false;
+            onEnd?.();
+            this.pumpQueue();
+          };
+          utterance.onerror = () => {
+            this.isSpeakingNow = false;
+            onEnd?.();
+            this.pumpQueue();
+          };
+
+          window.speechSynthesis.speak(utterance);
+          speechActive = true;
+        }
+      } catch {
+        speechActive = false;
+      }
+    }
+
+    if (!speechActive) {
+      const readingDurationMs = Math.min(3200, Math.max(850, text.length * 36));
+      if (typeof window !== 'undefined') {
+        this.activeTimer = window.setTimeout(() => {
+          this.activeTimer = null;
+          this.isSpeakingNow = false;
+          onEnd?.();
+          this.pumpQueue();
+        }, readingDurationMs);
+      } else {
         this.isSpeakingNow = false;
         onEnd?.();
-        if (!this.isSpeakingNow && this.waitingQueue.length > 0) {
-          const next = this.waitingQueue.shift()!;
-          this.playImmediate(next.characterKey, next.text, next.onEnd);
-        }
-      }, readingDurationMs);
-    } else {
-      this.isSpeakingNow = false;
-      onEnd?.();
+      }
     }
+  }
+
+  private pumpQueue(): void {
+    if (!this.isSpeakingNow && this.waitingQueue.length > 0) {
+      const next = this.waitingQueue.shift()!;
+      this.playImmediate(next.characterKey, next.text, next.onEnd);
+    }
+  }
+
+  public stopSpeaking(): void {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {}
+    }
+    if (this.activeTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.activeTimer);
+      this.activeTimer = null;
+    }
+    this.isSpeakingNow = false;
+    this.waitingQueue = [];
   }
 
   // --- 1. Tutorial Steps (Act 1 Look, Move, Jump, Gravity Card, Chores, Tank 2) ---
