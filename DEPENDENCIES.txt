@@ -1,0 +1,69 @@
+SOL COMMANDER: Last Habitat — Runtime & Development Dependencies Inventory
+
+================================================================================
+Production & Runtime Dependencies
+================================================================================
+
+Package: @dimforge/rapier3d-compat (v0.21.0)
+License: Apache-2.0
+Role: WebAssembly 3D rigid-body and kinematic physics engine (Mars terrain heightfield, collision meshes, gravity, character controller).
+
+Package: three (v0.187.0)
+License: MIT
+Role: WebGL/WebGPU 3D graphics library (Mars outpost scene graph, camera controller, procedural geometries, PBR materials, sky shaders).
+
+Package: @types/three (v0.187.0)
+License: MIT
+Role: TypeScript type declarations for Three.js.
+
+Package: react (v19.0.1) & react-dom (v19.0.1)
+License: MIT
+Role: UI component framework and DOM reconciler.
+
+Package: motion (v12.23.24)
+License: MIT
+Role: Hardware-accelerated UI transitions, modal entry/exit animations, and HUD toasts.
+
+Package: lucide-react (v0.546.0)
+License: ISC
+Role: Clean, kid-friendly vector UI icons (compass, radios, status badges, buttons).
+
+Package: express (v4.21.2)
+License: MIT
+Role: Optional lightweight local static preview server.
+
+Package: dotenv (v17.2.3)
+License: BSD-2-Clause
+Role: Environment variable parser for build tools.
+
+Package: @google/genai (v2.4.0)
+License: Apache-2.0
+Role: Optional developer assistance SDK (no secret keys bundled into client build).
+
+================================================================================
+Build & Tooling Dependencies
+================================================================================
+
+Package: vite (v8.3.0) & @vitejs/plugin-react (v6.1.1)
+License: MIT
+Role: Next-generation fast frontend bundler and HMR dev server.
+
+Package: vitest (v5.1.0)
+License: MIT
+Role: Headless unit and physics simulation test runner.
+
+Package: typescript (v7.0.2 / 5.8+)
+License: Apache-2.0
+Role: Static type checker (tsc --noEmit).
+
+Package: tailwindcss (v4.3.3) & @tailwindcss/vite (v4.3.3)
+License: MIT
+Role: Utility-first styling engine.
+
+Package: tsx (v4.21.0)
+License: MIT
+Role: TypeScript execution engine for prelaunch check scripts.
+
+Package: esbuild (v0.25.0)
+License: MIT
+Role: High-performance JavaScript/TypeScript compiler.
