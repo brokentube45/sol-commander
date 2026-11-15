@@ -13,6 +13,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { OUTPOST_LANDMARKS, OutpostLandmarkId } from '../data/missionData';
+import { useTouchDevice } from '../utils/useTouchDevice';
 
 interface TitleScreenHUDProps {
   selectedLandmark: OutpostLandmarkId | null;
@@ -49,11 +50,22 @@ export function TitleScreenHUD({
   onToggleSound,
   reducedMotion,
 }: TitleScreenHUDProps) {
+  const isTouch = useTouchDevice();
   const activeInfo = selectedLandmark ? OUTPOST_LANDMARKS[selectedLandmark] : null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [installHelperMessage, setInstallHelperMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const isStandaloneMode =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (window.navigator as any).standalone === true;
+      setIsStandalone(isStandaloneMode);
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const handler = (e: any) => {
       e.preventDefault();
@@ -64,11 +76,20 @@ export function TitleScreenHUD({
   }, []);
 
   const handleInstallClick = async () => {
-    if (!installPrompt) return;
-    installPrompt.prompt();
-    const { outcome } = await installPrompt.userChoice;
-    if (outcome === 'accepted') {
-      setInstallPrompt(null);
+    if (installPrompt) {
+      installPrompt.prompt();
+      const { outcome } = await installPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setInstallPrompt(null);
+      }
+    } else {
+      const isIOS = typeof navigator !== 'undefined' && /iPad|iPhone|iPod/.test(navigator.userAgent);
+      if (isIOS) {
+        setInstallHelperMessage("To install on iOS: Tap 'Share' (⎙) in Safari, then 'Add to Home Screen'!");
+      } else {
+        setInstallHelperMessage("To install: Open browser menu (⋮) and tap 'Install App' or 'Add to Home Screen'!");
+      }
+      setTimeout(() => setInstallHelperMessage(null), 5000);
     }
   };
 
@@ -107,26 +128,14 @@ export function TitleScreenHUD({
           </div>
         </motion.div>
 
-        {/* Top-Right Sound & PWA Install Controls */}
-        <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
-          {installPrompt && (
-            <button
-              type="button"
-              onClick={handleInstallClick}
-              className="inline-flex min-h-[48px] items-center gap-2 rounded-xl border border-[#22C55E] bg-[#22C55E]/20 px-3.5 py-2 text-xs font-black text-[#22C55E] hover:bg-[#22C55E] hover:text-[#071324] transition-colors cursor-pointer shadow-lg animate-pulse"
-              title="Install Sol Commander App on your device"
-            >
-              <Smartphone className="h-4 w-4" />
-              <span>Install App</span>
-            </button>
-          )}
-
+        {/* Top-Right Sound Control */}
+        <div className="pointer-events-auto flex items-center justify-end gap-2">
           <button
             type="button"
             onClick={onToggleSound}
             aria-pressed={soundEnabled}
             aria-label={soundEnabled ? 'Mute game audio' : 'Enable game audio'}
-            className={`inline-flex min-h-[48px] items-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-bold tracking-wider transition-colors focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer ${
+            className={`inline-flex min-h-[44px] items-center gap-2 rounded-xl border px-3.5 py-2 text-xs font-bold tracking-wider transition-colors focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer ${
               soundEnabled
                 ? 'border-[#FFB703] bg-[#0B1D36]/92 text-[#FFB703]'
                 : 'border-white/15 bg-[#0B1D36]/85 text-[#F8F9FA]/90 hover:border-[#FFB703]/60 hover:bg-[#1B3A5F]'
@@ -144,123 +153,143 @@ export function TitleScreenHUD({
 
       {/* MIDDLE ROW: Game Title Headline + Main Game Menu Stack (Left) & Station Inspector (Top-Right Sky) */}
       <div className="my-auto flex flex-col justify-between gap-6 lg:flex-row lg:items-start">
-          <motion.div
-            initial={reducedMotion ? false : { opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
-            className="pointer-events-auto max-w-md lg:mt-6"
-          >
-            <p className="font-[family-name:var(--font-indicator)] text-sm font-bold tracking-[0.22em] text-[#FFB703]">
-              MISSION 01 <span aria-hidden="true" className="mx-1 text-[#E85D04]">·</span> MARS OUTPOST
-            </p>
-            <h1 className="mt-2 font-[family-name:var(--font-display)] text-3xl font-extrabold leading-[1.12] tracking-tight text-[#F8F9FA] sm:text-4xl lg:text-[2.85rem] [text-wrap:balance]">
-              Your first mission starts on Mars.
-            </h1>
-            <p className="mt-3 text-base font-semibold leading-relaxed text-[#F8F9FA]/90 sm:text-lg">
-              Explore a new world. Make big decisions. Become a Mars Commander.
-            </p>
+        <motion.div
+          initial={reducedMotion ? false : { opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+          className="pointer-events-auto max-w-md lg:mt-6"
+        >
+          <p className="font-[family-name:var(--font-indicator)] text-sm font-bold tracking-[0.22em] text-[#FFB703]">
+            MISSION 01 <span aria-hidden="true" className="mx-1 text-[#E85D04]">·</span> MARS OUTPOST
+          </p>
+          <h1 className="mt-2 font-[family-name:var(--font-display)] text-3xl font-extrabold leading-[1.12] tracking-tight text-[#F8F9FA] sm:text-4xl lg:text-[2.85rem] [text-wrap:balance]">
+            Your first mission starts on Mars.
+          </h1>
+          <p className="mt-3 text-base font-semibold leading-relaxed text-[#F8F9FA]/90 sm:text-lg">
+            Explore a new world. Make big decisions. Become a Mars Commander.
+          </p>
 
-            {/* Video Game Title Menu Stack */}
-            <nav aria-label="Game main menu" className="mt-6 flex max-w-xs flex-col gap-2.5">
+          {/* Video Game Title Menu Stack */}
+          <nav aria-label="Game main menu" className="mt-6 flex max-w-xs flex-col gap-2.5">
+            <button
+              type="button"
+              onClick={onStartMission}
+              className="group flex min-h-[56px] w-full items-center justify-between rounded-2xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-6 py-3.5 font-[family-name:var(--font-display)] text-base font-extrabold tracking-wider text-[#0B1D36] shadow-xl shadow-[#E85D04]/30 transition-transform duration-150 hover:translate-x-1 hover:scale-[1.01] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFB703] cursor-pointer"
+            >
+              <span className="flex items-center gap-3">
+                <Rocket className="h-5 w-5" aria-hidden="true" />
+                <span>START MISSION</span>
+              </span>
+              <span aria-hidden="true" className="text-lg transition-transform group-hover:translate-x-1">
+                →
+              </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenHowToPlay}
+              className="flex min-h-[48px] w-full items-center gap-3 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-5 py-2.5 font-[family-name:var(--font-display)] text-sm font-bold tracking-wider text-[#F8F9FA] transition-all duration-150 hover:translate-x-1 hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] cursor-pointer"
+            >
+              <BookOpen className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
+              <span>HOW TO PLAY</span>
+            </button>
+
+            <div className="grid grid-cols-3 gap-2">
               <button
                 type="button"
-                onClick={onStartMission}
-                className="group flex min-h-[56px] w-full items-center justify-between rounded-2xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-6 py-3.5 font-[family-name:var(--font-display)] text-base font-extrabold tracking-wider text-[#0B1D36] shadow-xl shadow-[#E85D04]/30 transition-transform duration-150 hover:translate-x-1 hover:scale-[1.01] active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#FFB703] cursor-pointer"
+                onClick={onOpenMissionInfo}
+                className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#F8F9FA]/95 transition-colors hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
               >
-                <span className="flex items-center gap-3">
-                  <Rocket className="h-5 w-5" aria-hidden="true" />
-                  <span>START MISSION</span>
-                </span>
-                <span aria-hidden="true" className="text-lg transition-transform group-hover:translate-x-1">
-                  →
-                </span>
+                <Info className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+                <span>MISSION</span>
               </button>
 
               <button
                 type="button"
-                onClick={onOpenHowToPlay}
-                className="flex min-h-[48px] w-full items-center gap-3 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-5 py-2.5 font-[family-name:var(--font-display)] text-sm font-bold tracking-wider text-[#F8F9FA] transition-all duration-150 hover:translate-x-1 hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] cursor-pointer"
+                onClick={onOpenAbout}
+                className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#F8F9FA]/95 transition-colors hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
               >
-                <BookOpen className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
-                <span>HOW TO PLAY</span>
+                <HelpCircle className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+                <span>ABOUT</span>
               </button>
 
-              <div className="grid grid-cols-3 gap-2">
+              {onOpenCredits && (
                 <button
                   type="button"
-                  onClick={onOpenMissionInfo}
-                  className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#F8F9FA]/95 transition-colors hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
+                  onClick={onOpenCredits}
+                  className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-[#38BDF8]/40 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#38BDF8] transition-colors hover:border-[#38BDF8] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
                 >
-                  <Info className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
-                  <span>MISSION</span>
+                  <BookOpen className="h-3.5 w-3.5 text-[#38BDF8]" aria-hidden="true" />
+                  <span>CREDITS</span>
                 </button>
+              )}
+            </div>
 
+            {/* High-Visibility Install App Button (Directly under Mission & About) */}
+            {!isStandalone && (
+              <div className="flex flex-col gap-1.5 pt-0.5">
                 <button
                   type="button"
-                  onClick={onOpenAbout}
-                  className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#F8F9FA]/95 transition-colors hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
+                  onClick={handleInstallClick}
+                  className="group flex min-h-[48px] w-full items-center justify-center gap-2.5 rounded-xl border-2 border-[#22C55E] bg-gradient-to-r from-[#22C55E]/25 via-[#15803D]/30 to-[#22C55E]/25 px-4 py-2.5 font-[family-name:var(--font-display)] text-xs font-black tracking-wider text-[#22C55E] shadow-[0_0_24px_rgba(34,197,94,0.35)] hover:border-[#22C55E] hover:bg-[#22C55E] hover:text-[#071324] transition-all duration-200 cursor-pointer animate-pulse active:scale-95"
+                  title="Install Sol Commander App on your device for full-screen offline play"
                 >
-                  <HelpCircle className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
-                  <span>ABOUT</span>
+                  <Smartphone className="h-4 w-4 shrink-0 transition-transform group-hover:scale-110" />
+                  <span>INSTALL APP 📲</span>
                 </button>
-
-                {onOpenCredits && (
-                  <button
-                    type="button"
-                    onClick={onOpenCredits}
-                    className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-[#38BDF8]/40 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#38BDF8] transition-colors hover:border-[#38BDF8] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
-                  >
-                    <BookOpen className="h-3.5 w-3.5 text-[#38BDF8]" aria-hidden="true" />
-                    <span>CREDITS</span>
-                  </button>
+                {installHelperMessage && (
+                  <div className="rounded-xl border border-[#FFB703]/60 bg-[#071324]/95 p-2 text-center text-[11px] font-bold text-[#FFB703] shadow-lg">
+                    {installHelperMessage}
+                  </div>
                 )}
               </div>
-            </nav>
-          </motion.div>
-
-          {/* Active Station Close-Up Field Guide Card (Top-Right Sky Zone) */}
-          <AnimatePresence>
-            {activeInfo && (
-              <motion.aside
-                key={activeInfo.id}
-                initial={reducedMotion ? false : { opacity: 0, y: -10, scale: 0.97 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -8, scale: 0.97 }}
-                transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                aria-live="polite"
-                className="pointer-events-auto w-full max-w-sm rounded-2xl border border-[#FFB703]/45 bg-[#0B1D36]/94 p-4 sm:p-5 shadow-2xl"
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-[family-name:var(--font-indicator)] text-xs font-bold tracking-[0.18em] text-[#FFB703]">
-                      {activeInfo.role.toUpperCase()}
-                    </p>
-                    <h2 className="mt-0.5 font-[family-name:var(--font-display)] text-lg font-bold text-[#F8F9FA]">
-                      {activeInfo.name}
-                    </h2>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => onSelectLandmark(null)}
-                    aria-label="Return to Outpost Overview"
-                    className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-[#1B3A5F] text-[#F8F9FA] transition-colors hover:border-[#FFB703] hover:text-[#FFB703] focus-visible:outline-2 focus-visible:outline-[#FFB703] cursor-pointer"
-                  >
-                    <X className="h-4 w-4" aria-hidden="true" />
-                  </button>
-                </div>
-                <p className="mt-2 text-sm leading-relaxed text-[#F8F9FA]/90">
-                  {activeInfo.description}
-                </p>
-                <p className="mt-3 flex items-start gap-2 rounded-xl bg-[#1B3A5F]/85 px-3 py-2 text-xs font-semibold text-[#FFB703]">
-                  <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                  <span>{activeInfo.funFact}</span>
-                </p>
-              </motion.aside>
             )}
-          </AnimatePresence>
+          </nav>
+        </motion.div>
+
+        {/* Active Station Close-Up Field Guide Card (PC only) */}
+        <AnimatePresence>
+          {!isTouch && activeInfo && (
+            <motion.aside
+              key={activeInfo.id}
+              initial={reducedMotion ? false : { opacity: 0, y: -10, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.97 }}
+              transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+              aria-live="polite"
+              className="pointer-events-auto w-full max-w-sm rounded-2xl border border-[#FFB703]/45 bg-[#0B1D36]/94 p-4 sm:p-5 shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="font-[family-name:var(--font-indicator)] text-xs font-bold tracking-[0.18em] text-[#FFB703]">
+                    {activeInfo.role.toUpperCase()}
+                  </p>
+                  <h2 className="mt-0.5 font-[family-name:var(--font-display)] text-lg font-bold text-[#F8F9FA]">
+                    {activeInfo.name}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onSelectLandmark(null)}
+                  aria-label="Return to Outpost Overview"
+                  className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-white/15 bg-[#1B3A5F] text-[#F8F9FA] transition-colors hover:border-[#FFB703] hover:text-[#FFB703] focus-visible:outline-2 focus-visible:outline-[#FFB703] cursor-pointer"
+                >
+                  <X className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+              <p className="mt-2 text-sm leading-relaxed text-[#F8F9FA]/90">
+                {activeInfo.description}
+              </p>
+              <p className="mt-3 flex items-start gap-2 rounded-xl bg-[#1B3A5F]/85 px-3 py-2 text-xs font-semibold text-[#FFB703]">
+                <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                <span>{activeInfo.funFact}</span>
+              </p>
+            </motion.aside>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* BOTTOM ROW: Discreet Program Notice + Camera Station Selector */}
+      {/* BOTTOM ROW: Discreet Program Notice + Camera Station Selector (PC Only) */}
       <div className="flex flex-col-reverse items-start justify-between gap-3 lg:flex-row lg:items-end">
         <div className="pointer-events-auto flex flex-col gap-1">
           <p className="text-[11px] font-semibold tracking-wide text-[#F8F9FA]/55">
@@ -268,35 +297,37 @@ export function TitleScreenHUD({
           </p>
         </div>
 
-        {/* Camera Inspection Selector */}
-        <div
-          role="group"
-          aria-label="Inspect 3D outpost camera views"
-          className="pointer-events-auto flex flex-wrap items-center gap-1.5 rounded-2xl border border-white/15 bg-[#0B1D36]/90 p-1.5"
-        >
-          <span className="hidden items-center gap-1.5 px-2.5 font-[family-name:var(--font-indicator)] text-xs font-bold tracking-[0.15em] text-[#FFB703] sm:inline-flex">
-            <Compass className="h-3.5 w-3.5" aria-hidden="true" />
-            <span>CAM</span>
-          </span>
-          {CAMERA_STATIONS.map((cam) => {
-            const active = (selectedLandmark ?? 'overview') === cam.id;
-            return (
-              <button
-                key={cam.id}
-                type="button"
-                onClick={() => onSelectLandmark(cam.id === 'overview' ? null : cam.id)}
-                aria-pressed={active}
-                className={`min-h-[44px] rounded-xl px-3 py-1.5 text-xs font-bold tracking-wide transition-colors focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer ${
-                  active
-                    ? 'bg-[#FFB703] text-[#0B1D36]'
-                    : 'text-[#F8F9FA]/85 hover:bg-[#1B3A5F] hover:text-[#F8F9FA]'
-                }`}
-              >
-                {cam.label}
-              </button>
-            );
-          })}
-        </div>
+        {/* Camera Inspection Selector (Hidden on Mobile) */}
+        {!isTouch && (
+          <div
+            role="group"
+            aria-label="Inspect 3D outpost camera views"
+            className="pointer-events-auto flex flex-wrap items-center gap-1.5 rounded-2xl border border-white/15 bg-[#0B1D36]/90 p-1.5"
+          >
+            <span className="hidden items-center gap-1.5 px-2.5 font-[family-name:var(--font-indicator)] text-xs font-bold tracking-[0.15em] text-[#FFB703] sm:inline-flex">
+              <Compass className="h-3.5 w-3.5" aria-hidden="true" />
+              <span>CAM</span>
+            </span>
+            {CAMERA_STATIONS.map((cam) => {
+              const active = (selectedLandmark ?? 'overview') === cam.id;
+              return (
+                <button
+                  key={cam.id}
+                  type="button"
+                  onClick={() => onSelectLandmark(cam.id === 'overview' ? null : cam.id)}
+                  aria-pressed={active}
+                  className={`min-h-[44px] rounded-xl px-3 py-1.5 text-xs font-bold tracking-wide transition-colors focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer ${
+                    active
+                      ? 'bg-[#FFB703] text-[#0B1D36]'
+                      : 'text-[#F8F9FA]/85 hover:bg-[#1B3A5F] hover:text-[#F8F9FA]'
+                  }`}
+                >
+                  {cam.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );

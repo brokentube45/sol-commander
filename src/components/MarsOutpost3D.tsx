@@ -1597,6 +1597,15 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
 
       if (gamePhaseRef.current !== 'landing') return;
 
+      // On mobile / touch devices, disable click-to-zoom on structures during landing phase
+      if (
+        ev.pointerType === 'touch' ||
+        (typeof window !== 'undefined' &&
+          (window.matchMedia('(pointer: coarse)').matches || 'ontouchstart' in window))
+      ) {
+        return;
+      }
+
       const rect = renderer.domElement.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
       pointerNdc.set(
