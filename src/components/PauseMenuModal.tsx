@@ -27,6 +27,7 @@ interface PauseMenuModalProps {
   tutorialActive?: boolean;
   onSkipTutorial?: () => void;
   onJumpToMission?: (index: number) => void;
+  onOpenCredits?: () => void;
   onResume: () => void;
   onQuitToTitle: () => void;
   reducedMotion: boolean;
@@ -51,6 +52,7 @@ export function PauseMenuModal({
   tutorialActive = false,
   onSkipTutorial,
   onJumpToMission,
+  onOpenCredits,
   onResume,
   onQuitToTitle,
   reducedMotion,
@@ -262,6 +264,20 @@ export function PauseMenuModal({
                 >
                   <FastForward className="h-3.5 w-3.5" aria-hidden="true" />
                   <span>Skip Training (Jump to Mission 1)</span>
+                </button>
+              )}
+
+              {onOpenCredits && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    onOpenCredits();
+                  }}
+                  className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-[#38BDF8]/40 bg-[#0B1D36]/85 px-4 text-xs font-bold text-[#38BDF8] hover:border-[#38BDF8] hover:bg-[#1B3A5F] transition-colors cursor-pointer"
+                >
+                  <Zap className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>NASA Data &amp; Scientific Credits</span>
                 </button>
               )}
 

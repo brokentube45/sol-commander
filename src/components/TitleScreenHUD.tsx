@@ -19,6 +19,7 @@ interface TitleScreenHUDProps {
   onOpenHowToPlay: () => void;
   onOpenMissionInfo: () => void;
   onOpenAbout: () => void;
+  onOpenCredits?: () => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
   reducedMotion: boolean;
@@ -41,6 +42,7 @@ export function TitleScreenHUD({
   onOpenHowToPlay,
   onOpenMissionInfo,
   onOpenAbout,
+  onOpenCredits,
   soundEnabled,
   onToggleSound,
   reducedMotion,
@@ -148,24 +150,35 @@ export function TitleScreenHUD({
                 <span>HOW TO PLAY</span>
               </button>
 
-              <div className="grid grid-cols-2 gap-2.5">
+              <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={onOpenMissionInfo}
-                  className="flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-3 py-2.5 font-[family-name:var(--font-display)] text-xs font-bold tracking-wider text-[#F8F9FA]/95 transition-colors hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
+                  className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#F8F9FA]/95 transition-colors hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
                 >
-                  <Info className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
-                  <span>MISSION INFO</span>
+                  <Info className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+                  <span>MISSION</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={onOpenAbout}
-                  className="flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-3 py-2.5 font-[family-name:var(--font-display)] text-xs font-bold tracking-wider text-[#F8F9FA]/95 transition-colors hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
+                  className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-white/15 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#F8F9FA]/95 transition-colors hover:border-[#FFB703] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
                 >
-                  <HelpCircle className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
+                  <HelpCircle className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
                   <span>ABOUT</span>
                 </button>
+
+                {onOpenCredits && (
+                  <button
+                    type="button"
+                    onClick={onOpenCredits}
+                    className="flex min-h-[46px] items-center justify-center gap-1.5 rounded-xl border border-[#38BDF8]/40 bg-[#0B1D36]/88 px-2 py-2 font-[family-name:var(--font-display)] text-[11px] font-bold tracking-wider text-[#38BDF8] transition-colors hover:border-[#38BDF8] hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
+                  >
+                    <BookOpen className="h-3.5 w-3.5 text-[#38BDF8]" aria-hidden="true" />
+                    <span>CREDITS</span>
+                  </button>
+                )}
               </div>
             </nav>
           </motion.div>

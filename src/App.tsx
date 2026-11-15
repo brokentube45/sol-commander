@@ -1425,6 +1425,10 @@ export default function App() {
               soundEngine.playClick();
               setActiveModal('about');
             }}
+            onOpenCredits={() => {
+              soundEngine.playClick();
+              setCreditsOpen(true);
+            }}
             soundEnabled={soundEnabled}
             onToggleSound={handleToggleSound}
             reducedMotion={reducedMotion}
@@ -1766,6 +1770,10 @@ export default function App() {
             tutorialActive={simState.tutorialStep !== 'complete'}
             onSkipTutorial={handleSkipTutorial}
             onJumpToMission={handleJumpToMission}
+            onOpenCredits={() => {
+              soundEngine.playClick();
+              setCreditsOpen(true);
+            }}
             onResume={() => {
               soundEngine.playClick();
               setCursorUnlockedInGame(false);
