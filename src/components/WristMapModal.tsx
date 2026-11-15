@@ -109,7 +109,7 @@ export function WristMapModal({
           role="dialog"
           aria-modal="true"
           aria-label="EVA Wrist Tablet Outpost Map"
-          className="fixed inset-0 z-40 flex items-center justify-center bg-[#040B16]/75 p-4 backdrop-blur-sm font-[family-name:var(--font-game)]"
+          className="fixed inset-0 z-[45] flex items-center justify-center bg-[#040B16]/75 p-4 backdrop-blur-sm font-[family-name:var(--font-game)]"
           onClick={onClose}
         >
           <motion.div

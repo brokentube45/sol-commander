@@ -18,6 +18,7 @@ import {
   pickNonRepeatingRoverLine,
   sanitizeRoverName,
 } from './roverData';
+import { JUNIOR_MISSIONS, TutorialStepId } from './juniorData';
 
 export interface CrewMemberState {
   id: CrewMemberId;
@@ -178,6 +179,19 @@ export interface CampaignState {
 
   // Space weather snapshot used in M5
   donki: DonkiSpaceWeather;
+
+  // Junior Explorer Mode (Ages 7-9) Tutorial, Quizzes, Mini-Activities, Badges & Journal
+  juniorMode: boolean;
+  grownUpScienceOpen: boolean;
+  tutorialStep: TutorialStepId;
+  crystalsCollected: number;
+  collectedCrystalIds: string[];
+  tutorialQuizDone: boolean;
+  missionQuizDone: Record<MissionId, boolean>;
+  missionMiniActivityDone: Record<MissionId, boolean>;
+  unlockedBadges: MissionId[];
+  unlockedScienceCards: string[];
+  debriefQuizDone: boolean;
 }
 
 export interface CampaignEvaluation {
@@ -283,6 +297,18 @@ export function createInitialCampaignState(
     weatherEventsCount: 0,
     weatherEventsSurvived: 0,
     donki,
+
+    juniorMode: true,
+    grownUpScienceOpen: false,
+    tutorialStep: 'move',
+    crystalsCollected: 0,
+    collectedCrystalIds: [],
+    tutorialQuizDone: false,
+    missionQuizDone: { m1: false, m2: false, m3: false, m4: false, m5: false },
+    missionMiniActivityDone: { m1: false, m2: false, m3: false, m4: false, m5: false },
+    unlockedBadges: [],
+    unlockedScienceCards: [],
+    debriefQuizDone: false,
   };
 }
 
@@ -819,6 +845,12 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
       ...state.objectivesCompleted,
       [mission.id]: passedObjective,
     },
+    unlockedBadges: state.unlockedBadges.includes(mission.id)
+      ? state.unlockedBadges
+      : [...state.unlockedBadges, mission.id],
+    unlockedScienceCards: state.unlockedScienceCards.includes(JUNIOR_MISSIONS[mission.id].scienceCardId)
+      ? state.unlockedScienceCards
+      : [...state.unlockedScienceCards, JUNIOR_MISSIONS[mission.id].scienceCardId],
     processPoints: state.processPoints + processGain,
     lastOutcome: {
       missionId: mission.id,
@@ -1404,5 +1436,89 @@ export function getResourceDaysSummary(state: CampaignState) {
     ),
     foodDays: computeDaysLeft('food', state.foodKg),
     batteryHours: Math.round((state.batteryKwh / SIM_CONSTANTS.POWER_DEMAND_TOTAL_KWH) * 24),
+  };
+}
+
+export function setTutorialStep(state: CampaignState, nextStep: TutorialStepId): CampaignState {
+  if (state.tutorialStep === nextStep) return state;
+  return {
+    ...state,
+    tutorialStep: nextStep,
+  };
+}
+
+export function collectGravityCrystal(state: CampaignState, crystalId: string): CampaignState {
+  if (state.collectedCrystalIds.includes(crystalId)) return state;
+  const collectedCrystalIds = [...state.collectedCrystalIds, crystalId];
+  const crystalsCollected = collectedCrystalIds.length;
+  const nextStep: TutorialStepId =
+    crystalsCollected >= 3 && state.tutorialStep === 'jump-crystals'
+      ? 'gravity-card'
+      : state.tutorialStep;
+  return {
+    ...state,
+    collectedCrystalIds,
+    crystalsCollected,
+    tutorialStep: nextStep,
+  };
+}
+
+export function unlockScienceCard(state: CampaignState, cardId: string): CampaignState {
+  if (state.unlockedScienceCards.includes(cardId)) return state;
+  return {
+    ...state,
+    unlockedScienceCards: [...state.unlockedScienceCards, cardId],
+  };
+}
+
+export function completeTutorialQuiz(state: CampaignState): CampaignState {
+  const nextCards = new Set(state.unlockedScienceCards);
+  nextCards.add('tut-air');
+  nextCards.add('tut-sol');
+  return {
+    ...state,
+    tutorialQuizDone: true,
+    tutorialStep: 'crew-map-intro',
+    unlockedScienceCards: Array.from(nextCards),
+  };
+}
+
+export function completeMissionQuiz(state: CampaignState, missionId: MissionId): CampaignState {
+  if (state.missionQuizDone[missionId]) return state;
+  return {
+    ...state,
+    missionQuizDone: {
+      ...state.missionQuizDone,
+      [missionId]: true,
+    },
+  };
+}
+
+export function completeMissionMiniActivity(
+  state: CampaignState,
+  missionId: MissionId,
+): CampaignState {
+  if (state.missionMiniActivityDone[missionId]) return state;
+  return {
+    ...state,
+    missionMiniActivityDone: {
+      ...state.missionMiniActivityDone,
+      [missionId]: true,
+    },
+  };
+}
+
+export function completeDebriefQuiz(state: CampaignState): CampaignState {
+  if (state.debriefQuizDone) return state;
+  return {
+    ...state,
+    debriefQuizDone: true,
+  };
+}
+
+export function toggleGrownUpScience(state: CampaignState): CampaignState {
+  return {
+    ...state,
+    grownUpScienceOpen: !state.grownUpScienceOpen,
   };
 }

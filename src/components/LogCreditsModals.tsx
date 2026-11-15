@@ -13,6 +13,12 @@ import {
   Volume2,
   Camera,
   Flag,
+  Award,
+  Sun,
+  Snowflake,
+  Leaf,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import {
   ARCHIVED_MARS_GALLERY,
@@ -20,7 +26,14 @@ import {
   NasaMarsPhotoItem,
   fetchNasaMarsGallery,
 } from '../sim/nasaData';
+import {
+  BADGE_DISCLAIMER,
+  JUNIOR_MISSIONS,
+  JUNIOR_SCIENCE_CARDS,
+} from '../sim/juniorData';
+import { MissionId } from '../sim/roverData';
 import { LocalizedWeatherEvent, LogEntry } from '../sim/simEngine';
+import { soundEngine } from '../utils/soundEngine';
 
 interface LogModalProps {
   open: boolean;
@@ -41,6 +54,28 @@ interface LogModalProps {
     m4EmergencyFoodUsed: boolean;
     m5EvaDuringStorm: boolean;
   };
+  unlockedBadges?: MissionId[];
+  unlockedScienceCards?: string[];
+  roverName?: string;
+}
+
+const ALL_MISSION_IDS: MissionId[] = ['m1', 'm2', 'm3', 'm4', 'm5'];
+const SCIENCE_CARD_ORDER = ['tut-gravity', 'tut-air', 'tut-sol', 'm1', 'm2', 'm3', 'm4', 'm5'];
+
+function DrawerBadgeIcon({ icon, earned }: { icon: 'oxygen' | 'sun' | 'ice' | 'leaf' | 'shield'; earned: boolean }) {
+  const cls = `h-4.5 w-4.5 ${earned ? 'text-[#071324]' : 'text-[#F8F9FA]/45'}`;
+  switch (icon) {
+    case 'oxygen':
+      return <Wind className={cls} aria-hidden="true" />;
+    case 'sun':
+      return <Sun className={cls} aria-hidden="true" />;
+    case 'ice':
+      return <Snowflake className={cls} aria-hidden="true" />;
+    case 'leaf':
+      return <Leaf className={cls} aria-hidden="true" />;
+    case 'shield':
+      return <ShieldCheck className={cls} aria-hidden="true" />;
+  }
 }
 
 export function CommandersLogModal({
@@ -53,7 +88,13 @@ export function CommandersLogModal({
   soundEnabled,
   onToggleSound,
   ripples,
+  unlockedBadges = [],
+  unlockedScienceCards = [],
+  roverName = 'Rusty',
 }: LogModalProps) {
+  const [drawerTab, setDrawerTab] = useState<'journal' | 'log'>('journal');
+  const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
+
   const activeRipples = [
     ripples.m1LeakUnsealed && 'M1: Tank 2 left open — extra O₂ lost.',
     ripples.m2GreenhouseShed && 'M2: Greenhouse dimmed — −30% crop growth.',
@@ -62,8 +103,14 @@ export function CommandersLogModal({
     ripples.m3EmergencyWaterUsed && 'M3: 60 kg backup water spent.',
     ripples.m3IceFound && 'M3: Buried ice found (+70% drill odds).',
     ripples.m4EmergencyFoodUsed && 'M4: Backup food packs opened.',
-    ripples.m5EvaDuringStorm && 'M5: Outside walk added radiation dose.',
+    ripples.m5EvaDuringStorm && 'M5: Outside walk added exposure risk.',
   ].filter(Boolean) as string[];
+
+  const unlockedCardList = SCIENCE_CARD_ORDER.filter(
+    (id) =>
+      unlockedScienceCards.includes(id) ||
+      (id.startsWith('m') && unlockedBadges.includes(id as MissionId)),
+  );
 
   return (
     <AnimatePresence>
@@ -105,6 +152,38 @@ export function CommandersLogModal({
                 className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[#E85D04]/45 bg-[#0E2038] text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
               >
                 <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+
+            {/* Segmented Tab Bar */}
+            <div className="grid grid-cols-2 gap-2 border-b border-white/10 bg-[#050E1C]/60 px-5 py-2.5">
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playClick();
+                  setDrawerTab('journal');
+                }}
+                className={`min-h-[36px] cursor-pointer rounded-lg px-3 text-xs font-extrabold transition-colors ${
+                  drawerTab === 'journal'
+                    ? 'bg-[#FFB703] text-[#071324]'
+                    : 'bg-[#0E2038] text-[#F8F9FA]/80 hover:text-[#FFB703]'
+                }`}
+              >
+                Journal &amp; Badges ({unlockedBadges.length}/5)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playClick();
+                  setDrawerTab('log');
+                }}
+                className={`min-h-[36px] cursor-pointer rounded-lg px-3 text-xs font-extrabold transition-colors ${
+                  drawerTab === 'log'
+                    ? 'bg-[#FFB703] text-[#071324]'
+                    : 'bg-[#0E2038] text-[#F8F9FA]/80 hover:text-[#FFB703]'
+                }`}
+              >
+                Mission Log ({log.length})
               </button>
             </div>
 
@@ -161,25 +240,145 @@ export function CommandersLogModal({
                 </div>
               )}
 
-              {/* Compact Later Effects */}
-              {activeRipples.length > 0 && (
-                <div className="rounded-xl border border-[#E85D04]/35 bg-[#0D213B]/75 p-3">
-                  <p className="text-[11px] font-bold text-[#FFB703]">Active Effects</p>
-                  <ul className="mt-1.5 space-y-1 text-xs text-[#F8F9FA]/90">
-                    {activeRipples.map((r) => (
-                      <li key={r} className="leading-snug">
-                        • {r}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              {drawerTab === 'journal' ? (
+                <div className="space-y-4">
+                  {/* Explorer Badges Shelf */}
+                  <div className="rounded-xl border border-[#FFB703]/35 bg-[#0D213B]/75 p-3.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="flex items-center gap-1.5 text-xs font-extrabold text-[#FFB703]">
+                        <Award className="h-4 w-4" aria-hidden="true" />
+                        <span>Explorer Badges</span>
+                      </p>
+                      <span className="text-[11px] font-bold text-[#22C55E] tabular-nums">
+                        {unlockedBadges.length}/5 Earned
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[11px] text-[#F8F9FA]/70">{BADGE_DISCLAIMER}</p>
 
-              {/* Vertical Timeline Entries */}
-              <div>
-                <p className="mb-3 text-[11px] font-bold text-[#F8F9FA]/65">
-                  Events &amp; Decisions ({log.length})
-                </p>
+                    <div className="mt-3 grid grid-cols-1 gap-2">
+                      {ALL_MISSION_IDS.map((mId) => {
+                        const badge = JUNIOR_MISSIONS[mId].badge;
+                        const earned = unlockedBadges.includes(mId);
+                        return (
+                          <div
+                            key={mId}
+                            className={`flex items-center gap-3 rounded-xl border px-3 py-2.5 ${
+                              earned
+                                ? 'border-[#FFB703]/55 bg-[#1B3A5F]/70'
+                                : 'border-white/10 bg-[#071324]/60 opacity-60'
+                            }`}
+                          >
+                            <div
+                              className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${
+                                earned
+                                  ? 'bg-gradient-to-br from-[#FFB703] to-[#22C55E]'
+                                  : 'bg-white/10'
+                              }`}
+                            >
+                              <DrawerBadgeIcon icon={badge.icon} earned={earned} />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-xs font-extrabold text-[#F8F9FA]">
+                                {badge.title}
+                              </p>
+                              <p className="text-[11px] leading-snug text-[#F8F9FA]/80">
+                                {earned
+                                  ? badge.journalFact
+                                  : `Complete ${JUNIOR_MISSIONS[mId].simpleSubtitle} to unlock!`}
+                              </p>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Unlocked Science Cards */}
+                  <div>
+                    <p className="mb-2 text-[11px] font-bold text-[#38BDF8]">
+                      Discovery Science Cards ({unlockedCardList.length}/{SCIENCE_CARD_ORDER.length})
+                    </p>
+                    {unlockedCardList.length === 0 ? (
+                      <div className="rounded-xl border border-white/10 bg-[#0D213B]/55 p-4 text-xs leading-relaxed text-[#F8F9FA]/80">
+                        Explore the yard with {roverName} and finish activities to collect Science Cards here!
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {unlockedCardList.map((cardId) => {
+                          const card = JUNIOR_SCIENCE_CARDS[cardId];
+                          if (!card) return null;
+                          const isOpen = Boolean(expandedCards[cardId]);
+                          return (
+                            <div
+                              key={card.id}
+                              className="rounded-xl border border-[#38BDF8]/35 bg-[#0D213B]/75 p-3"
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="text-xs font-extrabold text-[#F8F9FA]">
+                                  {card.title}
+                                </span>
+                                <span className="text-[10px] font-bold text-[#38BDF8]">
+                                  {card.when}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-xs leading-snug text-[#F8F9FA]/90">
+                                {card.oneSentence}
+                              </p>
+                              <p className="mt-1 text-[10px] text-[#F8F9FA]/60">
+                                {card.sourceNote}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  soundEngine.playClick();
+                                  setExpandedCards((prev) => ({
+                                    ...prev,
+                                    [cardId]: !prev[cardId],
+                                  }));
+                                }}
+                                aria-expanded={isOpen}
+                                className="mt-1.5 inline-flex cursor-pointer items-center gap-1 text-[11px] font-bold text-[#FFB703] hover:underline"
+                              >
+                                <span>Explore more</span>
+                                {isOpen ? (
+                                  <ChevronUp className="h-3 w-3" aria-hidden="true" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" aria-hidden="true" />
+                                )}
+                              </button>
+                              {isOpen && (
+                                <p className="mt-1.5 rounded-lg bg-[#071324]/75 px-2.5 py-2 text-[11px] leading-relaxed text-[#F8F9FA]/85">
+                                  {card.grownUpInfo}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Compact Later Effects */}
+                  {activeRipples.length > 0 && (
+                    <div className="rounded-xl border border-[#E85D04]/35 bg-[#0D213B]/75 p-3">
+                      <p className="text-[11px] font-bold text-[#FFB703]">Active Effects</p>
+                      <ul className="mt-1.5 space-y-1 text-xs text-[#F8F9FA]/90">
+                        {activeRipples.map((r) => (
+                          <li key={r} className="leading-snug">
+                            • {r}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Vertical Timeline Entries */}
+                  <div>
+                    <p className="mb-3 text-[11px] font-bold text-[#F8F9FA]/65">
+                      Events &amp; Decisions ({log.length})
+                    </p>
 
                 {log.length === 0 ? (
                   <div className="rounded-xl border border-white/10 bg-[#0D213B]/55 p-4 text-xs leading-relaxed text-[#F8F9FA]/75">
@@ -251,6 +450,8 @@ export function CommandersLogModal({
                   </div>
                 )}
               </div>
+                </>
+              )}
             </div>
           </motion.aside>
         </div>
@@ -444,9 +645,9 @@ export function DataCreditsModal({
                 </div>
               </div>
 
-              <p className="text-[11px] text-[#F8F9FA]/60">
-                Science data from NASA, JPL-Caltech, SwRI, PDS, and USGS. Independent educational
-                project.
+              <p className="text-[11px] text-[#F8F9FA]/65 leading-relaxed">
+                Science data and imagery from NASA, JPL-Caltech, SwRI, PDS, and USGS. Independent
+                educational project — not affiliated with or endorsed by NASA.
               </p>
             </div>
           </motion.aside>

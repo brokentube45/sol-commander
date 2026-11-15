@@ -45,13 +45,21 @@ export interface PlayerStepSnapshot {
   vx: number;
   vy: number;
   vz: number;
+  desiredVx: number;
+  desiredVz: number;
   horizontalSpeedMs: number;
   grounded: boolean;
+  computedGrounded: boolean;
   isLoping: boolean;
   slopeDeg: number;
   lastLanding: LandingEvent | null;
   activeRockColliders: number;
   physicsStepMs: number;
+  physicsSteps: number;
+  interpAlpha: number;
+  collisionCount: number;
+  roverContact: boolean;
+  roverPushingInto: boolean;
 }
 
 export interface SolidStructureVolume {
@@ -150,6 +158,7 @@ export class MarsPhysicsWorld {
   >();
   private readonly roverBody: RAPIER.RigidBody;
   private readonly roverCollider: RAPIER.Collider;
+  private readonly roverColliderHandles = new Set<number>();
   private readonly terrainCollider: RAPIER.Collider;
   private readonly nonModuleColliderHandles = new Set<number>();
 
@@ -165,13 +174,27 @@ export class MarsPhysicsWorld {
   private vx = 0;
   private vy = 0;
   private vz = 0;
+  private desiredVx = 0;
+  private desiredVz = 0;
   private grounded = true;
+  private rawGrounded = true;
   private wasGrounded = true;
+  private groundGraceTimerS: number = PHYSICS_CONSTANTS.GROUND_HYSTERESIS_S;
+  private isLoping = false;
   private airborneTimeS = 0;
   private peakFootY = 0;
   private takeoffFootY = 0;
   private lastLanding: LandingEvent | null = null;
   private lastStepDurationMs = 0;
+  private lastPhysicsSteps = 0;
+  private lastInterpAlpha = 0;
+  private lastCollisionCount = 0;
+  private lastRoverContact = false;
+  private lastRoverPushingInto = false;
+  private lastContactNormals: Array<{ x: number; y: number; z: number }> = [];
+  private stuckCheckX = 0;
+  private stuckCheckZ = 0;
+  private stuckActiveTimeS = 0;
   private lastRockSyncX = Number.NaN;
   private lastRockSyncZ = Number.NaN;
   private disposed = false;
@@ -222,23 +245,52 @@ export class MarsPhysicsWorld {
     this.buildStructureColliders();
     this.buildBoundaryWalls();
 
-    // 3. Companion Rover Compound Kinematic Colliders (synced with rover world transform)
+    // 3. Companion Rover Compound Kinematic Colliders (rounded hull + 6 wheel cylinders, zero friction vs character)
     const rv = layout.modules.roverSpawn;
     const roverY = this.getGroundSupportHeightAt(rv.x, rv.z);
     const rBodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased()
       .setTranslation(rv.x, roverY + 0.56, rv.z)
       .setRotation(yawToQuat(rv.yaw));
     this.roverBody = this.world.createRigidBody(rBodyDesc);
-    const rColDesc = RAPIER.ColliderDesc.cuboid(0.84, 0.50, 0.96)
-      .setTranslation(0, -0.06, 0.02)
-      .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
+    const rColDesc = RAPIER.ColliderDesc.roundCuboid(0.76, 0.54, 0.88, 0.08)
+      .setTranslation(0, 0.06, 0.02)
+      .setFriction(0.0)
+      .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min)
+      .setRestitution(0.0);
     this.roverCollider = this.world.createCollider(rColDesc, this.roverBody);
-    const rMastColDesc = RAPIER.ColliderDesc.cuboid(0.39, 0.35, 0.68)
-      .setTranslation(0, 0.84, 0.05)
-      .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
-    const rMastCol = this.world.createCollider(rMastColDesc, this.roverBody);
+    this.roverColliderHandles.add(this.roverCollider.handle);
     this.nonModuleColliderHandles.add(this.roverCollider.handle);
+
+    const rMastColDesc = RAPIER.ColliderDesc.roundCuboid(0.35, 0.34, 0.62, 0.06)
+      .setTranslation(0, 0.86, 0.05)
+      .setFriction(0.0)
+      .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min)
+      .setRestitution(0.0);
+    const rMastCol = this.world.createCollider(rMastColDesc, this.roverBody);
+    this.roverColliderHandles.add(rMastCol.handle);
     this.nonModuleColliderHandles.add(rMastCol.handle);
+
+    // 6-wheel cylinder colliders (visual & contact parity, zero friction against player)
+    const wheelZRot = { x: 0, y: 0, z: Math.SQRT1_2, w: Math.SQRT1_2 };
+    const wheelCoords: ReadonlyArray<[number, number]> = [
+      [-0.78, -0.66],
+      [-0.78, 0.0],
+      [-0.78, 0.66],
+      [0.78, -0.66],
+      [0.78, 0.0],
+      [0.78, 0.66],
+    ];
+    for (const [wx, wz] of wheelCoords) {
+      const wColDesc = RAPIER.ColliderDesc.roundCylinder(0.09, PHYSICS_CONSTANTS.ROVER_WHEEL_RADIUS_M - 0.03, 0.03)
+        .setTranslation(wx, -0.28, wz)
+        .setRotation(wheelZRot)
+        .setFriction(0.0)
+        .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min)
+        .setRestitution(0.0);
+      const wCol = this.world.createCollider(wColDesc, this.roverBody);
+      this.roverColliderHandles.add(wCol.handle);
+      this.nonModuleColliderHandles.add(wCol.handle);
+    }
 
     // 4. Player EVA Character Capsule + KinematicCharacterController
     const footY = this.getGroundSupportHeightAt(startX, startZ);
@@ -257,12 +309,15 @@ export class MarsPhysicsWorld {
     const pColDesc = RAPIER.ColliderDesc.capsule(
       PHYSICS_CONSTANTS.CAPSULE_HALF_HEIGHT_M,
       PHYSICS_CONSTANTS.CAPSULE_RADIUS_M,
-    ).setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
+    )
+      .setFriction(0.0)
+      .setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min);
     this.playerCollider = this.world.createCollider(pColDesc, this.playerBody);
     this.nonModuleColliderHandles.add(this.playerCollider.handle);
 
     this.controller = this.world.createCharacterController(PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M);
     this.controller.setUp({ x: 0, y: 1, z: 0 });
+    this.controller.setSlideEnabled(true);
     this.controller.enableAutostep(
       PHYSICS_CONSTANTS.AUTOSTEP_MAX_HEIGHT_M,
       PHYSICS_CONSTANTS.AUTOSTEP_MIN_WIDTH_M,
@@ -271,7 +326,7 @@ export class MarsPhysicsWorld {
     this.controller.enableSnapToGround(PHYSICS_CONSTANTS.SNAP_TO_GROUND_M);
     this.controller.setMaxSlopeClimbAngle((PHYSICS_CONSTANTS.MAX_SLOPE_CLIMB_DEG * Math.PI) / 180);
     this.controller.setMinSlopeSlideAngle((PHYSICS_CONSTANTS.MIN_SLOPE_SLIDE_DEG * Math.PI) / 180);
-    this.controller.setApplyImpulsesToDynamicBodies(true);
+    this.controller.setApplyImpulsesToDynamicBodies(false);
 
     // 5. Register all 4 Crew NPCs as real Rapier KinematicCharacterController Capsules
     const footOffset =
@@ -314,6 +369,8 @@ export class MarsPhysicsWorld {
     this.prevCenter = { x: startX, y: centerY, z: startZ };
     this.currCenter = { x: startX, y: centerY, z: startZ };
     this.interpCenter = { x: startX, y: centerY, z: startZ };
+    this.stuckCheckX = startX;
+    this.stuckCheckZ = startZ;
     this.peakFootY = footY;
     this.takeoffFootY = footY;
 
@@ -1035,10 +1092,15 @@ export class MarsPhysicsWorld {
     return this.activeRockColliders.size;
   }
 
-  public updateRoverTransform(x: number, y: number, z: number, yawRad: number): void {
+  public updateRoverTransform(x: number, y: number, z: number, yawRad: number, immediate = false): void {
     if (this.disposed) return;
-    this.roverBody.setNextKinematicTranslation({ x, y: y + 0.56, z });
-    this.roverBody.setNextKinematicRotation(yawToQuat(yawRad));
+    if (immediate) {
+      this.roverBody.setTranslation({ x, y: y + 0.56, z }, true);
+      this.roverBody.setRotation(yawToQuat(yawRad), true);
+    } else {
+      this.roverBody.setNextKinematicTranslation({ x, y: y + 0.56, z });
+      this.roverBody.setNextKinematicRotation(yawToQuat(yawRad));
+    }
   }
 
   public teleportPlayer(x: number, z: number, dropOffsetM = 0.02): void {
@@ -1052,12 +1114,23 @@ export class MarsPhysicsWorld {
     this.prevCenter = { x, y: centerY, z };
     this.currCenter = { x, y: centerY, z };
     this.interpCenter = { x, y: centerY, z };
+    this.accumulatorS = 0;
     this.vx = 0;
     this.vy = 0;
     this.vz = 0;
+    this.desiredVx = 0;
+    this.desiredVz = 0;
     this.grounded = dropOffsetM <= 0.05;
+    this.rawGrounded = this.grounded;
     this.wasGrounded = this.grounded;
+    this.groundGraceTimerS = this.grounded ? PHYSICS_CONSTANTS.GROUND_HYSTERESIS_S : 0;
+    this.isLoping = false;
     this.airborneTimeS = 0;
+    this.stuckCheckX = x;
+    this.stuckCheckZ = z;
+    this.stuckActiveTimeS = 0;
+    this.lastRoverContact = false;
+    this.lastRoverPushingInto = false;
     this.peakFootY = groundY + dropOffsetM;
     this.takeoffFootY = groundY + dropOffsetM;
     this.syncStreamedRocks(x, z, true);
@@ -1190,27 +1263,51 @@ export class MarsPhysicsWorld {
       targetVx = dirX * baseSpeed * speedMult;
       targetVz = dirZ * baseSpeed * speedMult;
     }
+    this.desiredVx = targetVx;
+    this.desiredVz = targetVz;
 
     const timeConst =
       dirLen > 0.001 ? PHYSICS_CONSTANTS.PLAYER_ACCEL_TIME_S : PHYSICS_CONSTANTS.PLAYER_DECEL_TIME_S;
     const blend = 1 - Math.exp(-dt / timeConst);
     this.vx += (targetVx - this.vx) * blend;
     this.vz += (targetVz - this.vz) * blend;
+    if (dirLen <= 0.001 && Math.hypot(this.vx, this.vz) < 0.004) {
+      this.vx = 0;
+      this.vz = 0;
+    }
+
+    // Exclude rover from autostep & snap-to-ground when close or in contact so player never climbs/snags on rover wheels/bumper
+    const roverPos = this.roverBody.translation();
+    const distToRover = Math.hypot(currentPos.x - roverPos.x, currentPos.z - roverPos.z);
+    const nearRover = distToRover <= 2.35;
+    if (nearRover) {
+      this.controller.disableAutostep();
+      this.controller.disableSnapToGround();
+    } else {
+      this.controller.enableAutostep(
+        PHYSICS_CONSTANTS.AUTOSTEP_MAX_HEIGHT_M,
+        PHYSICS_CONSTANTS.AUTOSTEP_MIN_WIDTH_M,
+        false,
+      );
+    }
 
     if (jumpPending.value && this.grounded) {
       jumpPending.value = false;
       this.vy = PHYSICS_CONSTANTS.SUITED_TAKEOFF_MS;
       this.grounded = false;
+      this.groundGraceTimerS = 0;
       this.airborneTimeS = 0;
       this.takeoffFootY = footYBefore;
       this.peakFootY = footYBefore;
       this.controller.disableSnapToGround();
     } else if (this.grounded) {
-      this.vy = -0.35;
-      this.controller.enableSnapToGround(PHYSICS_CONSTANTS.SNAP_TO_GROUND_M);
+      this.vy = -0.05;
+      if (!nearRover) {
+        this.controller.enableSnapToGround(PHYSICS_CONSTANTS.SNAP_TO_GROUND_M);
+      }
     } else {
       this.vy -= localGrav * dt;
-      if (this.vy <= 0) {
+      if (this.vy <= 0 && !nearRover) {
         this.controller.enableSnapToGround(PHYSICS_CONSTANTS.SNAP_TO_GROUND_M);
       } else {
         this.controller.disableSnapToGround();
@@ -1223,14 +1320,120 @@ export class MarsPhysicsWorld {
       z: this.vz * dt,
     };
 
+    // Exclude dynamic drop-test clutter if any, keep all static/kinematic world except player itself
     this.controller.computeColliderMovement(this.playerCollider, desiredMovement);
     const corrected = this.controller.computedMovement();
-    const nextX = currentPos.x + corrected.x;
+    let nextX = currentPos.x + corrected.x;
     let nextY = currentPos.y + corrected.y;
-    const nextZ = currentPos.z + corrected.z;
+    let nextZ = currentPos.z + corrected.z;
 
+    // Inspect controller contacts for wall sliding, rover push detection, and anti-stuck normals
+    const nCol = this.controller.numComputedCollisions();
+    this.lastCollisionCount = nCol;
+    this.lastContactNormals = [];
+    let hitRover = false;
+    let pushingIntoRover = false;
+    let blockedByNonTerrainWall = false;
+
+    for (let i = 0; i < nCol; i++) {
+      const c = this.controller.computedCollision(i);
+      if (!c) continue;
+      const n = c.normal1;
+      this.lastContactNormals.push({ x: n.x, y: n.y, z: n.z });
+      const handle = c.collider?.handle;
+      const isTerrain = handle === this.terrainCollider.handle;
+      const isRover = handle !== undefined && this.roverColliderHandles.has(handle);
+
+      if (isRover) {
+        hitRover = true;
+        if (dirLen > 0.001) {
+          const toRoverX = roverPos.x - currentPos.x;
+          const toRoverZ = roverPos.z - currentPos.z;
+          const toRoverLen = Math.hypot(toRoverX, toRoverZ) || 1;
+          const dotIntoRover = (dirX * toRoverX + dirZ * toRoverZ) / toRoverLen;
+          const dotOppNormal = -(dirX * n.x + dirZ * n.z);
+          if (dotIntoRover > 0.2 || dotOppNormal > 0.2) {
+            pushingIntoRover = true;
+          }
+        }
+      }
+
+      if (!isTerrain && !isRover) {
+        const horizMag = Math.hypot(n.x, n.z);
+        if (horizMag > 0.65 && Math.abs(n.y) < 0.65) {
+          const vn = this.vx * (n.x / horizMag) + this.vz * (n.z / horizMag);
+          if (vn < 0) {
+            // Project out only the component into the solid wall so sliding speed stays intact
+            this.vx -= vn * (n.x / horizMag);
+            this.vz -= vn * (n.z / horizMag);
+            blockedByNonTerrainWall = true;
+          }
+        }
+      }
+    }
+
+    // Also allow sustained close push detection when pressed right along rover skin envelope
+    if (!hitRover && nearRover && distToRover <= 1.85 && dirLen > 0.001) {
+      const toRoverX = roverPos.x - currentPos.x;
+      const toRoverZ = roverPos.z - currentPos.z;
+      const toRoverLen = Math.hypot(toRoverX, toRoverZ) || 1;
+      if ((dirX * toRoverX + dirZ * toRoverZ) / toRoverLen > 0.45 && distToRover <= 1.55) {
+        hitRover = true;
+        pushingIntoRover = true;
+      }
+    }
+
+    this.lastRoverContact = hitRover;
+    this.lastRoverPushingInto = pushingIntoRover;
+
+    // Anti-stuck depenetration: if input is active and net displacement < 0.05 m for >= 1.0 s, free along contact normal
+    if (dirLen > 0.001) {
+      this.stuckActiveTimeS += dt;
+      const netDisp = Math.hypot(nextX - this.stuckCheckX, nextZ - this.stuckCheckZ);
+      if (netDisp >= PHYSICS_CONSTANTS.ANTI_STUCK_MIN_DISP_M) {
+        this.stuckCheckX = nextX;
+        this.stuckCheckZ = nextZ;
+        this.stuckActiveTimeS = 0;
+      } else if (this.stuckActiveTimeS >= PHYSICS_CONSTANTS.ANTI_STUCK_WINDOW_S) {
+        let escX = 0;
+        let escZ = 0;
+        for (const cn of this.lastContactNormals) {
+          if (Math.hypot(cn.x, cn.z) > 0.25) {
+            escX += cn.x;
+            escZ += cn.z;
+          }
+        }
+        if (Math.hypot(escX, escZ) < 0.05 && nearRover) {
+          escX = nextX - roverPos.x;
+          escZ = nextZ - roverPos.z;
+        }
+        if (Math.hypot(escX, escZ) < 0.05) {
+          // Perpendicular tangential nudge around desired direction
+          escX = -dirZ;
+          escZ = dirX;
+        }
+        const escLen = Math.hypot(escX, escZ) || 1;
+        const depenStep = Math.min(PHYSICS_CONSTANTS.ANTI_STUCK_DEPEN_SPEED_MS, 1.35) * dt;
+        const candMove = { x: (escX / escLen) * depenStep, y: 0, z: (escZ / escLen) * depenStep };
+        this.controller.computeColliderMovement(this.playerCollider, candMove);
+        const safeCorr = this.controller.computedMovement();
+        nextX += safeCorr.x;
+        nextZ += safeCorr.z;
+        this.vx = (escX / escLen) * Math.min(0.86, PHYSICS_CONSTANTS.ANTI_STUCK_DEPEN_SPEED_MS);
+        this.vz = (escZ / escLen) * Math.min(0.86, PHYSICS_CONSTANTS.ANTI_STUCK_DEPEN_SPEED_MS);
+        this.stuckActiveTimeS = 0.65;
+        this.stuckCheckX = nextX;
+        this.stuckCheckZ = nextZ;
+      }
+    } else {
+      this.stuckActiveTimeS = 0;
+      this.stuckCheckX = nextX;
+      this.stuckCheckZ = nextZ;
+    }
+
+    // Keep floor support slightly above controller skin so capsule never wedges on triangle seams
     const supportY = this.getGroundSupportHeightAt(nextX, nextZ);
-    const minCenterY = supportY + footOffset + 0.002;
+    const minCenterY = supportY + footOffset + PHYSICS_CONSTANTS.CONTROLLER_OFFSET_M * 0.5;
     let clampedToFloor = false;
     if (nextY < minCenterY) {
       nextY = minCenterY;
@@ -1246,8 +1449,20 @@ export class MarsPhysicsWorld {
 
     const footYAfter = nextY - footOffset;
     const rawGrounded = this.controller.computedGrounded() || clampedToFloor;
+    this.rawGrounded = rawGrounded;
     this.wasGrounded = this.grounded;
-    this.grounded = rawGrounded && this.vy <= 0.15;
+
+    // Ground hysteresis (~80 ms grace) so a one-frame floor flicker never drops horizontal momentum or triggers false airtime
+    if (this.vy > 0.15) {
+      this.groundGraceTimerS = 0;
+      this.grounded = false;
+    } else if (rawGrounded) {
+      this.groundGraceTimerS = PHYSICS_CONSTANTS.GROUND_HYSTERESIS_S;
+      this.grounded = true;
+    } else {
+      this.groundGraceTimerS = Math.max(0, this.groundGraceTimerS - dt);
+      this.grounded = this.groundGraceTimerS > 0;
+    }
 
     if (!this.grounded) {
       this.airborneTimeS += dt;
@@ -1272,14 +1487,17 @@ export class MarsPhysicsWorld {
       this.peakFootY = footYAfter;
     }
 
-    if (dt > 0) {
-      const desDist = Math.hypot(desiredMovement.x, desiredMovement.z);
-      const actDist = Math.hypot(corrected.x, corrected.z);
-      if (desDist > 1e-6 && actDist < desDist * 0.12) {
-        this.vx = corrected.x / dt;
-        this.vz = corrected.z / dt;
-      }
+    // Gait hysteresis (±0.1 m/s around walk-to-lope transition threshold 1.099 m/s)
+    const speedNow = Math.hypot(this.vx, this.vz);
+    const transMs = PHYSICS_CONSTANTS.MARS_SUITED_TRANSITION_MS;
+    if (!this.isLoping && speedNow >= transMs + PHYSICS_CONSTANTS.GAIT_HYSTERESIS_MS) {
+      this.isLoping = true;
+    } else if (this.isLoping && speedNow <= transMs - PHYSICS_CONSTANTS.GAIT_HYSTERESIS_MS) {
+      this.isLoping = false;
     }
+
+    // Only clear void unused variable lint warning if needed
+    void blockedByNonTerrainWall;
   }
 
   public stepFrame(frameDtS: number, input: CharacterFrameInput): PlayerStepSnapshot {
@@ -1288,33 +1506,45 @@ export class MarsPhysicsWorld {
     }
     const t0 = performance.now();
     const clampedDt = Math.min(Math.max(frameDtS, 0), PHYSICS_CONSTANTS.MAX_FRAME_DT_S);
+    const fixedDt = PHYSICS_CONSTANTS.FIXED_DT_S;
     const jumpPending = { value: input.jumpRequested };
 
-    if (clampedDt > 0) {
-      const substeps = clampedDt > 0.024 ? Math.min(6, Math.ceil(clampedDt / 0.018)) : 1;
-      const subDt = clampedDt / substeps;
-      for (let i = 0; i < substeps; i++) {
-        this.stepWithDt(subDt, input, jumpPending);
-      }
+    this.accumulatorS += clampedDt;
+    const maxStepsPerFrame = 16;
+    let steps = 0;
+    while (this.accumulatorS >= fixedDt - 1e-9 && steps < maxStepsPerFrame) {
+      this.stepWithDt(fixedDt, input, jumpPending);
+      this.accumulatorS = Math.max(0, this.accumulatorS - fixedDt);
+      steps++;
+    }
+    if (steps === maxStepsPerFrame && this.accumulatorS > fixedDt * 2) {
+      this.accumulatorS = fixedDt;
     }
 
     this.syncStreamedRocks(this.currCenter.x, this.currCenter.z);
 
-    this.interpCenter.x = this.currCenter.x;
-    this.interpCenter.y = this.currCenter.y;
-    this.interpCenter.z = this.currCenter.z;
+    const alpha = Math.max(0, Math.min(1, this.accumulatorS / fixedDt));
+    this.interpCenter.x = this.prevCenter.x + (this.currCenter.x - this.prevCenter.x) * alpha;
+    this.interpCenter.y = this.prevCenter.y + (this.currCenter.y - this.prevCenter.y) * alpha;
+    this.interpCenter.z = this.prevCenter.z + (this.currCenter.z - this.prevCenter.z) * alpha;
 
+    this.lastPhysicsSteps = steps;
+    this.lastInterpAlpha = alpha;
     this.lastStepDurationMs = performance.now() - t0;
     return this.getSnapshot();
   }
 
   public stepSingleFixed(input: CharacterFrameInput): PlayerStepSnapshot {
+    const t0 = performance.now();
     const jumpPending = { value: input.jumpRequested };
     this.stepWithDt(PHYSICS_CONSTANTS.FIXED_DT_S, input, jumpPending);
     this.syncStreamedRocks(this.currCenter.x, this.currCenter.z);
     this.interpCenter.x = this.currCenter.x;
     this.interpCenter.y = this.currCenter.y;
     this.interpCenter.z = this.currCenter.z;
+    this.lastPhysicsSteps = 1;
+    this.lastInterpAlpha = 1;
+    this.lastStepDurationMs = performance.now() - t0;
     return this.getSnapshot();
   }
 
@@ -1335,14 +1565,65 @@ export class MarsPhysicsWorld {
       vx: this.vx,
       vy: this.vy,
       vz: this.vz,
+      desiredVx: this.desiredVx,
+      desiredVz: this.desiredVz,
       horizontalSpeedMs: speed,
       grounded: this.grounded,
-      isLoping: speed > PHYSICS_CONSTANTS.MARS_SUITED_TRANSITION_MS,
+      computedGrounded: this.rawGrounded,
+      isLoping: this.isLoping,
       slopeDeg: this.getSlopeDegAt(this.currCenter.x, this.currCenter.z),
       lastLanding: this.lastLanding,
       activeRockColliders: this.activeRockColliders.size,
       physicsStepMs: this.lastStepDurationMs,
+      physicsSteps: this.lastPhysicsSteps,
+      interpAlpha: this.lastInterpAlpha,
+      collisionCount: this.lastCollisionCount,
+      roverContact: this.lastRoverContact,
+      roverPushingInto: this.lastRoverPushingInto,
     };
+  }
+
+  /**
+   * Sweeps the Rover hull envelope from (fromX, fromZ) to (toX, toZ) against outpost structures & boulders
+   * (excluding terrain, player, and rover itself) to verify a clear Make-Way reverse/turn path.
+   */
+  public isRoverPathClear(
+    fromX: number,
+    fromZ: number,
+    toX: number,
+    toZ: number,
+    yawRad: number,
+  ): boolean {
+    if (this.disposed) return true;
+    const dx = toX - fromX;
+    const dz = toZ - fromZ;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 0.05) return true;
+    const fromY = this.getGroundSupportHeightAt(fromX, fromZ) + 0.72;
+    const toY = this.getGroundSupportHeightAt(toX, toZ) + 0.72;
+    const dy = toY - fromY;
+    const fullDist = Math.hypot(dx, dy, dz);
+    const vel = { x: dx / fullDist, y: dy / fullDist, z: dz / fullDist };
+    const shape = new RAPIER.Cuboid(0.84, 0.44, 0.96);
+    const rot = yawToQuat(yawRad);
+    const ignored = new Set<number>([this.terrainCollider.handle, this.playerCollider.handle]);
+    for (const h of this.roverColliderHandles) ignored.add(h);
+    const predicate = (col: RAPIER.Collider) => !ignored.has(col.handle);
+    const hit = this.world.castShape(
+      { x: fromX, y: fromY, z: fromZ },
+      rot,
+      vel,
+      shape,
+      0,
+      fullDist,
+      true,
+      undefined,
+      undefined,
+      this.roverCollider,
+      undefined,
+      predicate,
+    );
+    return hit === null;
   }
 
   public spawnDropTestBodies(

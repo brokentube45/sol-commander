@@ -113,6 +113,23 @@ export function DebugPanel({ gamePhase, onStartGameplayDirect }: DebugPanelProps
     }
   };
 
+  const handleCopyMoveDiagnostics = async () => {
+    const api = window.__MARS_DEBUG__;
+    if (!api) return;
+    const payload = {
+      movement: api.getMovementDiagnostics(),
+      player: api.player,
+      rover: api.rover,
+      crew: api.crew.map((c) => ({ id: c.id, state: c.state, position: c.position, speedMs: c.speedMs })),
+    };
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setCopyStatus('Copied U4/U5 Movement & Rover JSON');
+    } catch {
+      setCopyStatus('Clipboard blocked — inspect window.__MARS_DEBUG__.getMovementDiagnostics()');
+    }
+  };
+
   if (collapsed) {
     return (
       <div className="fixed top-3 right-3 z-50 font-mono text-xs">
@@ -305,9 +322,9 @@ export function DebugPanel({ gamePhase, onStartGameplayDirect }: DebugPanelProps
         </div>
       </div>
 
-      {/* Step C Self-Test Runner */}
+      {/* Step C Self-Test & U4/U5 Movement Diagnostics */}
       <div className="border-t border-slate-800 pt-2">
-        <div className="flex gap-1.5 mb-2">
+        <div className="flex flex-wrap gap-1.5 mb-2">
           <button
             type="button"
             disabled={runningTest}
@@ -321,7 +338,14 @@ export function DebugPanel({ gamePhase, onStartGameplayDirect }: DebugPanelProps
             onClick={handleCopyJson}
             className="rounded border border-sky-500/60 bg-sky-950/60 px-2 py-1 text-[10px] font-bold text-sky-200 hover:bg-sky-900/70"
           >
-            Copy JSON Report
+            Copy C1–C8 JSON
+          </button>
+          <button
+            type="button"
+            onClick={handleCopyMoveDiagnostics}
+            className="rounded border border-emerald-500/60 bg-emerald-950/60 px-2 py-1 text-[10px] font-bold text-emerald-200 hover:bg-emerald-900/70"
+          >
+            Copy Move/U4-U5 JSON
           </button>
         </div>
 

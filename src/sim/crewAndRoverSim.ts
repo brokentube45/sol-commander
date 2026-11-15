@@ -61,6 +61,10 @@ export interface CrewAgentState {
   stuckTicks: number;
   pauseTimerS: number;
   talkTimerS: number;
+  yieldTargetX?: number;
+  yieldTargetZ?: number;
+  yieldTimerS?: number;
+  yieldCooldownS?: number;
 }
 
 export interface CrewContext {
@@ -72,6 +76,11 @@ export interface CrewContext {
   obstacles: Array<{ x: number; z: number; radius: number }>;
   grid?: TerrainHeightGrid;
   layout?: OutpostLayoutConfig;
+  playerX?: number;
+  playerZ?: number;
+  playerSpeedMs?: number;
+  playerDirX?: number;
+  playerDirZ?: number;
   /** Optional Rapier physics character controller step hook */
   moveCrewViaPhysics?: (
     id: CrewMemberId,
@@ -374,7 +383,129 @@ export function stepCrewAgents(
 
     const totalGoalDist = Math.hypot(goalX - next.x, goalZ - next.z);
 
-    if (totalGoalDist < 0.42) {
+    const gh = layout.modules.greenhouse;
+    const hab = layout.modules.habitat;
+    const airDoorX = hab.x + layout.modules.airlockOffset.dx;
+    const airDoorZ = hab.z + layout.modules.airlockOffset.dz + 1.05;
+
+    const isCrewPointClear = (cx: number, cz: number): boolean => {
+      const radial = Math.hypot(cx - layout.walkableCenter.x, cz - layout.walkableCenter.z);
+      if (radial > layout.walkableRadiusM - 1.6) return false;
+      if (computeTerrainSlopeDeg(cx, cz, ctx.grid) >= PHYSICS_CONSTANTS.MAX_SLOPE_CLIMB_DEG) {
+        return false;
+      }
+      // Keep doorways clear
+      if (Math.hypot(cx - ghDoor.centerX, cz - ghDoor.centerZ) < 1.35) return false;
+      if (Math.hypot(cx - airDoorX, cz - airDoorZ) < 1.45) return false;
+      const dGh = Math.hypot(cx - gh.x, cz - gh.z);
+      if (Math.abs(dGh - gh.wallMidRadius) < 0.65) return false;
+      for (const obs of ctx.obstacles) {
+        if (Math.hypot(cx - obs.x, cz - obs.z) < obs.radius + 0.55) return false;
+      }
+      return true;
+    };
+
+    next.yieldCooldownS = Math.max(0, (next.yieldCooldownS ?? 0) - safeDt);
+    let yieldingToPlayer = (next.yieldTimerS ?? 0) > 0;
+    if (ctx.playerX !== undefined && ctx.playerZ !== undefined) {
+      const toCrewX = next.x - ctx.playerX;
+      const toCrewZ = next.z - ctx.playerZ;
+      const dPlayer = Math.hypot(toCrewX, toCrewZ);
+      const approaching =
+        dPlayer < 0.95 ||
+        ((ctx.playerSpeedMs ?? 0) > 0.15 &&
+          ctx.playerDirX !== undefined &&
+          ctx.playerDirZ !== undefined &&
+          ((toCrewX * ctx.playerDirX + toCrewZ * ctx.playerDirZ) / Math.max(0.001, dPlayer)) > 0.25);
+
+      if (
+        !yieldingToPlayer &&
+        (next.yieldCooldownS ?? 0) <= 0 &&
+        dPlayer <= PHYSICS_CONSTANTS.CREW_YIELD_TRIGGER_DIST_M &&
+        approaching
+      ) {
+        const baseX = ctx.playerDirX !== undefined && (Math.abs(ctx.playerDirX) + Math.abs(ctx.playerDirZ ?? 0) > 0.1)
+          ? ctx.playerDirX
+          : (dPlayer > 0.001 ? toCrewX / dPlayer : 0);
+        const baseZ = ctx.playerDirZ !== undefined && (Math.abs(ctx.playerDirX ?? 0) + Math.abs(ctx.playerDirZ) > 0.1)
+          ? ctx.playerDirZ
+          : (dPlayer > 0.001 ? toCrewZ / dPlayer : 1);
+        const perpA = { x: -baseZ, z: baseX };
+        const perpB = { x: baseZ, z: -baseX };
+        const sideOrder = idx % 2 === 0 ? [perpA, perpB] : [perpB, perpA];
+        const stepM = PHYSICS_CONSTANTS.CREW_YIELD_SIDESTEP_M + 0.15;
+        const candidates = [
+          { x: next.x + sideOrder[0].x * stepM, z: next.z + sideOrder[0].z * stepM },
+          { x: next.x + sideOrder[1].x * stepM, z: next.z + sideOrder[1].z * stepM },
+          {
+            x: next.x + (sideOrder[0].x * 0.7 + baseX * 0.7) * stepM,
+            z: next.z + (sideOrder[0].z * 0.7 + baseZ * 0.7) * stepM,
+          },
+          {
+            x: next.x + (sideOrder[1].x * 0.7 + baseX * 0.7) * stepM,
+            z: next.z + (sideOrder[1].z * 0.7 + baseZ * 0.7) * stepM,
+          },
+          { x: next.x + baseX * stepM, z: next.z + baseZ * stepM },
+        ];
+        const chosen = candidates.find((c) => isCrewPointClear(c.x, c.z));
+        if (chosen) {
+          next.yieldTargetX = chosen.x;
+          next.yieldTargetZ = chosen.z;
+          next.yieldTimerS = 1.9;
+          yieldingToPlayer = true;
+        }
+      }
+    }
+
+    if (yieldingToPlayer && next.yieldTargetX !== undefined && next.yieldTargetZ !== undefined) {
+      next.yieldTimerS = Math.max(0, (next.yieldTimerS ?? 0) - safeDt);
+      const yDx = next.yieldTargetX - next.x;
+      const yDz = next.yieldTargetZ - next.z;
+      const yDist = Math.hypot(yDx, yDz);
+      if (yDist > 0.08) {
+        const yDirX = yDx / yDist;
+        const yDirZ = yDz / yDist;
+        const yieldStep = Math.min(yDist, 1.25 * safeDt);
+        const desiredDx = yDirX * yieldStep;
+        const desiredDz = yDirZ * yieldStep;
+        if (ctx.moveCrewViaPhysics) {
+          const phys = ctx.moveCrewViaPhysics(next.id, desiredDx, desiredDz, safeDt);
+          next.x = phys.x;
+          next.z = phys.z;
+          next.y = phys.footY;
+          next.vx = phys.vx;
+          next.vz = phys.vz;
+          next.speedMs = Math.hypot(phys.vx, phys.vz);
+        } else {
+          next.x += desiredDx;
+          next.z += desiredDz;
+          next.vx = desiredDx / safeDt;
+          next.vz = desiredDz / safeDt;
+          next.speedMs = Math.hypot(next.vx, next.vz);
+          next.y = getOutpostSupportHeightAt(
+            next.x,
+            next.z,
+            (px, pz) => groundHeightAt(px, pz, ctx.grid),
+            layout,
+          );
+        }
+        next.yaw += wrapAngleDiff(next.yaw, Math.atan2(yDirX, yDirZ)) * Math.min(1, safeDt * 8.0);
+        next.walkPhase += safeDt * Math.max(2.0, next.speedMs * 3.8);
+      } else {
+        next.vx = 0;
+        next.vz = 0;
+        next.speedMs = 0;
+        if (next.yieldTimerS <= 0) {
+          next.yieldCooldownS = 1.6;
+        }
+      }
+      if (next.yieldTimerS <= 0) {
+        next.yieldTargetX = undefined;
+        next.yieldTargetZ = undefined;
+        next.yieldCooldownS = 1.6;
+        next.lastGoalKey = '';
+      }
+    } else if (totalGoalDist < 0.42) {
       next.vx = 0;
       next.vz = 0;
       next.speedMs = 0;
@@ -427,6 +558,16 @@ export function stepCrewAgents(
             const push = ((1.25 - od) / 1.25) * 1.15;
             dirX += (ox / od) * push;
             dirZ += (oz / od) * push;
+          }
+        }
+        if (ctx.playerX !== undefined && ctx.playerZ !== undefined) {
+          const px = next.x - ctx.playerX;
+          const pz = next.z - ctx.playerZ;
+          const pd = Math.hypot(px, pz);
+          if (pd > 0.001 && pd < 1.35) {
+            const push = ((1.35 - pd) / 1.35) * 1.65;
+            dirX += (px / pd) * push;
+            dirZ += (pz / pd) * push;
           }
         }
       }
@@ -584,7 +725,7 @@ export function getCrewInspectInfo(
 // ============================================================================
 // Autonomous 6-Wheel Rocker-Bogie Rover Controller (B5 + Pad Height Support)
 // ============================================================================
-export type RoverDriveState = 'PARKED' | 'FOLLOWING';
+export type RoverDriveState = 'PARKED' | 'FOLLOWING' | 'MAKING_WAY';
 
 export interface RoverControllerState {
   x: number;
@@ -609,6 +750,14 @@ export interface RoverControllerState {
   lastProgressX?: number;
   lastProgressZ?: number;
   progressTimerS?: number;
+  pushTimerS?: number;
+  makeWayTimerS?: number;
+  makeWayCooldownS?: number;
+  makeWayTargetX?: number;
+  makeWayTargetZ?: number;
+  makeWayTargetYaw?: number;
+  makeWayReverse?: boolean;
+  makeWayJustStarted?: boolean;
 }
 
 export function createInitialRoverController(
@@ -647,6 +796,10 @@ export function createInitialRoverController(
     lastProgressX: startX,
     lastProgressZ: startZ,
     progressTimerS: 0,
+    pushTimerS: 0,
+    makeWayTimerS: 0,
+    makeWayCooldownS: 0,
+    makeWayJustStarted: false,
   };
 }
 
@@ -656,6 +809,9 @@ export interface RoverStepOptions {
   playerYaw: number;
   damaged: boolean;
   holdPosition?: boolean;
+  playerPushingIntoRover?: boolean;
+  makeWayRequested?: boolean;
+  canRoverOccupy?: (fromX: number, fromZ: number, toX: number, toZ: number, yawRad: number) => boolean;
   obstacles: Array<{ x: number; z: number; radius: number }>;
   actors?: Array<{ x: number; z: number; radius: number }>;
   rocks?: Array<{ x: number; z: number; radius: number }>;
@@ -695,32 +851,167 @@ export function stepRoverController(
     lastProgressX: prev.lastProgressX ?? prev.x,
     lastProgressZ: prev.lastProgressZ ?? prev.z,
     progressTimerS: prev.progressTimerS ?? 0,
+    pushTimerS: prev.pushTimerS ?? 0,
+    makeWayTimerS: prev.makeWayTimerS ?? 0,
+    makeWayCooldownS: Math.max(0, (prev.makeWayCooldownS ?? 0) - safeDt),
+    makeWayJustStarted: false,
   };
 
   const distToPlayer = Math.hypot(opts.playerX - next.x, opts.playerZ - next.z);
+  const maxR = layout.walkableRadiusM - 2.0;
+
+  // Track sustained player push into the rover
+  if (
+    !opts.holdPosition &&
+    distToPlayer <= PHYSICS_CONSTANTS.ROVER_MAKE_WAY_TRIGGER_DIST_M &&
+    opts.playerPushingIntoRover
+  ) {
+    next.pushTimerS = (next.pushTimerS ?? 0) + safeDt;
+  } else {
+    next.pushTimerS = 0;
+  }
+
+  const pushTriggered =
+    (next.pushTimerS ?? 0) >= PHYSICS_CONSTANTS.ROVER_MAKE_WAY_PUSH_TIME_S &&
+    distToPlayer <= PHYSICS_CONSTANTS.ROVER_MAKE_WAY_TRIGGER_DIST_M;
+  const keyTriggered = Boolean(opts.makeWayRequested) && distToPlayer <= 6.0;
 
   if (opts.holdPosition) {
     next.state = 'PARKED';
-  } else if (next.state === 'PARKED') {
-    if (distToPlayer > PHYSICS_CONSTANTS.ROVER_PARK_START_FOLLOW_M) {
+    next.makeWayTimerS = 0;
+  } else if (
+    next.state !== 'MAKING_WAY' &&
+    (next.makeWayCooldownS ?? 0) <= 0 &&
+    (pushTriggered || keyTriggered)
+  ) {
+    const fwdX = Math.sin(next.yaw);
+    const fwdZ = Math.cos(next.yaw);
+    const awayFromPlayerX = distToPlayer > 0.01 ? (next.x - opts.playerX) / distToPlayer : -fwdX;
+    const awayFromPlayerZ = distToPlayer > 0.01 ? (next.z - opts.playerZ) / distToPlayer : -fwdZ;
+
+    // Evaluate 1.5–2.0 m reverse + 20–30 deg turn away from player (with side/forward fallbacks if rear blocked)
+    const gh = layout.modules.greenhouse;
+    const candidateSpecs: Array<{
+      dist: number;
+      turnRad: number;
+      reverse: boolean;
+      angleOffsetFromHeading: number;
+    }> = [
+      { dist: 1.75, turnRad: 0.42, reverse: true, angleOffsetFromHeading: Math.PI + 0.42 },
+      { dist: 1.75, turnRad: -0.42, reverse: true, angleOffsetFromHeading: Math.PI - 0.42 },
+      { dist: 1.65, turnRad: 0.52, reverse: true, angleOffsetFromHeading: Math.PI + 0.85 },
+      { dist: 1.65, turnRad: -0.52, reverse: true, angleOffsetFromHeading: Math.PI - 0.85 },
+      { dist: 1.6, turnRad: 0.44, reverse: false, angleOffsetFromHeading: 0.44 },
+      { dist: 1.6, turnRad: -0.44, reverse: false, angleOffsetFromHeading: -0.44 },
+    ];
+
+    let bestCand: {
+      tx: number;
+      tz: number;
+      tYaw: number;
+      reverse: boolean;
+      score: number;
+    } | null = null;
+
+    for (const spec of candidateSpecs) {
+      const ca = Math.cos(spec.angleOffsetFromHeading);
+      const sa = Math.sin(spec.angleOffsetFromHeading);
+      const dirX = fwdX * ca - fwdZ * sa;
+      const dirZ = fwdX * sa + fwdZ * ca;
+      const tx = next.x + dirX * spec.dist;
+      const tz = next.z + dirZ * spec.dist;
+      const tYaw = next.yaw + spec.turnRad;
+
+      const radDist = Math.hypot(tx - layout.walkableCenter.x, tz - layout.walkableCenter.z);
+      if (radDist > maxR - 0.45) continue;
+      if (computeTerrainSlopeDeg(tx, tz, opts.grid) >= PHYSICS_CONSTANTS.ROVER_TILT_LIMIT_DEG) {
+        continue;
+      }
+      if (Math.hypot(tx - gh.x, tz - gh.z) < gh.floorRadius + 1.05) continue;
+
+      let obsBlocked = false;
+      for (const obs of opts.obstacles) {
+        if (Math.hypot(tx - obs.x, tz - obs.z) < obs.radius + 1.0) {
+          obsBlocked = true;
+          break;
+        }
+      }
+      if (obsBlocked) continue;
+      if (opts.canRoverOccupy && !opts.canRoverOccupy(next.x, next.z, tx, tz, tYaw)) {
+        continue;
+      }
+
+      const alignAway = dirX * awayFromPlayerX + dirZ * awayFromPlayerZ;
+      const postDist = Math.hypot(tx - opts.playerX, tz - opts.playerZ);
+      const revBonus = spec.reverse ? 0.55 : 0;
+      const score = alignAway * 2.0 + (postDist - distToPlayer) + revBonus;
+      if (!bestCand || score > bestCand.score) {
+        bestCand = { tx, tz, tYaw, reverse: spec.reverse, score };
+      }
+    }
+
+    if (bestCand) {
+      next.state = 'MAKING_WAY';
+      next.makeWayTargetX = bestCand.tx;
+      next.makeWayTargetZ = bestCand.tz;
+      next.makeWayTargetYaw = bestCand.tYaw;
+      next.makeWayReverse = bestCand.reverse;
+      next.makeWayTimerS = 2.8;
+      next.makeWayJustStarted = true;
+      next.pushTimerS = 0;
+    }
+  }
+
+  if (next.state === 'PARKED') {
+    if (!opts.holdPosition && distToPlayer > PHYSICS_CONSTANTS.ROVER_PARK_START_FOLLOW_M) {
       next.state = 'FOLLOWING';
       next.lastProgressX = next.x;
       next.lastProgressZ = next.z;
       next.progressTimerS = 0;
     }
-  } else if (distToPlayer <= PHYSICS_CONSTANTS.ROVER_PARK_STOP_FOLLOW_M) {
+  } else if (next.state === 'FOLLOWING' && distToPlayer <= PHYSICS_CONSTANTS.ROVER_PARK_STOP_FOLLOW_M) {
     next.state = 'PARKED';
   }
 
   let movedDist = 0;
   let wheelSign = 1;
-  const maxR = layout.walkableRadiusM - 2.0;
 
   if (next.state === 'PARKED') {
     next.recoverTimerS = 0;
     next.progressTimerS = 0;
     next.lastProgressX = next.x;
     next.lastProgressZ = next.z;
+  } else if (next.state === 'MAKING_WAY' && safeDt > 0) {
+    next.makeWayTimerS = Math.max(0, (next.makeWayTimerS ?? 0) - safeDt);
+    const tx = next.makeWayTargetX ?? next.x;
+    const tz = next.makeWayTargetZ ?? next.z;
+    const tYaw = next.makeWayTargetYaw ?? next.yaw;
+    const dx = tx - next.x;
+    const dz = tz - next.z;
+    const remDist = Math.hypot(dx, dz);
+
+    if (remDist <= 0.08 || (next.makeWayTimerS ?? 0) <= 0) {
+      next.state = 'PARKED';
+      next.makeWayTimerS = 0;
+      next.makeWayCooldownS = PHYSICS_CONSTANTS.ROVER_MAKE_WAY_COOLDOWN_S;
+      next.lastProgressX = next.x;
+      next.lastProgressZ = next.z;
+      next.progressTimerS = 0;
+    } else {
+      const mwSpeed = Math.min(0.76, PHYSICS_CONSTANTS.ROVER_MAKE_WAY_SPEED_MS);
+      const stepLen = Math.min(remDist, mwSpeed * safeDt);
+      const dirX = dx / remDist;
+      const dirZ = dz / remDist;
+      const candX = next.x + dirX * stepLen;
+      const candZ = next.z + dirZ * stepLen;
+      if (computeTerrainSlopeDeg(candX, candZ, opts.grid) < PHYSICS_CONSTANTS.ROVER_TILT_LIMIT_DEG) {
+        next.x = candX;
+        next.z = candZ;
+        movedDist = stepLen;
+        wheelSign = next.makeWayReverse ? -1 : 1;
+      }
+      next.yaw += wrapAngleDiff(next.yaw, tYaw) * Math.min(1, safeDt * 2.2);
+    }
   } else if (next.state === 'FOLLOWING' && safeDt > 0) {
     // Build local avoidance list (static obstacles + nearby actors + nearby collidable rocks)
     interface LocalBlock {

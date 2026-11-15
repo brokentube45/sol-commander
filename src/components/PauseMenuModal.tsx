@@ -9,6 +9,7 @@ import {
   Zap,
   Monitor,
   MousePointerClick,
+  FastForward,
 } from 'lucide-react';
 import { GraphicsQuality } from './MarsOutpost3D';
 import { SoundMixerLevels, soundEngine } from '../utils/soundEngine';
@@ -23,6 +24,8 @@ interface PauseMenuModalProps {
   onToggleSound: () => void;
   quality: GraphicsQuality;
   onToggleQuality: () => void;
+  tutorialActive?: boolean;
+  onSkipTutorial?: () => void;
   onResume: () => void;
   onQuitToTitle: () => void;
   reducedMotion: boolean;
@@ -38,6 +41,8 @@ export function PauseMenuModal({
   onToggleSound,
   quality,
   onToggleQuality,
+  tutorialActive = false,
+  onSkipTutorial,
   onResume,
   onQuitToTitle,
   reducedMotion,
@@ -221,6 +226,21 @@ export function PauseMenuModal({
                   </button>
                 </div>
               </div>
+
+              {tutorialActive && onSkipTutorial && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    onSkipTutorial();
+                    onResume();
+                  }}
+                  className="flex min-h-[40px] w-full items-center justify-center gap-2 rounded-xl border border-[#22C55E]/50 bg-[#0B221D]/85 px-4 text-xs font-bold text-[#22C55E] hover:border-[#22C55E] hover:bg-[#10322A] transition-colors cursor-pointer"
+                >
+                  <FastForward className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Skip Training (Jump Straight to Mission 1)</span>
+                </button>
+              )}
 
               <button
                 type="button"

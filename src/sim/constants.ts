@@ -186,8 +186,15 @@ export const PHYSICS_CONSTANTS = {
   QUICK_MODE_SPEED_MULT: 1.4,
 
   /** [SIM] Responsive horizontal inertia response while preserving suited momentum (s) */
-  PLAYER_ACCEL_TIME_S: 0.14,
-  PLAYER_DECEL_TIME_S: 0.12,
+  PLAYER_ACCEL_TIME_S: 0.15,
+  PLAYER_DECEL_TIME_S: 0.11,
+  /** [SIM] Ground contact grace window & walk/lope transition hysteresis */
+  GROUND_HYSTERESIS_S: 0.08,
+  GAIT_HYSTERESIS_MS: 0.1,
+  /** [SIM] Anti-stuck threshold & max gentle depenetration speed */
+  ANTI_STUCK_WINDOW_S: 1.0,
+  ANTI_STUCK_MIN_DISP_M: 0.05,
+  ANTI_STUCK_DEPEN_SPEED_MS: 1.4,
 
   /** [SIM] Golombek rock sizing & streamed collider thresholds (m) */
   ROCK_VISUAL_MIN_DIAMETER_M: 0.1,
@@ -211,13 +218,21 @@ export const PHYSICS_CONSTANTS = {
   ROVER_GROUSERS_PER_WHEEL: 48,
   ROVER_REAL_TOP_SPEED_MS: 0.042, // 4.2 cm/s (152 m/h)
 
-  /** [SIM] Rover companion hysteresis, simulation drive speed, soft-sand contact & tilt limits */
+  /** [SIM] Rover companion hysteresis, make-way yielding, simulation drive speed & tilt limits */
   ROVER_PARK_START_FOLLOW_M: 8.0,
   ROVER_PARK_STOP_FOLLOW_M: 4.0,
   ROVER_SIM_DRIVE_SPEED_MS: 1.0,
+  ROVER_MAKE_WAY_SPEED_MS: 0.72,
+  ROVER_MAKE_WAY_TRIGGER_DIST_M: 3.0,
+  ROVER_MAKE_WAY_PUSH_TIME_S: 0.6,
+  ROVER_MAKE_WAY_COOLDOWN_S: 4.0,
   ROVER_SOFT_SAND_SINK_RATIO: 0.0, // Keep wheels cleanly atop regolith & road surfaces without clipping
   ROVER_TILT_WARN_DEG: 30,
   ROVER_TILT_LIMIT_DEG: 45,
+
+  /** [SIM] Crew NPC player-yield clearance constants */
+  CREW_YIELD_TRIGGER_DIST_M: 1.2,
+  CREW_YIELD_SIDESTEP_M: 0.9,
 
   /** [SIM] EVA Suit breathing cycle period (seconds) */
   SUIT_BREATH_CYCLE_S: 4.0,

@@ -59,6 +59,33 @@ export interface DebugCrewSnapshot {
   physicsRegistered: boolean;
 }
 
+export interface MovementFrameSample {
+  tMs: number;
+  dtS: number;
+  physicsSteps: number;
+  interpAlpha: number;
+  keysPressed: string[];
+  desiredVel: { x: number; z: number };
+  actualHorizVel: { x: number; z: number; speedMs: number };
+  computedGrounded: boolean;
+  grounded: boolean;
+  collisionCount: number;
+  roverContact: boolean;
+  roverPushingInto: boolean;
+  cameraPosDeltaM: number;
+  cameraJerkMs2: number;
+}
+
+export interface MovementDiagnosticsReport {
+  sampleCount: number;
+  walkSpeedTargetMs: number;
+  lopeSpeedTargetMs: number;
+  cameraJerkThresholdMs2: number;
+  maxCameraJerkMs2: number;
+  zeroSpeedFramesWhileWalking: number;
+  samples: MovementFrameSample[];
+}
+
 export interface MarsDebugWindowAPI {
   readonly enabled: true;
   readonly player: {
@@ -109,6 +136,7 @@ export interface MarsDebugWindowAPI {
     roverCollider: ReturnType<MarsPhysicsWorld['getRoverColliderState']> | null;
     activeRocks: RockColliderSpec[];
   };
+  getMovementDiagnostics: () => MovementDiagnosticsReport;
   runSelfTest: () => Promise<SelfTestReport>;
   getLastReport: () => SelfTestReport | null;
 }

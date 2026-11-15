@@ -7,6 +7,14 @@ export interface SoundMixerLevels {
   effects: number; // 0..1
 }
 
+export type OutpostAudioZone =
+  | 'outdoors'
+  | 'habitat'
+  | 'greenhouse'
+  | 'solar'
+  | 'tank-recycler'
+  | 'wind-field';
+
 /**
  * Procedural Martian Web Audio Synthesizer (zero pre-recorded files, zero TTS).
  * Simulates thin CO2 (-20 dB high-freq attenuation), 240 m/s sound speed delay,
@@ -23,7 +31,13 @@ class SoundEngine {
 
   private ambientGain: GainNode | null = null;
   private ambientFilter: BiquadFilterNode | null = null;
+  private windBandFilter: BiquadFilterNode | null = null;
+  private windNoiseGain: GainNode | null = null;
   private habitatHumGain: GainNode | null = null;
+  private greenhouseGain: GainNode | null = null;
+  private solarHumGain: GainNode | null = null;
+  private tankPumpGain: GainNode | null = null;
+  private windFieldSwishGain: GainNode | null = null;
   private suitBreathGain: GainNode | null = null;
   private ambientSources: AudioNode[] = [];
 
@@ -38,6 +52,7 @@ class SoundEngine {
 
   private insideHabitat = false;
   private outsideEvaActive = false;
+  private currentZone: OutpostAudioZone = 'outdoors';
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -107,17 +122,31 @@ class SoundEngine {
     if (this.insideHabitat === inside) return;
     this.insideHabitat = inside;
     if (!this.enabled || !this.ctx) return;
-    const now = this.ctx.currentTime;
 
     this.playAirlockHiss();
+    this.applyZoneMix(this.ctx, this.currentZone);
+  }
 
-    if (this.ambientFilter) {
-      this.ambientFilter.frequency.setTargetAtTime(inside ? 120 : 340, now, 0.25);
+  public setPlayerZone(zone: OutpostAudioZone): void {
+    if (this.currentZone === zone) return;
+    const prevZone = this.currentZone;
+    this.currentZone = zone;
+    if (!this.enabled || !this.ctx) return;
+
+    // Gentle acoustic doorway cue when stepping into or out of pressurized zones
+    if (
+      (zone === 'greenhouse' || prevZone === 'greenhouse') &&
+      zone !== 'habitat' &&
+      prevZone !== 'habitat'
+    ) {
+      this.playTone(zone === 'greenhouse' ? 493.88 : 392.0, 0.14, 'sine', 0.035, 0);
     }
-    if (this.habitatHumGain) {
-      this.habitatHumGain.gain.setTargetAtTime(inside ? 0.32 : 0.0001, now, 0.28);
-    }
-    this.syncBreathGain();
+
+    this.applyZoneMix(this.ctx, zone);
+  }
+
+  public getPlayerZone(): OutpostAudioZone {
+    return this.currentZone;
   }
 
   public setOutsideEvaActive(active: boolean): void {
@@ -128,8 +157,37 @@ class SoundEngine {
 
   private syncBreathGain(): void {
     if (!this.ctx || !this.suitBreathGain) return;
-    const target = this.outsideEvaActive && !this.insideHabitat ? 0.26 : 0.0001;
-    this.suitBreathGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.25);
+    const enclosed = this.insideHabitat || this.currentZone === 'habitat' || this.currentZone === 'greenhouse';
+    const target = this.outsideEvaActive && !enclosed ? 0.25 : 0.0001;
+    this.suitBreathGain.gain.setTargetAtTime(target, this.ctx.currentTime, 0.28);
+  }
+
+  private applyZoneMix(ctx: AudioContext, zone: OutpostAudioZone): void {
+    const now = ctx.currentTime;
+    const inHab = this.insideHabitat || zone === 'habitat';
+    const inGh = zone === 'greenhouse';
+    const inSolar = zone === 'solar';
+    const inTank = zone === 'tank-recycler';
+    const inWind = zone === 'wind-field';
+
+    // Lowpass filter muffles exterior Martian wind when inside habitat or greenhouse dome
+    const envCutoff = inHab ? 115 : inGh ? 175 : inSolar ? 390 : inWind ? 460 : 340;
+    this.ambientFilter?.frequency.setTargetAtTime(envCutoff, now, 0.35);
+
+    // Martian wind band & gain shift dynamically by zone
+    const windFreq = inWind ? 275 : inSolar ? 245 : inGh ? 160 : 210;
+    const windLevel = inHab ? 0.18 : inGh ? 0.2 : inWind ? 0.85 : 0.55;
+    this.windBandFilter?.frequency.setTargetAtTime(windFreq, now, 0.35);
+    this.windNoiseGain?.gain.setTargetAtTime(windLevel, now, 0.35);
+
+    // Zone-specific ambient layers
+    this.habitatHumGain?.gain.setTargetAtTime(inHab ? 0.36 : 0.0001, now, 0.35);
+    this.greenhouseGain?.gain.setTargetAtTime(inGh ? 0.42 : 0.0001, now, 0.38);
+    this.solarHumGain?.gain.setTargetAtTime(inSolar ? 0.34 : 0.0001, now, 0.35);
+    this.tankPumpGain?.gain.setTargetAtTime(inTank ? 0.34 : 0.0001, now, 0.35);
+    this.windFieldSwishGain?.gain.setTargetAtTime(inWind ? 0.38 : 0.0001, now, 0.35);
+
+    this.syncBreathGain();
   }
 
   private startAmbient(ctx: AudioContext): void {
@@ -140,7 +198,7 @@ class SoundEngine {
       const now = ctx.currentTime;
       const rootGain = ctx.createGain();
       rootGain.gain.setValueAtTime(0.0001, now);
-      rootGain.gain.exponentialRampToValueAtTime(0.065, now + 1.1);
+      rootGain.gain.exponentialRampToValueAtTime(0.072, now + 1.0);
       rootGain.connect(this.ambienceBus);
 
       // Subtle atmospheric harmonic pad
@@ -154,10 +212,10 @@ class SoundEngine {
 
       const envFilter = ctx.createBiquadFilter();
       envFilter.type = 'lowpass';
-      envFilter.frequency.setValueAtTime(this.insideHabitat ? 120 : 340, now);
+      envFilter.frequency.setValueAtTime(this.insideHabitat ? 115 : 340, now);
 
       const padGain = ctx.createGain();
-      padGain.gain.setValueAtTime(0.38, now);
+      padGain.gain.setValueAtTime(0.32, now);
 
       oscA.connect(padGain);
       oscE.connect(padGain);
@@ -190,14 +248,115 @@ class SoundEngine {
       windGain.connect(envFilter);
       envFilter.connect(rootGain);
 
-      // Habitat pressurized interior 55 Hz life-support fan hum
+      // 1) Habitat pressurized interior: 55 Hz fan + 110 Hz cabin air circulator hum
       const habOsc = ctx.createOscillator();
       habOsc.type = 'sine';
       habOsc.frequency.setValueAtTime(55, now);
+      const habHarm = ctx.createOscillator();
+      habHarm.type = 'triangle';
+      habHarm.frequency.setValueAtTime(110, now);
+      const habHarmGain = ctx.createGain();
+      habHarmGain.gain.setValueAtTime(0.28, now);
       const habGain = ctx.createGain();
-      habGain.gain.setValueAtTime(this.insideHabitat ? 0.32 : 0.0001, now);
+      habGain.gain.setValueAtTime(0.0001, now);
       habOsc.connect(habGain);
+      habHarm.connect(habHarmGain);
+      habHarmGain.connect(habGain);
       habGain.connect(rootGain);
+
+      // 2) Bio-Dome Greenhouse: warm grow-light ballast (138.6 Hz) + gentle hydroponic water trickle
+      const ghWaterNoise = ctx.createBufferSource();
+      ghWaterNoise.buffer = noiseBuffer;
+      ghWaterNoise.loop = true;
+      const ghWaterFilter = ctx.createBiquadFilter();
+      ghWaterFilter.type = 'bandpass';
+      ghWaterFilter.frequency.setValueAtTime(840, now);
+      ghWaterFilter.Q.setValueAtTime(3.2, now);
+      const ghWaterLfo = ctx.createOscillator();
+      ghWaterLfo.type = 'sine';
+      ghWaterLfo.frequency.setValueAtTime(1.8, now);
+      const ghWaterLfoGain = ctx.createGain();
+      ghWaterLfoGain.gain.setValueAtTime(220, now);
+      ghWaterLfo.connect(ghWaterLfoGain);
+      ghWaterLfoGain.connect(ghWaterFilter.frequency);
+
+      const ghBallastOsc = ctx.createOscillator();
+      ghBallastOsc.type = 'sine';
+      ghBallastOsc.frequency.setValueAtTime(138.59, now);
+      const ghBallastGain = ctx.createGain();
+      ghBallastGain.gain.setValueAtTime(0.22, now);
+
+      const ghMaster = ctx.createGain();
+      ghMaster.gain.setValueAtTime(0.0001, now);
+      ghWaterNoise.connect(ghWaterFilter);
+      ghWaterFilter.connect(ghMaster);
+      ghBallastOsc.connect(ghBallastGain);
+      ghBallastGain.connect(ghMaster);
+      ghMaster.connect(rootGain);
+
+      // 3) Solar Array Microgrid: clean PV inverter hum (185 Hz + 370 Hz shimmer) & fan whisper
+      const solarBaseOsc = ctx.createOscillator();
+      solarBaseOsc.type = 'triangle';
+      solarBaseOsc.frequency.setValueAtTime(185, now);
+      const solarHarmOsc = ctx.createOscillator();
+      solarHarmOsc.type = 'sine';
+      solarHarmOsc.frequency.setValueAtTime(370, now);
+      const solarHarmGain = ctx.createGain();
+      solarHarmGain.gain.setValueAtTime(0.24, now);
+      const solarFilter = ctx.createBiquadFilter();
+      solarFilter.type = 'lowpass';
+      solarFilter.frequency.setValueAtTime(520, now);
+      const solarLfo = ctx.createOscillator();
+      solarLfo.type = 'sine';
+      solarLfo.frequency.setValueAtTime(0.6, now);
+      const solarLfoGain = ctx.createGain();
+      solarLfoGain.gain.setValueAtTime(0.08, now);
+      const solarMaster = ctx.createGain();
+      solarMaster.gain.setValueAtTime(0.0001, now);
+      solarBaseOsc.connect(solarFilter);
+      solarHarmOsc.connect(solarHarmGain);
+      solarHarmGain.connect(solarFilter);
+      solarFilter.connect(solarMaster);
+      solarLfo.connect(solarLfoGain);
+      solarLfoGain.connect(solarMaster.gain);
+      solarMaster.connect(rootGain);
+
+      // 4) Tank Farm & Water Recycler: rhythmic cryogenic fluid pump & condenser thrum
+      const tankOsc = ctx.createOscillator();
+      tankOsc.type = 'sine';
+      tankOsc.frequency.setValueAtTime(82.41, now);
+      const tankLfo = ctx.createOscillator();
+      tankLfo.type = 'sine';
+      tankLfo.frequency.setValueAtTime(1.15, now);
+      const tankLfoGain = ctx.createGain();
+      tankLfoGain.gain.setValueAtTime(0.11, now);
+      const tankMaster = ctx.createGain();
+      tankMaster.gain.setValueAtTime(0.0001, now);
+      tankOsc.connect(tankMaster);
+      tankLfo.connect(tankLfoGain);
+      tankLfoGain.connect(tankMaster.gain);
+      tankMaster.connect(rootGain);
+
+      // 5) Aeolus Wind Field: periodic turbine blade whoosh
+      const wfNoise = ctx.createBufferSource();
+      wfNoise.buffer = noiseBuffer;
+      wfNoise.loop = true;
+      const wfFilter = ctx.createBiquadFilter();
+      wfFilter.type = 'bandpass';
+      wfFilter.frequency.setValueAtTime(320, now);
+      wfFilter.Q.setValueAtTime(2.0, now);
+      const wfLfo = ctx.createOscillator();
+      wfLfo.type = 'sine';
+      wfLfo.frequency.setValueAtTime(0.55, now);
+      const wfLfoGain = ctx.createGain();
+      wfLfoGain.gain.setValueAtTime(140, now);
+      wfLfo.connect(wfLfoGain);
+      wfLfoGain.connect(wfFilter.frequency);
+      const wfMaster = ctx.createGain();
+      wfMaster.gain.setValueAtTime(0.0001, now);
+      wfNoise.connect(wfFilter);
+      wfFilter.connect(wfMaster);
+      wfMaster.connect(rootGain);
 
       // EVA suit breathing cycle (0.25 Hz = 4.0 s inhale/exhale) + 200 Hz PLSS fan whisper
       const breathNoise = ctx.createBufferSource();
@@ -225,10 +384,7 @@ class SoundEngine {
       plssFanGain.gain.setValueAtTime(0.04, now);
 
       const suitBreathMaster = ctx.createGain();
-      suitBreathMaster.gain.setValueAtTime(
-        this.outsideEvaActive && !this.insideHabitat ? 0.26 : 0.0001,
-        now,
-      );
+      suitBreathMaster.gain.setValueAtTime(0.0001, now);
 
       breathNoise.connect(breathBand);
       breathBand.connect(breathDepth);
@@ -241,15 +397,53 @@ class SoundEngine {
       oscE.start();
       noise.start();
       habOsc.start();
+      habHarm.start();
+      ghWaterNoise.start();
+      ghWaterLfo.start();
+      ghBallastOsc.start();
+      solarBaseOsc.start();
+      solarHarmOsc.start();
+      solarLfo.start();
+      tankOsc.start();
+      tankLfo.start();
+      wfNoise.start();
+      wfLfo.start();
       breathNoise.start();
       breathLfo.start();
       plssFan.start();
 
       this.ambientGain = rootGain;
       this.ambientFilter = envFilter;
+      this.windBandFilter = windFilter;
+      this.windNoiseGain = windGain;
       this.habitatHumGain = habGain;
+      this.greenhouseGain = ghMaster;
+      this.solarHumGain = solarMaster;
+      this.tankPumpGain = tankMaster;
+      this.windFieldSwishGain = wfMaster;
       this.suitBreathGain = suitBreathMaster;
-      this.ambientSources = [oscA, oscE, noise, habOsc, breathNoise, breathLfo, plssFan];
+      this.ambientSources = [
+        oscA,
+        oscE,
+        noise,
+        habOsc,
+        habHarm,
+        ghWaterNoise,
+        ghWaterLfo,
+        ghBallastOsc,
+        solarBaseOsc,
+        solarHarmOsc,
+        solarLfo,
+        tankOsc,
+        tankLfo,
+        wfNoise,
+        wfLfo,
+        breathNoise,
+        breathLfo,
+        plssFan,
+      ];
+
+      this.applyZoneMix(ctx, this.currentZone);
     } catch {
       // Safe fallback
     }
@@ -271,7 +465,13 @@ class SoundEngine {
     this.ambientSources = [];
     this.ambientGain = null;
     this.ambientFilter = null;
+    this.windBandFilter = null;
+    this.windNoiseGain = null;
     this.habitatHumGain = null;
+    this.greenhouseGain = null;
+    this.solarHumGain = null;
+    this.tankPumpGain = null;
+    this.windFieldSwishGain = null;
     this.suitBreathGain = null;
     window.setTimeout(() => {
       sources.forEach((node) => {
@@ -833,6 +1033,78 @@ class SoundEngine {
     if (!this.enabled) return;
     this.playTone(233.08, 0.18, 'sawtooth', 0.08, 0);
     this.playTone(174.61, 0.3, 'sawtooth', 0.08, 0.18);
+  }
+
+  /** Synthesized Rusty companion beeps (no TTS / no voice-over) */
+  public playRoverBeep(mood: 'ok' | 'lowPower' | 'critical' | 'happy' = 'ok'): void {
+    if (!this.enabled) return;
+    if (mood === 'critical') {
+      this.playTone(740, 0.07, 'triangle', 0.07, 0);
+      this.playTone(587.33, 0.09, 'triangle', 0.07, 0.08);
+      return;
+    }
+    if (mood === 'lowPower') {
+      this.playTone(523.25, 0.08, 'sine', 0.06, 0);
+      this.playTone(440, 0.1, 'sine', 0.06, 0.09);
+      return;
+    }
+    if (mood === 'happy') {
+      this.playTone(659.25, 0.06, 'triangle', 0.07, 0);
+      this.playTone(880, 0.07, 'triangle', 0.07, 0.065);
+      this.playTone(1046.5, 0.1, 'sine', 0.07, 0.14);
+      return;
+    }
+    this.playTone(698.46, 0.06, 'triangle', 0.065, 0);
+    this.playTone(880, 0.08, 'sine', 0.065, 0.07);
+  }
+
+  /** Soft green-glow chime when a Junior Explorer quiz answer is correct */
+  public playQuizCorrect(): void {
+    if (!this.enabled) return;
+    this.playTone(523.25, 0.12, 'sine', 0.08, 0);
+    this.playTone(659.25, 0.14, 'sine', 0.08, 0.08);
+    this.playTone(783.99, 0.24, 'sine', 0.085, 0.17);
+  }
+
+  /** Gentle nudge tone on a wrong quiz try (never a harsh buzzer) */
+  public playQuizHint(): void {
+    if (!this.enabled) return;
+    this.playTone(392, 0.12, 'sine', 0.06, 0);
+    this.playTone(440, 0.14, 'sine', 0.06, 0.1);
+  }
+
+  /** Rising crystalline chime when collecting a Mars Gravity Crystal */
+  public playCrystalCollect(count = 1): void {
+    if (!this.enabled) return;
+    const base = 587.33 + Math.max(0, count - 1) * 110;
+    this.playTone(base, 0.11, 'sine', 0.08, 0);
+    this.playTone(base * 1.25, 0.16, 'triangle', 0.08, 0.07);
+    this.playTone(base * 1.5, 0.22, 'sine', 0.08, 0.14);
+  }
+
+  /** Celebratory arpeggio when unlocking a Junior Mission Badge */
+  public playBadgeUnlock(): void {
+    if (!this.enabled) return;
+    this.playTone(523.25, 0.12, 'triangle', 0.08, 0);
+    this.playTone(659.25, 0.12, 'triangle', 0.08, 0.09);
+    this.playTone(783.99, 0.14, 'sine', 0.085, 0.18);
+    this.playTone(1046.5, 0.34, 'sine', 0.095, 0.27);
+  }
+
+  /** Crisp scanner pulse for Commander's Quick Scan action */
+  public playQuickScan(): void {
+    if (!this.enabled) return;
+    this.playTone(587.33, 0.08, 'sine', 0.065, 0);
+    this.playTone(880, 0.09, 'sine', 0.065, 0.075);
+    this.playTone(1174.66, 0.16, 'triangle', 0.07, 0.15);
+  }
+
+  /** Dual-tone comms carrier chime for Emergency Comms action */
+  public playCommsPing(): void {
+    if (!this.enabled) return;
+    this.playTone(783.99, 0.09, 'triangle', 0.075, 0);
+    this.playTone(1046.5, 0.11, 'sine', 0.075, 0.11);
+    this.playTone(783.99, 0.09, 'triangle', 0.065, 0.24);
   }
 }
 

@@ -8,6 +8,8 @@ import {
   HelpCircle,
   Sparkles,
   Wrench,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { RoverMood } from '../sim/roverData';
 
@@ -20,6 +22,9 @@ interface RoverAssistantProps {
   activeHint: string | null;
   hintLevelUsed: number;
   crewSlotsRemaining: number;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  showHintButtons?: boolean;
   onAskHint: (level: 1 | 2) => void;
   onToggleHush: () => void;
 }
@@ -33,6 +38,9 @@ export function RoverAssistant({
   activeHint,
   hintLevelUsed,
   crewSlotsRemaining,
+  collapsed = false,
+  onToggleCollapsed,
+  showHintButtons = true,
   onAskHint,
   onToggleHush,
 }: RoverAssistantProps) {
@@ -93,61 +101,85 @@ export function RoverAssistant({
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={onToggleHush}
-          aria-pressed={hushed}
-          title={hushed ? 'Unmute Rover' : 'Mute Rover chatter'}
-          className={`inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-bold transition-colors cursor-pointer ${
-            hushed
-              ? 'border-[#FFB703] bg-[#FFB703]/20 text-[#FFB703]'
-              : 'border-white/15 bg-[#0E2038] text-[#F8F9FA]/85 hover:border-[#FFB703]'
-          }`}
-        >
-          {hushed ? (
-            <VolumeX className="h-3 w-3" aria-hidden="true" />
-          ) : (
-            <Volume2 className="h-3 w-3" aria-hidden="true" />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={onToggleHush}
+            aria-pressed={hushed}
+            title={hushed ? 'Unmute Rover' : 'Mute Rover chatter'}
+            className={`inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-bold transition-colors cursor-pointer ${
+              hushed
+                ? 'border-[#FFB703] bg-[#FFB703]/20 text-[#FFB703]'
+                : 'border-white/15 bg-[#0E2038] text-[#F8F9FA]/85 hover:border-[#FFB703]'
+            }`}
+          >
+            {hushed ? (
+              <VolumeX className="h-3 w-3" aria-hidden="true" />
+            ) : (
+              <Volume2 className="h-3 w-3" aria-hidden="true" />
+            )}
+            <span>{hushed ? 'Quiet' : 'Mute'}</span>
+          </button>
+
+          {onToggleCollapsed && (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              aria-expanded={!collapsed}
+              title={collapsed ? `Expand ${roverName} panel` : `Collapse ${roverName} panel`}
+              className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#F8F9FA]/85 hover:border-[#FFB703] cursor-pointer"
+            >
+              {collapsed ? (
+                <ChevronUp className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+              )}
+            </button>
           )}
-          <span>{hushed ? 'Quiet' : 'Mute'}</span>
-        </button>
+        </div>
       </div>
 
-      {/* Speech / Hint Bubble */}
-      <div className="mt-2 rounded-lg border border-white/10 bg-[#0D213B]/80 px-2.5 py-1.5 text-xs leading-snug">
-        {activeHint ? (
-          <>
-            <p className="text-[10px] font-bold text-[#FFB703]">Rover Hint</p>
-            <p className="mt-0.5 text-[#F8F9FA]">{activeHint}</p>
-          </>
-        ) : hushed ? (
-          <p className="text-[#F8F9FA]/70">{roverName} is quiet. Hints ready.</p>
-        ) : (
-          <p className="text-[#F8F9FA]/92">&ldquo;{lastLine}&rdquo;</p>
-        )}
-      </div>
+      {!collapsed && (
+        <>
+          {/* Speech / Hint Bubble */}
+          <div className="mt-2 rounded-lg border border-white/10 bg-[#0D213B]/80 px-2.5 py-1.5 text-xs leading-snug">
+            {activeHint ? (
+              <>
+                <p className="text-[10px] font-bold text-[#FFB703]">Rover Hint</p>
+                <p className="mt-0.5 text-[#F8F9FA]">{activeHint}</p>
+              </>
+            ) : hushed ? (
+              <p className="text-[#F8F9FA]/70">{roverName} is quiet. Hints ready.</p>
+            ) : (
+              <p className="text-[#F8F9FA]/92">&ldquo;{lastLine}&rdquo;</p>
+            )}
+          </div>
 
-      {/* Hint Controls */}
-      <div className="mt-2 flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={() => onAskHint(1)}
-          className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-white/15 bg-[#0E2038] px-2 text-[11px] font-bold text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer whitespace-nowrap"
-        >
-          <HelpCircle className="h-3 w-3 text-[#22C55E]" aria-hidden="true" />
-          <span>Hint [Q]</span>
-        </button>
+          {/* Hint Controls (shown after tutorial completes so HUD stays clean during training) */}
+          {showHintButtons && (
+            <div className="mt-2 flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onAskHint(1)}
+                className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-white/15 bg-[#0E2038] px-2 text-[11px] font-bold text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer whitespace-nowrap"
+              >
+                <HelpCircle className="h-3 w-3 text-[#22C55E]" aria-hidden="true" />
+                <span>Hint [Q]</span>
+              </button>
 
-        <button
-          type="button"
-          onClick={() => onAskHint(2)}
-          disabled={hintLevelUsed < 2 && crewSlotsRemaining < 1}
-          className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-[#E85D04]/50 bg-[#0E2038] px-2 text-[11px] font-bold text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] disabled:opacity-45 cursor-pointer whitespace-nowrap"
-        >
-          <Sparkles className="h-3 w-3" aria-hidden="true" />
-          <span>{hintLevelUsed >= 2 ? 'Deep Hint' : 'Deep (1 Slot)'}</span>
-        </button>
-      </div>
+              <button
+                type="button"
+                onClick={() => onAskHint(2)}
+                disabled={hintLevelUsed < 2 && crewSlotsRemaining < 1}
+                className="inline-flex min-h-[30px] flex-1 items-center justify-center gap-1 rounded-lg border border-[#E85D04]/50 bg-[#0E2038] px-2 text-[11px] font-bold text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] disabled:opacity-45 cursor-pointer whitespace-nowrap"
+              >
+                <Sparkles className="h-3 w-3" aria-hidden="true" />
+                <span>{hintLevelUsed >= 2 ? 'Deep Hint' : 'Deep (1 Slot)'}</span>
+              </button>
+            </div>
+          )}
+        </>
+      )}
     </aside>
   );
 }
