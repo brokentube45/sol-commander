@@ -558,6 +558,7 @@ export function buildOutpostAssets(
     // Leave front-left bay clear for airlock module
     if (Math.abs(Math.sin(a - 2.1)) < 0.28 && Math.cos(a - 2.1) > 0) continue;
     const rib = new THREE.Mesh(ribGeo, matDarkSteel);
+    rib.userData.nonPhysicalMarker = true;
     rib.position.set(Math.cos(a) * 2.22, 0.68, Math.sin(a) * 2.22);
     rib.rotation.y = -a;
     rib.castShadow = castShadow;
@@ -596,16 +597,19 @@ export function buildOutpostAssets(
     const wx = Math.sin(ang) * 2.41;
     const wz = Math.cos(ang) * 2.41;
     const frame = new THREE.Mesh(winFrameGeo, matDarkSteel);
+    frame.userData.nonPhysicalMarker = true;
     frame.position.set(wx, 1.62, wz);
     frame.rotation.y = ang;
     habGroup.add(frame);
 
     const glass = new THREE.Mesh(winGlassGeo, matWarmWindow);
+    glass.userData.nonPhysicalMarker = true;
     glass.position.set(Math.sin(ang) * 2.38, 1.62, Math.cos(ang) * 2.38);
     glass.rotation.y = ang;
     habGroup.add(glass);
 
     const mullion = new THREE.Mesh(winMullionGeo, matDarkSteel);
+    mullion.userData.nonPhysicalMarker = true;
     mullion.position.set(wx, 1.62, wz);
     mullion.rotation.y = ang;
     habGroup.add(mullion);
@@ -643,10 +647,12 @@ export function buildOutpostAssets(
 
     [-0.95, 0, 0.95].forEach((rz) => {
       const rib = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.78, 1.78, 0.09)), matDarkSteel);
+      rib.userData.nonPhysicalMarker = true;
       rib.position.set(0, 1.38, rz);
       suitVestibuleGroup!.add(rib);
     });
     const vestStripe = new THREE.Mesh(trackGeo(new THREE.BoxGeometry(1.72, 0.14, 2.88)), matMarsOrange);
+    vestStripe.userData.nonPhysicalMarker = true;
     vestStripe.position.y = 1.98;
     suitVestibuleGroup.add(vestStripe);
     registerInteractive(suitVestibuleGroup, 'habitat');
@@ -1103,6 +1109,7 @@ export function buildOutpostAssets(
         ].forEach(([fx, fy, fz]) => {
           const fruit = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.055, 8, 6)), fruitMat);
           fruit.position.set(fx, fy, fz);
+          fruit.userData.nonPhysicalMarker = true;
           pGroup.add(fruit);
         });
       } else if (prop.kind === 'led-rack') {
@@ -1142,6 +1149,7 @@ export function buildOutpostAssets(
           pGroup.add(bush);
           const veg = new THREE.Mesh(trackGeo(new THREE.SphereGeometry(0.048, 8, 6)), matTomato);
           veg.position.set(tx + 0.12, 0.68, 0.14);
+          veg.userData.nonPhysicalMarker = true;
           pGroup.add(veg);
           const bloom = new THREE.Mesh(
             trackGeo(new THREE.SphereGeometry(0.042, 7, 5)),
@@ -1292,6 +1300,7 @@ export function buildOutpostAssets(
       trackGeo(new THREE.BoxGeometry(ghConn.halfWidth * 2.08, ghConn.halfHeight * 2.08, 0.08)),
       matDarkSteel,
     );
+    rib.userData.nonPhysicalMarker = true;
     rib.position.set(0, 0, r * (ghCorr.length * ribSpanFrac));
     tunnelMesh.add(rib);
   }
@@ -2605,6 +2614,7 @@ export function buildOutpostAssets(
 
   const tank2Band = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.35, 0.35, 0.18, 16)), matMarsOrange);
   tank2Band.position.set(0.42, 1.15, 0);
+  tank2Band.userData.nonPhysicalMarker = true;
   tank2Group.add(tank2Band);
 
   const tank1TealBand = new THREE.Mesh(trackGeo(new THREE.CylinderGeometry(0.35, 0.35, 0.14, 16)), matScienceTeal);

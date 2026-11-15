@@ -165,6 +165,7 @@ export class MarsPhysicsWorld {
   private readonly rockSpecs: RockColliderSpec[];
   private readonly activeRockColliders = new Map<string, RAPIER.Collider>();
   private readonly rockBodies: RAPIER.RigidBody[] = [];
+  public readonly colliderIdByHandle = new Map<number, string>();
 
   private accumulatorS = 0;
   private prevCenter = { x: 0, y: 1.0, z: 0 };
@@ -247,9 +248,14 @@ export class MarsPhysicsWorld {
 
     // 3. Companion Rover Compound Kinematic Colliders (rounded hull + 6 wheel cylinders, zero friction vs character)
     const rv = layout.modules.roverSpawn;
-    const roverY = this.getGroundSupportHeightAt(rv.x, rv.z);
+    let rvx = rv.x;
+    let rvz = rv.z;
+    if (Math.hypot(startX - rvx, startZ - rvz) < 2.0) {
+      rvz = 25.0;
+    }
+    const roverY = this.getGroundSupportHeightAt(rvx, rvz);
     const rBodyDesc = RAPIER.RigidBodyDesc.kinematicPositionBased()
-      .setTranslation(rv.x, roverY + 0.56, rv.z)
+      .setTranslation(rvx, roverY + 0.56, rvz)
       .setRotation(yawToQuat(rv.yaw));
     this.roverBody = this.world.createRigidBody(rBodyDesc);
     const rColDesc = RAPIER.ColliderDesc.roundCuboid(0.76, 0.54, 0.88, 0.08)
@@ -415,7 +421,8 @@ export class MarsPhysicsWorld {
     const col = RAPIER.ColliderDesc.cylinder(safeHH, radius).setFriction(
       MARS_FACTS.REGOLITH_FRICTION_MU,
     );
-    this.world.createCollider(col, body);
+    const created = this.world.createCollider(col, body);
+    this.colliderIdByHandle.set(created.handle, id);
     this.staticColliderRecords.push({
       id,
       category: id.startsWith('boundary-') ? 'boundary' : 'structure',
@@ -471,6 +478,7 @@ export class MarsPhysicsWorld {
       .setRotation(quat)
       .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
     const created = this.world.createCollider(col, body);
+    this.colliderIdByHandle.set(created.handle, id);
     if (id.startsWith('boundary-')) {
       this.nonModuleColliderHandles.add(created.handle);
     }
@@ -522,7 +530,8 @@ export class MarsPhysicsWorld {
     const col = RAPIER.ColliderDesc.cuboid(safeHx, safeHy, safeHz)
       .setRotation(quat)
       .setFriction(MARS_FACTS.REGOLITH_FRICTION_MU);
-    this.world.createCollider(col, body);
+    const created = this.world.createCollider(col, body);
+    this.colliderIdByHandle.set(created.handle, id);
     this.staticColliderRecords.push({
       id,
       category: 'structure',
@@ -862,15 +871,16 @@ export class MarsPhysicsWorld {
         0,
         false,
       );
-      const [nacX, nacZ] = rotateXZ(0, 0.72, yaw);
+      const [nacX, nacZ] = rotateXZ(0, 0.68, yaw);
+      const rotorHx = 2.385;
       this.addFixedCuboid(
         `wind-rotor-${idx}`,
         wx + nacX,
         wy + 6.72,
         wz + nacZ,
-        2.25,
+        rotorHx,
         2.75,
-        0.14,
+        0.06,
         yaw,
         0,
         0,
@@ -879,13 +889,14 @@ export class MarsPhysicsWorld {
       );
     });
     const vw = m.verticalTurbine;
-    this.addFixedCylinder('wind-vertical', vw.x, h(vw.x, vw.z) + 1.58, vw.z, 1.58, 0.58);
+    const vwRadius = this.layout.mode === 'gameplay' ? 0.635 : 0.58;
+    this.addFixedCylinder('wind-vertical', vw.x, h(vw.x, vw.z) + 1.58, vw.z, 1.58, vwRadius);
 
     // 6. SWIM Subsurface Ice Drill Derrick
     const idSpec = m.iceDrill;
     const idY = h(idSpec.x, idSpec.z);
     this.addFixedCylinder('ice-drill-deck', idSpec.x, idY + 0.15, idSpec.z, 0.15, 2.0);
-    this.addFixedCylinder('ice-drill-mast', idSpec.x, idY + 1.98, idSpec.z, 1.86, 1.48, false);
+    this.addFixedCylinder('ice-drill-mast', idSpec.x, idY + 1.9875, idSpec.z, 1.6875, 1.48, false);
     const [mtX, mtZ] = rotateXZ(1.25, 0.4, idSpec.yaw);
     this.addFixedCylinder('ice-melt-tank', idSpec.x + mtX, idY + 0.9, idSpec.z + mtZ, 0.66, 0.38);
 
@@ -951,15 +962,16 @@ export class MarsPhysicsWorld {
     this.addFixedCuboid('tank2-rack', t2.x, t2Y + 0.1, t2.z, 0.91, 0.15, 0.58, t2.yaw);
     const [t2Lx, t2Lz] = rotateXZ(-0.42, 0, t2.yaw);
     const [t2Rx, t2Rz] = rotateXZ(0.42, 0, t2.yaw);
-    this.addFixedCylinder('tank2-cyl-l', t2.x + t2Lx, t2Y + 0.93, t2.z + t2Lz, 0.77, 0.35);
-    this.addFixedCylinder('tank2-cyl-r', t2.x + t2Rx, t2Y + 0.93, t2.z + t2Rz, 0.77, 0.35);
+    this.addFixedCylinder('tank2-cyl-l', t2.x + t2Lx, t2Y + 0.93, t2.z + t2Lz, 0.77, 0.34);
+    this.addFixedCylinder('tank2-cyl-r', t2.x + t2Rx, t2Y + 0.93, t2.z + t2Rz, 0.77, 0.34);
     if (t2.hasIsruUnit) {
       const [isruX, isruZ] = rotateXZ(t2.isruOffsetX, t2.isruOffsetZ, t2.yaw);
       this.addFixedCuboid('tank2-isru-unit', t2.x + isruX, t2Y + 0.72, t2.z + isruZ, 0.56, 0.72, 0.48, t2.yaw);
     }
 
     const rec = m.recycler;
-    this.addFixedCuboid('water-recycler', rec.x, h(rec.x, rec.z) + 0.625, rec.z, 0.78, 0.655, 0.56, rec.yaw);
+    this.addFixedCuboid('water-recycler-deck', rec.x, h(rec.x, rec.z) + 0.08, rec.z, 0.75, 0.08, 0.525, rec.yaw);
+    this.addFixedCuboid('water-recycler', rec.x, h(rec.x, rec.z) + 0.68, rec.z, 0.59, 0.56, 0.36, rec.yaw);
 
     const sh = m.shelter;
     this.addFixedCuboid('rad-shelter', sh.x, h(sh.x, sh.z) + 0.72, sh.z, 1.28, 0.77, 1.0, sh.yaw);
@@ -1316,7 +1328,7 @@ export class MarsPhysicsWorld {
 
     const desiredMovement = {
       x: this.vx * dt,
-      y: this.vy * dt,
+      y: this.grounded ? 0 : this.vy * dt,
       z: this.vz * dt,
     };
 
@@ -1757,7 +1769,7 @@ export class MarsPhysicsWorld {
     solid = true,
     excludeTerrain = false,
     excludeActorsAndRocks = false,
-  ): { toi: number; colliderHandle: number } | null {
+  ): { toi: number; colliderHandle: number; colliderId?: string } | null {
     if (this.disposed) return null;
     const ray = new RAPIER.Ray(origin, dir);
     const predicate = excludeActorsAndRocks
@@ -1776,7 +1788,11 @@ export class MarsPhysicsWorld {
       predicate,
     );
     if (!hit) return null;
-    return { toi: hit.timeOfImpact, colliderHandle: hit.collider.handle };
+    return {
+      toi: hit.timeOfImpact,
+      colliderHandle: hit.collider.handle,
+      colliderId: this.colliderIdByHandle.get(hit.collider.handle),
+    };
   }
 
   public shapeCastCrewCapsule(
@@ -1801,6 +1817,9 @@ export class MarsPhysicsWorld {
       ignoredHandles.add(this.terrainCollider.handle);
       for (const entry of this.crewPhysics.values()) {
         ignoredHandles.add(entry.collider.handle);
+      }
+      for (const handle of this.roverColliderHandles) {
+        ignoredHandles.add(handle);
       }
     } else if (ignoredCrewCol) {
       ignoredHandles.add(ignoredCrewCol.handle);

@@ -124,7 +124,7 @@ describe('Real-Outpost QA Verification (SHOWCASE_LAYOUT + GAMEPLAY_LAYOUT)', () 
           playerZ: 11.4,
           playerYaw: 0,
           damaged: false,
-          holdPosition: false,
+          holdPosition: true,
           obstacles: [],
           grid,
           layout: GAMEPLAY_LAYOUT,

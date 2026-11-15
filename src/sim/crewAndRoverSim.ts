@@ -958,6 +958,7 @@ export function stepRoverController(
       next.makeWayReverse = bestCand.reverse;
       next.makeWayTimerS = 2.8;
       next.makeWayJustStarted = true;
+      next.makeWayCooldownS = PHYSICS_CONSTANTS.ROVER_MAKE_WAY_COOLDOWN_S;
       next.pushTimerS = 0;
     }
   }

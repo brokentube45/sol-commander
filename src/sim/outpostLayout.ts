@@ -667,7 +667,7 @@ export const GAMEPLAY_LAYOUT: OutpostLayoutConfig = {
     { id: 'rover_pad', x: -10.8, z: 13.4, label: 'Rover Pad Edge' },
     { id: 'shelter', x: 8.5, z: 17.6, label: 'Radiation Shelter' },
     { id: 'landing_pad', x: 19.6, z: 16.4, label: 'Landing Pad Apron' },
-    { id: 'gh_door', x: 17.3, z: 4.9, label: 'Greenhouse Plaza Door' },
+    { id: 'gh_door', x: 17.54, z: 4.69, label: 'Greenhouse Plaza Door' },
     { id: 'gh_in', x: 20.5, z: 1.5, label: 'Greenhouse Interior Aisle' },
     { id: 'solar_bay', x: 15.2, z: -15.0, label: 'Solar Field Bay' },
     { id: 'comms_mast', x: 4.0, z: -13.6, label: 'Comms Mast' },
@@ -731,7 +731,7 @@ export const GAMEPLAY_LAYOUT: OutpostLayoutConfig = {
   },
   alarmSlots: {
     amara: { x: -1.9, z: 9.2, yaw: -0.3 },
-    kenji: { x: 1.5, z: 9.0, yaw: 0.2 },
+    kenji: { x: 1.7, z: 9.2, yaw: 0.2 },
     lucia: { x: -2.0, z: 10.6, yaw: -0.5 },
     rafi: { x: 2.1, z: 10.7, yaw: 0.4 },
   },
@@ -779,7 +779,7 @@ export const GAMEPLAY_LAYOUT: OutpostLayoutConfig = {
   },
   destinationWaypoints: {
     airlock: { label: 'Habitat Airlock', nodeId: 'door', x: 0.0, z: 8.3 },
-    greenhouse: { label: 'Greenhouse', nodeId: 'gh_door', x: 17.3, z: 4.9 },
+    greenhouse: { label: 'Greenhouse', nodeId: 'gh_door', x: 17.54, z: 4.69 },
     solar: { label: 'Solar Array', nodeId: 'solar_bay', x: 15.2, z: -15.0 },
     tank2: { label: 'Tank Farm', nodeId: 'tank2', x: -14.6, z: -4.8 },
     'rover-pad': { label: 'Rover Pad', nodeId: 'rover_pad', x: -10.8, z: 13.4 },
