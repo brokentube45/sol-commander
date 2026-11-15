@@ -271,10 +271,7 @@ export default function App() {
   // Ensure the initial welcome guidance is spoken cleanly when entering gameplay
   useEffect(() => {
     if (gamePhase === 'gameplay' && simState.tutorialStep === 'move') {
-      const timer = window.setTimeout(() => {
-        narrativeVoice.speakTutorialStep('move');
-      }, 500);
-      return () => window.clearTimeout(timer);
+      narrativeVoice.speakTutorialStep('move');
     }
   }, [gamePhase, simState.tutorialStep]);
 
@@ -470,6 +467,7 @@ export default function App() {
 
   const handleStartExploration = () => {
     startNewCampaignWithSeed(seed);
+    narrativeVoice.speakTutorialStep('move');
   };
 
   const handleReturnTitle = () => {

@@ -192,13 +192,14 @@ class NarrativeVoiceManager {
     dedupKey?: string,
     minIntervalMs = 2500,
     onEnd?: () => void,
+    force = false,
   ): void {
     if (typeof window === 'undefined') return;
     if (soundEngine.isRoverHushed() || !soundEngine.isRoverVoiceEnabled()) return;
 
     const now = Date.now();
     const key = dedupKey ?? text.slice(0, 32);
-    if (this.lastSpokenKey === key && now - this.lastSpokenAt < minIntervalMs) {
+    if (!force && this.lastSpokenKey === key && now - this.lastSpokenAt < minIntervalMs) {
       return;
     }
 
@@ -210,6 +211,9 @@ class NarrativeVoiceManager {
     // Use Web Speech API directly with natural pitch/rate tuning
     try {
       if ('speechSynthesis' in window) {
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
         window.speechSynthesis.cancel();
 
         const cleaned = cleanTextForSpeech(text);
@@ -220,13 +224,13 @@ class NarrativeVoiceManager {
         if (!voices || voices.length === 0) {
           const onVoicesReady = () => {
             window.speechSynthesis.onvoiceschanged = null;
-            this.speakAs(characterKey, text, dedupKey, minIntervalMs, onEnd);
+            this.speakAs(characterKey, text, dedupKey, minIntervalMs, onEnd, force);
           };
           window.speechSynthesis.onvoiceschanged = onVoicesReady;
           window.setTimeout(() => {
             if (window.speechSynthesis.onvoiceschanged === onVoicesReady) {
               window.speechSynthesis.onvoiceschanged = null;
-              this.speakAs(characterKey, text, dedupKey, minIntervalMs, onEnd);
+              this.speakAs(characterKey, text, dedupKey, minIntervalMs, onEnd, force);
             }
           }, 250);
           return;
@@ -235,13 +239,18 @@ class NarrativeVoiceManager {
         const utterance = new SpeechSynthesisUtterance(cleaned);
         utterance.rate = char.rate;
         utterance.pitch = char.pitch;
-        utterance.volume = Math.max(0.2, soundEngine.getMixerLevels().master);
+        utterance.volume = Math.max(0.3, soundEngine.getMixerLevels().master);
 
         const voice = this.getBestNaturalVoice(char.gender);
         if (voice) {
           utterance.voice = voice;
         }
 
+        utterance.onstart = () => {
+          if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+          }
+        };
         utterance.onend = () => {
           onEnd?.();
         };
@@ -250,6 +259,9 @@ class NarrativeVoiceManager {
         };
 
         window.speechSynthesis.speak(utterance);
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume();
+        }
       }
     } catch {
       // Safe fallback
@@ -265,7 +277,9 @@ class NarrativeVoiceManager {
           'rusty',
           "Welcome to Mars, Commander! Use your W, A, S, D keys or touch D-pad to take your first steps on the red planet!",
           'tut-move',
-          1500,
+          1000,
+          undefined,
+          true,
         );
         break;
       case 'inspect-rover':

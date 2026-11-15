@@ -59,14 +59,13 @@ export function TutorialOverlay({
     if (tutorialStep === 'complete') return;
     soundEngine.playRoverBeep(tutorialStep === 'jump-crystals' ? 'happy' : 'ok');
 
-    const voiceTid = window.setTimeout(() => {
-      narrativeVoice.speakTutorialStep(tutorialStep);
-    }, 280);
+    // Speak the step instruction line directly without fragile delayed timers
+    narrativeVoice.speakTutorialStep(tutorialStep);
 
     if (firstStepRef.current) {
       firstStepRef.current = false;
       setBannerVisible(true);
-      return () => window.clearTimeout(voiceTid);
+      return;
     }
 
     const isInlineBannerStep =
@@ -76,7 +75,7 @@ export function TutorialOverlay({
 
     if (!isInlineBannerStep) {
       setBannerVisible(false);
-      return () => window.clearTimeout(voiceTid);
+      return;
     }
 
     setBannerVisible(false);
@@ -84,11 +83,8 @@ export function TutorialOverlay({
       setBannerVisible(true);
     }, POPUP_TUTORIAL_STEP_PAUSE_MS);
 
-    return () => {
-      window.clearTimeout(voiceTid);
-      window.clearTimeout(tid);
-    };
-  }, [tutorialStep]);
+    return () => window.clearTimeout(tid);
+  }, [tutorialStep, renderMode]);
 
   if (tutorialStep === 'complete') return null;
 

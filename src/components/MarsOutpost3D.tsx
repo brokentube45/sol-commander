@@ -2419,7 +2419,7 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           const actualDist = Math.hypot(snap.x - prevX, snap.z - prevZ);
           if (tutorialStepRef.current === 1) {
             totalDistanceMoved += actualDist;
-            if (!moveTutorialReported && totalDistanceMoved >= 1.4) {
+            if (!moveTutorialReported && totalDistanceMoved >= 3.8) {
               moveTutorialReported = true;
               onMoveDoneRef.current();
             }
