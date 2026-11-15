@@ -20,6 +20,8 @@ interface CharacterVoiceProfile {
   role: string;
   speakerId: 'rusty' | 'hab' | 'amara' | 'kenji' | 'lucia' | 'rafi' | 'earth' | 'log';
   gender?: 'male' | 'female';
+  pitchMod?: number;
+  rateMod?: number;
 }
 
 const CHARACTERS: Record<string, CharacterVoiceProfile> = {
@@ -28,48 +30,142 @@ const CHARACTERS: Record<string, CharacterVoiceProfile> = {
     role: 'Rover Friend',
     speakerId: 'rusty',
     gender: 'male',
+    pitchMod: 1.09,
+    rateMod: 1.04,
   },
   rafi: {
     name: 'Rafi',
     role: 'Botanist',
     speakerId: 'rafi',
     gender: 'male',
+    pitchMod: 1.02,
+    rateMod: 1.0,
   },
   amara: {
     name: 'Amara',
     role: 'Doctor',
     speakerId: 'amara',
     gender: 'female',
+    pitchMod: 1.05,
+    rateMod: 0.98,
   },
   kenji: {
     name: 'Kenji',
     role: 'Engineer',
     speakerId: 'kenji',
     gender: 'male',
+    pitchMod: 1.03,
+    rateMod: 1.02,
   },
   lucia: {
     name: 'Lucía',
     role: 'Geologist',
     speakerId: 'lucia',
     gender: 'female',
+    pitchMod: 1.08,
+    rateMod: 1.03,
   },
   capcom: {
     name: 'Hab Computer',
     role: 'Base System',
     speakerId: 'hab',
     gender: 'male',
+    pitchMod: 0.96,
+    rateMod: 0.98,
   },
   hab: {
     name: 'Hab Computer',
     role: 'Base System',
     speakerId: 'hab',
     gender: 'male',
+    pitchMod: 0.96,
+    rateMod: 0.98,
   },
   earth: {
     name: 'Earth Team',
     role: 'Mission Control',
     speakerId: 'earth',
     gender: 'male',
+    pitchMod: 0.98,
+    rateMod: 0.99,
+  },
+};
+
+export type VoiceEmotionStyle = 'cheerful' | 'warm-companion' | 'storyteller' | 'calm-mentor';
+
+export interface VoiceStyleConfig {
+  id: VoiceEmotionStyle;
+  label: string;
+  description: string;
+  basePitch: number;
+  baseRate: number;
+  preferredVoices: string[];
+}
+
+export const VOICE_STYLES: Record<VoiceEmotionStyle, VoiceStyleConfig> = {
+  cheerful: {
+    id: 'cheerful',
+    label: 'Cheerful Explorer',
+    description: 'Lively, friendly & emotional companion tone (Recommended)',
+    basePitch: 1.14,
+    baseRate: 1.05,
+    preferredVoices: [
+      'Ryan',
+      'Eric',
+      'Jenny',
+      'Google UK English Female',
+      'Aria',
+      'Guy',
+      'Google UK English Male',
+      'Christopher',
+    ],
+  },
+  'warm-companion': {
+    id: 'warm-companion',
+    label: 'Warm Companion',
+    description: 'Natural, warm human expression & supportive guidance',
+    basePitch: 1.07,
+    baseRate: 1.02,
+    preferredVoices: [
+      'Guy',
+      'Christopher',
+      'Jenny',
+      'Brian',
+      'Google UK English Male',
+      'Google UK English Female',
+      'Daniel',
+      'Oliver',
+    ],
+  },
+  storyteller: {
+    id: 'storyteller',
+    label: 'Melodic Storyteller',
+    description: 'Clear, expressive & melodic cadence with gentle inflection',
+    basePitch: 1.06,
+    baseRate: 0.98,
+    preferredVoices: [
+      'Jenny',
+      'Aria',
+      'Google UK English Female',
+      'Christopher',
+      'Samantha',
+      'Oliver',
+    ],
+  },
+  'calm-mentor': {
+    id: 'calm-mentor',
+    label: 'Calm Mentor',
+    description: 'Confident, serene & supportive astronaut narrator',
+    basePitch: 0.98,
+    baseRate: 0.98,
+    preferredVoices: [
+      'Brian',
+      'Steffan',
+      'Guy',
+      'Daniel',
+      'Google UK English Male',
+      'David',
+    ],
   },
 };
 
@@ -125,8 +221,8 @@ interface QueuedVoiceItem {
 /**
  * Narrative Voice Manager
  * Reads all lines from `src/sim/storyBeats.ts` (Single Source of Truth),
- * substitutes `{roverName}`, and enforces a strict one-voice-at-a-time queue
- * with procedural Web Audio chimes + subtitles by default.
+ * substitutes `{roverName}`, and provides rich expressive emotion-tuned speech
+ * with customizable styles (Cheerful, Warm, Melodic, Mentor).
  */
 class NarrativeVoiceManager {
   private lastSpokenKey = '';
@@ -135,14 +231,72 @@ class NarrativeVoiceManager {
   private activeTimer: number | null = null;
   private isSpeakingNow = false;
   private waitingQueue: QueuedVoiceItem[] = [];
+  private currentStyle: VoiceEmotionStyle = 'cheerful';
+  private cachedVoices: SpeechSynthesisVoice[] = [];
 
   constructor() {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try {
+        const stored = window.localStorage.getItem('sol_commander_voice_style');
+        if (stored && stored in VOICE_STYLES) {
+          this.currentStyle = stored as VoiceEmotionStyle;
+        }
+      } catch {}
+
+      try {
+        this.loadVoices();
         window.speechSynthesis.onvoiceschanged = () => {
-          // Preload voices in browser
+          this.loadVoices();
         };
       } catch {}
+    }
+  }
+
+  private loadVoices(): void {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      const v = window.speechSynthesis.getVoices();
+      if (v && v.length > 0) {
+        this.cachedVoices = v;
+      }
+    } catch {}
+  }
+
+  public getVoiceStyle(): VoiceEmotionStyle {
+    return this.currentStyle;
+  }
+
+  public setVoiceStyle(style: VoiceEmotionStyle): void {
+    if (style in VOICE_STYLES) {
+      this.currentStyle = style;
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.setItem('sol_commander_voice_style', style);
+        }
+      } catch {}
+    }
+  }
+
+  public getAvailableStyles(): VoiceStyleConfig[] {
+    return Object.values(VOICE_STYLES);
+  }
+
+  public testVoice(styleOverride?: VoiceEmotionStyle): void {
+    const prev = this.currentStyle;
+    if (styleOverride) {
+      this.currentStyle = styleOverride;
+    }
+    this.stopSpeaking();
+    this.speakAs(
+      'rusty',
+      `Hello Commander! I am ${this.roverName}. All systems look fantastic! Let's explore Mars together!`,
+      'voice-preview-test',
+      0,
+      undefined,
+      true,
+    );
+    if (styleOverride) {
+      this.currentStyle = prev;
     }
   }
 
@@ -155,54 +309,58 @@ class NarrativeVoiceManager {
   }
 
   /**
-   * Select best natural, warm, human-sounding male neural voice
+   * Select best natural, warm, expressive voice matching current emotion style
    */
-  private getBestNaturalVoice(gender: 'male' | 'female' = 'male'): SpeechSynthesisVoice | null {
+  private getBestVoiceForStyle(
+    styleConfig: VoiceStyleConfig,
+    gender?: 'male' | 'female',
+  ): SpeechSynthesisVoice | null {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
-    const voices = window.speechSynthesis.getVoices();
+    const voices =
+      this.cachedVoices.length > 0
+        ? this.cachedVoices
+        : window.speechSynthesis.getVoices() ?? [];
     if (!voices || voices.length === 0) return null;
 
-    if (gender === 'male') {
-      // 1. Natural Neural Expressive Male voices (Microsoft Guy, Christopher, Eric, Ryan)
-      const neuralMale = voices.find(
+    // 1. Try preferred voices list for the active style (e.g. Ryan, Jenny, Guy, UK English)
+    for (const pref of styleConfig.preferredVoices) {
+      const match = voices.find(
         (v) =>
           v.lang.startsWith('en') &&
-          (v.name.includes('Guy') ||
-            v.name.includes('Christopher') ||
-            v.name.includes('Eric') ||
-            v.name.includes('Ryan') ||
-            (v.name.includes('Natural') && v.name.includes('Male'))),
+          v.name.toLowerCase().includes(pref.toLowerCase()) &&
+          (!gender || (gender === 'female' ? !v.name.includes('Male') : !v.name.includes('Female'))),
       );
-      if (neuralMale) return neuralMale;
-
-      // 2. High-quality standard male voices
-      const goodMale = voices.find(
-        (v) =>
-          v.lang.startsWith('en') &&
-          (v.name.includes('Google UK English Male') ||
-            v.name.includes('Google US English') ||
-            v.name.includes('Mark') ||
-            v.name.includes('Daniel') ||
-            v.name.includes('Oliver') ||
-            v.name.includes('George') ||
-            v.name.includes('David')),
-      );
-      if (goodMale) return goodMale;
-
-      const anyEnglish = voices.find((v) => v.lang.startsWith('en'));
-      return anyEnglish ?? voices[0];
-    } else {
-      const female = voices.find(
-        (v) =>
-          v.lang.startsWith('en') &&
-          (v.name.includes('Jenny') ||
-            v.name.includes('Aria') ||
-            v.name.includes('Zira') ||
-            v.name.includes('Google UK English Female') ||
-            (v.name.includes('Natural') && v.name.includes('Female'))),
-      );
-      return female ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
+      if (match) return match;
     }
+
+    // 2. Try any Natural neural voice
+    const natural = voices.find(
+      (v) =>
+        v.lang.startsWith('en') &&
+        v.name.toLowerCase().includes('natural') &&
+        (!gender || (gender === 'female' ? !v.name.includes('Male') : !v.name.includes('Female'))),
+    );
+    if (natural) return natural;
+
+    // 3. Try high-prosody Google UK voices before flatter Google US voices
+    const googleUk = voices.find(
+      (v) =>
+        v.lang.startsWith('en') &&
+        v.name.toLowerCase().includes('google uk') &&
+        (!gender || (gender === 'female' ? v.name.includes('Female') : v.name.includes('Male'))),
+    );
+    if (googleUk) return googleUk;
+
+    // 4. Any English voice with appropriate gender if possible
+    const anyEnGender = voices.find(
+      (v) =>
+        v.lang.startsWith('en') &&
+        (!gender || (gender === 'female' ? v.name.includes('Female') || v.name.includes('Zira') : true)),
+    );
+    if (anyEnGender) return anyEnGender;
+
+    const anyEnglish = voices.find((v) => v.lang.startsWith('en'));
+    return anyEnglish ?? voices[0];
   }
 
   /**
@@ -231,7 +389,6 @@ class NarrativeVoiceManager {
     this.lastSpokenAt = now;
 
     if (this.isSpeakingNow && !force) {
-      // Bible Rule 1: Max one waiting unless chained via onEnd
       this.waitingQueue = [{ characterKey: String(characterKey), text, dedupKey: key, onEnd }];
       return;
     }
@@ -262,11 +419,25 @@ class NarrativeVoiceManager {
         const spokenText = cleanTextForSpeech(text);
         if (spokenText) {
           const utterance = new SpeechSynthesisUtterance(spokenText);
-          utterance.rate = 0.96; // Clear, friendly cadence for kids
-          utterance.pitch = 1.0; // Natural, warm human tone
+          const styleConfig = VOICE_STYLES[this.currentStyle] ?? VOICE_STYLES.cheerful;
+
+          // Modulate pitch and rate with character identity + emotional style for lively prosody
+          const pitch = styleConfig.basePitch * (char.pitchMod ?? 1.0);
+          const rate = styleConfig.baseRate * (char.rateMod ?? 1.0);
+
+          utterance.rate = Math.max(0.85, Math.min(1.25, rate));
+          utterance.pitch = Math.max(0.8, Math.min(1.4, pitch));
           utterance.volume = 1.0;
-          const voice = this.getBestNaturalVoice(char.gender ?? 'male');
-          if (voice) utterance.voice = voice;
+
+          const voice = this.getBestVoiceForStyle(styleConfig, char.gender);
+          if (voice) {
+            utterance.voice = voice;
+            // If the browser only has David (older monotone SAPI), boost pitch to eliminate drone
+            if (voice.name.includes('David') && utterance.pitch < 1.12) {
+              utterance.pitch = 1.15;
+              utterance.rate = 1.06;
+            }
+          }
 
           utterance.onend = () => {
             this.isSpeakingNow = false;

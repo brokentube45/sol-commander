@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Play,
@@ -10,9 +11,12 @@ import {
   FastForward,
   X,
   MousePointer,
+  Mic,
+  Sparkles,
 } from 'lucide-react';
 import { CursorUnlockKey } from './MarsOutpost3D';
 import { soundEngine } from '../utils/soundEngine';
+import { narrativeVoice, VoiceEmotionStyle, VOICE_STYLES } from '../utils/narrativeVoice';
 
 interface PauseMenuModalProps {
   open: boolean;
@@ -57,6 +61,9 @@ export function PauseMenuModal({
   onQuitToTitle,
   reducedMotion,
 }: PauseMenuModalProps) {
+  const [voiceStyle, setVoiceStyle] = useState<VoiceEmotionStyle>(() =>
+    narrativeVoice.getVoiceStyle(),
+  );
   return (
     <AnimatePresence>
       {open && (
@@ -216,6 +223,48 @@ export function PauseMenuModal({
                   )}
                   <span>Sound: {soundEnabled ? 'On' : 'Off'}</span>
                 </button>
+
+                {/* Rover Voice Emotion & Personality */}
+                <div className="rounded-lg border border-white/10 bg-[#071324]/80 p-2.5 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-[#F8F9FA]">
+                    <div className="flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+                      <span>Rover Voice Emotion</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => narrativeVoice.testVoice(voiceStyle)}
+                      className="inline-flex items-center gap-1 rounded bg-[#FFB703]/20 px-2.5 py-1 text-[11px] font-black text-[#FFB703] hover:bg-[#FFB703] hover:text-[#0B1D36] transition-colors cursor-pointer"
+                    >
+                      <Volume2 className="h-3 w-3" />
+                      <span>Test Voice 🔊</span>
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {narrativeVoice.getAvailableStyles().map((st) => (
+                      <button
+                        key={st.id}
+                        type="button"
+                        onClick={() => {
+                          soundEngine.playClickSoft();
+                          narrativeVoice.setVoiceStyle(st.id);
+                          setVoiceStyle(st.id);
+                          narrativeVoice.testVoice(st.id);
+                        }}
+                        className={`rounded-lg border p-2 text-left transition-all cursor-pointer ${
+                          voiceStyle === st.id
+                            ? 'border-[#22C55E] bg-[#22C55E]/20 text-[#22C55E] shadow-[0_0_12px_rgba(34,197,94,0.3)]'
+                            : 'border-white/10 bg-[#0B1D36]/60 text-[#F8F9FA]/75 hover:border-[#FFB703]/60'
+                        }`}
+                      >
+                        <div className="font-extrabold text-[11px]">{st.label}</div>
+                        <div className="mt-0.5 text-[9px] leading-tight text-[#F8F9FA]/60">
+                          {st.description.split('(')[0]}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               {/* Reviewer / Fast-Track Jump to Mission (Judges Shortcut) */}

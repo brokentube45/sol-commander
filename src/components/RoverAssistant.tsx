@@ -11,9 +11,11 @@ import {
   ChevronDown,
   ChevronUp,
   Volume1,
+  Mic,
 } from 'lucide-react';
 import { RoverMood } from '../sim/roverData';
 import { soundEngine } from '../utils/soundEngine';
+import { narrativeVoice, VoiceEmotionStyle, VOICE_STYLES } from '../utils/narrativeVoice';
 
 interface RoverAssistantProps {
   roverName: string;
@@ -142,6 +144,14 @@ export function RoverAssistant({
   onToggleHush,
 }: RoverAssistantProps) {
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [voiceStyle, setVoiceStyle] = useState<VoiceEmotionStyle>(() =>
+    narrativeVoice.getVoiceStyle(),
+  );
+
+  // Sync state if changed elsewhere
+  useEffect(() => {
+    setVoiceStyle(narrativeVoice.getVoiceStyle());
+  }, []);
 
   // When speech starts/stops or new text arrives, synchronize voice
   // During training, TutorialOverlay orchestrates step instructions so RoverAssistant does not clash on mount
@@ -295,6 +305,52 @@ export function RoverAssistant({
               </p>
             )}
           </div>
+
+          {/* Voice Emotion Personality Selector & Instant Test */}
+          {!hushed && (
+            <div className="mt-1.5 flex items-center justify-between gap-1.5 rounded-lg border border-white/10 bg-[#071324]/85 px-2 py-1 text-[11px]">
+              <div className="flex items-center gap-1 min-w-0 text-[#FFB703]">
+                <Mic className="h-3 w-3 shrink-0" aria-hidden="true" />
+                <select
+                  value={voiceStyle}
+                  onChange={(e) => {
+                    const next = e.target.value as VoiceEmotionStyle;
+                    setVoiceStyle(next);
+                    narrativeVoice.setVoiceStyle(next);
+                    narrativeVoice.testVoice(next);
+                  }}
+                  className="bg-transparent font-extrabold text-[#F8F9FA] focus:outline-none cursor-pointer truncate"
+                  title="Choose Rover Voice Emotion"
+                >
+                  <option value="cheerful" className="bg-[#0B1D36] text-[#F8F9FA]">
+                    🎙️ Cheerful Explorer
+                  </option>
+                  <option value="warm-companion" className="bg-[#0B1D36] text-[#F8F9FA]">
+                    🎙️ Warm Companion
+                  </option>
+                  <option value="storyteller" className="bg-[#0B1D36] text-[#F8F9FA]">
+                    🎙️ Melodic Storyteller
+                  </option>
+                  <option value="calm-mentor" className="bg-[#0B1D36] text-[#F8F9FA]">
+                    🎙️ Calm Mentor
+                  </option>
+                </select>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playClickSoft();
+                  narrativeVoice.testVoice(voiceStyle);
+                }}
+                title="Test Rover Voice"
+                className="inline-flex shrink-0 items-center gap-1 rounded bg-[#FFB703]/20 px-2 py-0.5 text-[10px] font-black text-[#FFB703] hover:bg-[#FFB703] hover:text-[#0B1D36] transition-colors cursor-pointer"
+              >
+                <Volume2 className="h-3 w-3" />
+                <span>Test 🔊</span>
+              </button>
+            </div>
+          )}
 
           {/* Child-Friendly Hint Buttons */}
           {showHintButtons && (
