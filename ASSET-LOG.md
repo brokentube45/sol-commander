@@ -37,8 +37,8 @@ All runtime visuals, textures, 3D geometries, and audio in this project are eith
 - `card_survive_outpost_1794588148605.jpg`
 (Educational briefing cards bundled locally; zero runtime external image fetches.)
 
-## 6. Video & Cinematic
-- Zero pre-rendered video files are packaged in the repository. The arrival sequence is rendered 100% in real-time in-engine via Three.js camera trajectories (`PrologueHUD.tsx`, `MarsOutpost3D.tsx`) with zero external video file dependencies.
+## 6. Video & Cinematic Cutscene
+- `public/sol-commandor-intro.mp4`: Educational cinematic intro video played full-bleed on mission launch (`PrologueHUD.tsx`) with a Skip button and automatic fallback to the 28-second in-engine Three.js camera sequence. Zero external runtime stream dependencies.
 
 ## 7. Brand Icon & Wordmark Logo (`public/assets/`) — AI-Generated Assets
 - `public/assets/sol-commander-icon.png`: Circular Mars dome emblem used in Title HUD, Favicon (`index.html`), Prologue reveal, Modals, and Debrief screen. **Disclosure: AI-generated branding image** provided by project team.
