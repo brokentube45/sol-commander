@@ -1658,7 +1658,8 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
         return;
       }
       const touch = ev.changedTouches[0];
-      if (touch && activeTouchLookId === null) {
+      // Only capture touch look on the right 65% of the screen so left thumb has clean movement
+      if (touch && activeTouchLookId === null && touch.clientX > window.innerWidth * 0.35) {
         activeTouchLookId = touch.identifier;
         lastTouchLookX = touch.clientX;
         lastTouchLookY = touch.clientY;

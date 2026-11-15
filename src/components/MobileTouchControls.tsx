@@ -18,11 +18,11 @@ export function MobileTouchControls({
   onInteract,
   canInteract = false,
   interactLabel,
-  cameraMode,
+  cameraMode: _cameraMode,
   onToggleCamera,
   disabled = false,
 }: MobileTouchControlsProps) {
-  // Joystick state
+  // Dynamic floating joystick state
   const [joystickActive, setJoystickActive] = useState(false);
   const [joystickOrigin, setJoystickOrigin] = useState<{ x: number; y: number } | null>(null);
   const [knobOffset, setKnobOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -40,9 +40,10 @@ export function MobileTouchControls({
     }
   }, [disabled, moveInputRef]);
 
-  // --- Left-Thumb Joystick Handlers ---
+  // --- Left-Thumb Dynamic Floating Joystick Handlers ---
   const handleJoystickTouchStart = useCallback(
     (e: React.TouchEvent<HTMLDivElement>) => {
+      e.stopPropagation();
       if (disabled) return;
       const touch = e.changedTouches[0];
       if (!touch) return;
@@ -58,6 +59,7 @@ export function MobileTouchControls({
 
   const handleJoystickTouchMove = useCallback(
     (e: React.TouchEvent<HTMLDivElement>) => {
+      e.stopPropagation();
       if (!joystickActive || !joystickOrigin) return;
 
       for (let i = 0; i < e.changedTouches.length; i++) {
@@ -66,7 +68,7 @@ export function MobileTouchControls({
           const dx = touch.clientX - joystickOrigin.x;
           const dy = touch.clientY - joystickOrigin.y;
           const dist = Math.hypot(dx, dy);
-          const maxRadius = 48; // max travel radius in pixels
+          const maxRadius = 46; // max travel radius in pixels
 
           const clampedDist = Math.min(dist, maxRadius);
           const angle = Math.atan2(dy, dx);
@@ -98,6 +100,7 @@ export function MobileTouchControls({
 
   const handleJoystickTouchEnd = useCallback(
     (e: React.TouchEvent<HTMLDivElement>) => {
+      e.stopPropagation();
       for (let i = 0; i < e.changedTouches.length; i++) {
         const touch = e.changedTouches[i];
         if (touch.identifier === activeTouchIdRef.current) {
@@ -132,25 +135,19 @@ export function MobileTouchControls({
 
   return (
     <div className="pointer-events-none fixed inset-0 z-30 select-none touch-none overflow-hidden font-[family-name:var(--font-game)]">
-      {/* 1. Left Thumb Joystick Area (Lower-Left of Screen, bounded to avoid overlapping top HUD) */}
+      {/* 1. Left-Thumb Dynamic Floating Joystick Touch Zone (Entire bottom-left 55% x 45% screen area) */}
       <div
-        className="pointer-events-auto absolute bottom-0 left-0 h-[55%] w-[45%]"
+        className="pointer-events-auto absolute bottom-0 left-0 h-[60%] w-[45%]"
         onTouchStart={handleJoystickTouchStart}
         onTouchMove={handleJoystickTouchMove}
         onTouchEnd={handleJoystickTouchEnd}
         onTouchCancel={handleJoystickTouchEnd}
       >
-        {/* Resting Virtual Joystick Base indicator */}
-        {!joystickActive && (
-          <div className="absolute bottom-6 left-6 flex h-24 w-24 items-center justify-center rounded-full border-2 border-white/20 bg-white/5 backdrop-blur-xs">
-            <div className="h-10 w-10 rounded-full border border-[#FFB703]/40 bg-[#FFB703]/15 shadow-[0_0_12px_rgba(255,183,3,0.25)]" />
-            <span className="absolute -top-5 text-[9px] font-black uppercase tracking-widest text-white/40">
-              Move
-            </span>
-          </div>
-        )}
-
-        {/* Active Dynamic Floating Joystick Ring & Knob */}
+        {/*
+          Idle state: 100% INVISIBLE!
+          Zero static indicators or buttons blocking the Martian ground, astronaut, or terrain.
+          Only appears dynamically under the player's thumb when pressed.
+        */}
         {joystickActive && joystickOrigin && (
           <div
             style={{
@@ -158,32 +155,32 @@ export function MobileTouchControls({
               top: `${joystickOrigin.y}px`,
               transform: 'translate(-50%, -50%)',
             }}
-            className="pointer-events-none absolute flex h-28 w-28 items-center justify-center rounded-full border-2 border-[#FFB703]/60 bg-[#071324]/60 shadow-[0_0_24px_rgba(255,183,3,0.35)] backdrop-blur-md"
+            className="pointer-events-none absolute flex h-24 w-24 items-center justify-center rounded-full border border-white/35 bg-black/30 shadow-[0_0_20px_rgba(255,183,3,0.35)] backdrop-blur-xs"
           >
             {/* Center Thumb Knob */}
             <div
               style={{
                 transform: `translate(${knobOffset.x}px, ${knobOffset.y}px)`,
               }}
-              className="h-12 w-12 rounded-full border-2 border-white bg-gradient-to-br from-[#FFB703] to-[#E85D04] shadow-lg transition-transform duration-75"
+              className="h-10 w-10 rounded-full border-2 border-white/90 bg-gradient-to-br from-[#FFB703] to-[#E85D04] shadow-[0_0_12px_rgba(255,183,3,0.8)] transition-transform duration-75"
             />
           </div>
         )}
       </div>
 
-      {/* 2. Bottom-Right Action Cluster (Jump, Interact, View Toggle) */}
-      <div className="pointer-events-auto absolute bottom-6 right-6 flex items-end gap-3">
-        {/* 1P / 3P View Toggle */}
+      {/* 2. Bottom-Right Compact Ghost Action Buttons (Camera, Interact, Hop) */}
+      <div className="pointer-events-auto absolute bottom-4 right-4 flex items-end gap-2.5">
+        {/* 1P / 3P View Toggle (Subtle 36px ghost glass button) */}
         <button
           type="button"
           onClick={onToggleCamera}
-          className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/20 bg-[#071324]/80 text-[#F8F9FA] shadow-lg backdrop-blur-md active:scale-90 transition-transform"
+          className="flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/40 text-[#38BDF8] shadow-md backdrop-blur-xs active:scale-90 active:bg-white/20 transition-transform"
           aria-label="Toggle Camera View"
         >
-          <Eye className="h-5 w-5 text-[#38BDF8]" />
+          <Eye className="h-4 w-4" />
         </button>
 
-        {/* Action / Interact Button (Glowing when in range) */}
+        {/* Action / Interact Button (Only rendered when near interactable object) */}
         {canInteract && (
           <button
             type="button"
@@ -191,24 +188,23 @@ export function MobileTouchControls({
               soundEngine.playClick();
               onInteract?.();
             }}
-            className="flex h-14 w-14 items-center justify-center rounded-2xl border-2 border-[#22C55E] bg-gradient-to-br from-[#22C55E] to-[#15803D] text-[#071324] shadow-[0_0_20px_rgba(34,197,94,0.6)] animate-pulse active:scale-95 transition-transform"
+            className="flex h-12 w-12 flex-col items-center justify-center rounded-full border-2 border-[#22C55E] bg-[#22C55E]/30 text-[#22C55E] shadow-[0_0_18px_rgba(34,197,94,0.55)] backdrop-blur-xs animate-pulse active:scale-90 transition-transform"
             aria-label={interactLabel ?? 'Interact with Station'}
           >
-            <Hand className="h-7 w-7 text-[#071324]" />
+            <Hand className="h-5 w-5 text-white" />
+            <span className="text-[8px] font-black uppercase text-white tracking-wider">Act</span>
           </button>
         )}
 
-        {/* Jump Button (Mars suited hop in 3.73 m/s² gravity) */}
+        {/* Mars Suited Hop Button (Translucent glass amber button - 48px) */}
         <button
           type="button"
           onClick={handleJump}
-          className="flex h-16 w-16 items-center justify-center rounded-full border-2 border-[#FFB703]/80 bg-gradient-to-br from-[#FFB703] to-[#E85D04] text-[#0B1D36] shadow-[0_0_24px_rgba(255,183,3,0.5)] active:scale-90 transition-transform"
+          className="flex h-12 w-12 flex-col items-center justify-center rounded-full border-2 border-[#FFB703]/80 bg-black/45 text-[#FFB703] shadow-[0_0_16px_rgba(255,183,3,0.35)] backdrop-blur-xs active:scale-90 active:bg-[#FFB703]/30 transition-transform"
           aria-label="Jump in Mars Gravity"
         >
-          <div className="flex flex-col items-center">
-            <ArrowUp className="h-6 w-6 stroke-[3]" />
-            <span className="text-[10px] font-black uppercase tracking-tight">Hop</span>
-          </div>
+          <ArrowUp className="h-5 w-5 stroke-[2.5]" />
+          <span className="text-[8px] font-black uppercase tracking-wider text-[#FFB703]">Hop</span>
         </button>
       </div>
     </div>

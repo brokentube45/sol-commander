@@ -463,6 +463,9 @@ export function GameplayHUD({
 }: GameplayHUDProps) {
   const [labOpen, setLabOpen] = useState(false);
   const [touchPadOpen, setTouchPadOpen] = useState(false);
+  const [mobileVitalsExpanded, setMobileVitalsExpanded] = useState(false);
+  const [mobileMissionExpanded, setMobileMissionExpanded] = useState(false);
+  const [mobileRustyOpen, setMobileRustyOpen] = useState(false);
   const isTouch = useTouchDevice();
 
   const inspectedInfo = inspectedStation ? OUTPOST_LANDMARKS[inspectedStation] : null;
@@ -567,9 +570,15 @@ export function GameplayHUD({
         };
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between gap-2 p-3 sm:p-4 md:grid md:grid-cols-[minmax(0,324px)_minmax(300px,1fr)_minmax(0,296px)] md:grid-rows-[auto_1fr_auto] md:gap-x-3 md:gap-y-2 font-[family-name:var(--font-game)]">
-      {/* Centered Crosshair Reticle (1P always; 3P when pointer locked) */}
-      {(cameraMode === '1p' || pointerLocked) && !inspectedInfo && (
+    <div
+      className={
+        isTouch
+          ? "pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-2.5 font-[family-name:var(--font-game)] overflow-hidden"
+          : "pointer-events-none fixed inset-0 z-20 flex flex-col justify-between gap-2 p-3 sm:p-4 md:grid md:grid-cols-[minmax(0,324px)_minmax(300px,1fr)_minmax(0,296px)] md:grid-rows-[auto_1fr_auto] md:gap-x-3 md:gap-y-2 font-[family-name:var(--font-game)]"
+      }
+    >
+      {/* Centered Crosshair Reticle (1P always; 3P when pointer locked; PC only) */}
+      {!isTouch && (cameraMode === '1p' || pointerLocked) && !inspectedInfo && (
         <div
           aria-hidden="true"
           className="pointer-events-none fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-[#FFB703]/70"
@@ -582,6 +591,145 @@ export function GameplayHUD({
         </div>
       )}
 
+      {/* MOBILE TOP BAR (when isTouch is true) */}
+      {isTouch ? (
+        <div className="pointer-events-none flex w-full items-start justify-between gap-1.5">
+          {/* Top-Left: Minimal Vitals Pill + Quick Icons */}
+          <div className="pointer-events-auto flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setMobileVitalsExpanded(true)}
+              aria-label="View Station Vitals"
+              className="flex items-center gap-1.5 rounded-full border border-white/20 bg-[#071324]/85 px-2.5 py-1 text-[11px] font-bold text-white shadow-md backdrop-blur-md active:scale-95 transition-transform"
+            >
+              <span className="font-extrabold text-[#FFB703]">Sol {simState.sol}</span>
+              <span className="text-white/30">·</span>
+              <span title="Oxygen">💨 {days.o2Days}d</span>
+              <span title="Water">💧 {days.waterDays}d</span>
+              <span title="Power">⚡ {days.batteryHours}h</span>
+              <span title="Food">🌱 {days.foodDays}d</span>
+              <ChevronDown className="h-3 w-3 text-[#FFB703]" />
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenLog}
+              aria-label="Open Mission Journal"
+              className={`flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-[#071324]/85 text-[#FFB703] backdrop-blur-md active:scale-90 transition-transform ${
+                simState.activeWeatherEvent ? 'border-[#E85D04] animate-pulse' : ''
+              }`}
+              title="Journal"
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+            </button>
+
+            {onToggleMap && (
+              <button
+                type="button"
+                onClick={onToggleMap}
+                aria-label="Open Map"
+                className="flex h-7 w-7 items-center justify-center rounded-full border border-white/20 bg-[#071324]/85 text-[#38BDF8] backdrop-blur-md active:scale-90 transition-transform"
+                title="Map"
+              >
+                <MapIcon className="h-3.5 w-3.5" />
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={() => setMobileRustyOpen(true)}
+              aria-label={`Open ${simState.roverName} Comms`}
+              className="flex h-7 items-center gap-1 rounded-full border border-white/20 bg-[#071324]/85 px-2 text-[10px] font-extrabold text-[#FFB703] backdrop-blur-md active:scale-95 transition-transform"
+              title={`${simState.roverName} Tips`}
+            >
+              <span className="text-xs">🤖</span>
+              <span className="hidden sm:inline">{simState.roverName}</span>
+              {simState.roverActiveHint && (
+                <span className="h-1.5 w-1.5 rounded-full bg-[#22C55E] animate-ping" />
+              )}
+            </button>
+
+            {onOpenPauseMenu && (
+              <button
+                type="button"
+                onClick={onOpenPauseMenu}
+                aria-label="Pause Menu"
+                className="flex h-7 items-center justify-center rounded-full border border-white/20 bg-[#071324]/85 px-2 text-[10px] font-extrabold text-[#F8F9FA]/80 backdrop-blur-md active:scale-90 transition-transform"
+              >
+                Pause
+              </button>
+            )}
+          </div>
+
+          {/* Top-Center: Storm Alert / Toasts / Tutorial Banner */}
+          <div className="pointer-events-none flex flex-col items-center gap-1 max-w-[280px]">
+            {tutorialBannerNode}
+            {simState.activeWeatherEvent && (
+              <div className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-[#E85D04] bg-[#2D1418]/95 px-3 py-1 text-[11px] font-black text-[#FFB703] shadow-[0_0_16px_rgba(232,93,4,0.6)] animate-pulse">
+                <span>⚠️ STORM: {weatherSecondsLeft}s</span>
+                <span className="text-white/40">·</span>
+                <span className="text-[#22C55E]">{habitatDistMeters}m</span>
+              </div>
+            )}
+            {queuedToasts.slice(0, 1).map((toast) => (
+              <div
+                key={toast.id}
+                className="pointer-events-auto rounded-lg border border-[#38BDF8]/65 bg-[#071324]/95 px-2.5 py-1 text-[10px] text-white shadow-md"
+              >
+                <span className="font-bold text-[#FFB703]">{toast.title}: </span>
+                <span>{toast.detail}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Top-Right: Minimal Mission Pill / Debrief Button */}
+          <div className="pointer-events-auto flex items-center gap-1.5">
+            {isFreeRoam ? (
+              onOpenDebrief && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    onOpenDebrief();
+                  }}
+                  className="flex items-center gap-1.5 rounded-full border border-[#22C55E]/60 bg-[#071324]/85 px-3 py-1 text-xs font-black text-[#22C55E] shadow-md backdrop-blur-md active:scale-95 transition-transform"
+                >
+                  <Sparkles className="h-3 w-3" />
+                  <span>Debrief</span>
+                </button>
+              )
+            ) : (
+              simState.tutorialStep === 'complete' && (
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setMobileMissionExpanded(true)}
+                    className="flex items-center gap-1.5 rounded-full border border-[#FFB703]/50 bg-[#071324]/85 px-2.5 py-1 text-[11px] font-extrabold text-[#F8F9FA] shadow-md backdrop-blur-md active:scale-95 transition-transform"
+                  >
+                    <span className="text-[#FFB703]">{activeMission.zoneLabel}</span>
+                    <ChevronDown className="h-3 w-3 text-[#FFB703]" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenCommandMode('compare')}
+                    className="flex items-center gap-1 rounded-full bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-2.5 py-1 text-[11px] font-black text-[#071324] shadow-md active:scale-95 transition-transform"
+                  >
+                    <Zap className="h-3 w-3" />
+                    <span>
+                      {simState.missionMiniActivityDone[activeMission.id] &&
+                      simState.missionQuizDone[activeMission.id]
+                        ? 'Decide'
+                        : 'Play'}
+                    </span>
+                  </button>
+                </div>
+              )
+            )}
+          </div>
+        </div>
+      ) : (
+        /* DESKTOP ZONE 1, 2, 3 (PC Only) */
+        <>
       {/* ZONE 1 (TOP-LEFT): Chunky Kid-Friendly Resource Bars + Mission Telemetry */}
       <div className="pointer-events-auto flex w-full max-w-[336px] flex-col gap-1.5 md:col-start-1 md:row-start-1 md:self-start">
           <div
@@ -1284,33 +1432,38 @@ export function GameplayHUD({
             )}
           </AnimatePresence>
         </div>
+        </>
+      )}
 
-      {/* ZONE 4 (BOTTOM-LEFT): Collapsible Rusty Companion Bubble */}
-      <div className="pointer-events-none flex items-end md:col-start-1 md:row-start-3 md:self-end">
-        <RoverAssistant
-          roverName={simState.roverName}
-          mood={roverMood}
-          damaged={simState.roverDamaged}
-          hushed={simState.roverHushed}
-          lastLine={simState.roverLastLine}
-          activeHint={simState.roverActiveHint}
-          hintLevelUsed={currentHintLevel}
-          crewSlotsRemaining={simState.crewSlotsRemaining}
-          collapsed={rustyCollapsed}
-          onToggleCollapsed={onToggleRustyCollapsed}
-          showHintButtons={simState.tutorialStep === 'complete'}
-          onAskHint={onAskRoverHint}
-          onToggleHush={onToggleRoverHush}
-        />
-      </div>
+      {/* ZONE 4 (BOTTOM-LEFT): Collapsible Rusty Companion Bubble (PC Only) */}
+      {!isTouch && (
+        <div className="pointer-events-none flex items-end md:col-start-1 md:row-start-3 md:self-end">
+          <RoverAssistant
+            roverName={simState.roverName}
+            mood={roverMood}
+            damaged={simState.roverDamaged}
+            hushed={simState.roverHushed}
+            lastLine={simState.roverLastLine}
+            activeHint={simState.roverActiveHint}
+            hintLevelUsed={currentHintLevel}
+            crewSlotsRemaining={simState.crewSlotsRemaining}
+            collapsed={rustyCollapsed}
+            onToggleCollapsed={onToggleRustyCollapsed}
+            showHintButtons={simState.tutorialStep === 'complete'}
+            onAskHint={onAskRoverHint}
+            onToggleHush={onToggleRoverHush}
+          />
+        </div>
+      )}
 
-      {/* ZONE 5 (BOTTOM-CENTER): Cursor Free Chip + Contextual Interaction Keycap */}
-      <div className="pointer-events-none flex flex-col items-center justify-end gap-1.5 pb-1 md:col-start-2 md:row-start-3 md:self-end">
-        {cursorUnlockedInGame && !pointerLocked && (
-          <div className="rounded-lg border border-[#38BDF8]/65 bg-[#071324]/92 px-3 py-1 text-[11px] font-bold text-[#38BDF8] shadow-[0_0_16px_rgba(56,189,248,0.28)]">
-            Cursor Free · Left-click 3D world to look around
-          </div>
-        )}
+      {/* ZONE 5 (BOTTOM-CENTER): Cursor Free Chip + Contextual Interaction Keycap (PC Only) */}
+      {!isTouch && (
+        <div className="pointer-events-none flex flex-col items-center justify-end gap-1.5 pb-1 md:col-start-2 md:row-start-3 md:self-end">
+          {cursorUnlockedInGame && !pointerLocked && (
+            <div className="rounded-lg border border-[#38BDF8]/65 bg-[#071324]/92 px-3 py-1 text-[11px] font-bold text-[#38BDF8] shadow-[0_0_16px_rgba(56,189,248,0.28)]">
+              Cursor Free · Left-click 3D world to look around
+            </div>
+          )}
           <AnimatePresence>
             {simState.activeWeatherEvent && nearbyStation === 'habitat' ? (
               <motion.button
@@ -1395,6 +1548,7 @@ export function GameplayHUD({
             )}
           </AnimatePresence>
         </div>
+      )}
 
         {/* ZONE 6 (BOTTOM-RIGHT): View/Jump/Pad Quick Controls + H-Toggleable Control Hints (PC only) */}
         {!isTouch && (
@@ -1639,6 +1793,272 @@ export function GameplayHUD({
             }
           }}
         />
+      )}
+
+      {/* ================= MOBILE EXPANDABLE MODALS ================= */}
+      {/* 1. Mobile Station Vitals Modal */}
+      {isTouch && mobileVitalsExpanded && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          onClick={() => setMobileVitalsExpanded(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border-2 border-[#FFB703]/50 bg-[#071324]/95 p-4 shadow-2xl text-[#F8F9FA]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-[#FFB703]/20 px-2.5 py-0.5 text-xs font-black text-[#FFB703]">
+                  Sol {simState.sol}
+                </span>
+                <span className="font-extrabold text-sm text-[#F8F9FA]">{simState.callsign}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileVitalsExpanded(false)}
+                className="rounded-lg p-1 text-white/70 hover:text-white cursor-pointer"
+                aria-label="Close Vitals"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* 4 Kid-Friendly Resource Bars */}
+            <div className="mt-3 space-y-2.5">
+              {resourceBars.map((res) => {
+                const isCrit = res.status === 'CRITICAL';
+                return (
+                  <div key={res.label} className="flex items-center gap-2">
+                    <div className="flex w-[68px] shrink-0 items-center gap-1.5">
+                      <span className="text-sm select-none" aria-hidden="true">{res.emoji}</span>
+                      <span className="text-xs font-black text-[#F8F9FA]">{res.label}</span>
+                    </div>
+                    <div className="relative h-3.5 flex-1 overflow-hidden rounded-full border border-white/20 bg-black/40">
+                      <div
+                        className={`h-full rounded-full transition-all duration-300 bg-gradient-to-r ${
+                          isCrit ? 'from-[#EF4444] to-[#DC2626]' : res.gradient
+                        }`}
+                        style={{ width: `${res.pct}%` }}
+                      />
+                    </div>
+                    <div className="flex w-[52px] shrink-0 items-center justify-end gap-1 tabular-nums">
+                      <span className="text-xs font-black text-[#F8F9FA]">{res.daysText}</span>
+                      <ResourceAlertIcon status={res.status} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Telemetry Footer */}
+            <div className="mt-3.5 border-t border-white/10 pt-2.5 text-xs flex items-center justify-between font-bold tabular-nums text-[#38BDF8]">
+              <span>Gravity: {marsPhysics.gravity.gravityMs2} m/s²</span>
+              <span>Temp: {marsPhysics.airTempC}°C</span>
+              <span className="text-[#FFB703]">Kits: {simState.spareParts}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Mobile Mission Objective Modal */}
+      {isTouch && mobileMissionExpanded && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          onClick={() => setMobileMissionExpanded(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border-2 border-[#E85D04]/60 bg-[#071324]/95 p-4 shadow-2xl text-[#F8F9FA]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-extrabold text-[#FFB703]">{activeMission.zoneLabel}</span>
+                <span className="text-xs text-white/40">·</span>
+                <span className="text-xs font-bold text-[#22C55E]">Mission {activeMission.id.toUpperCase()}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileMissionExpanded(false)}
+                className="rounded-lg p-1 text-white/70 hover:text-white cursor-pointer"
+                aria-label="Close Mission Details"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <h3 className="mt-2 text-base font-extrabold text-white">{activeMission.title}</h3>
+            <p className="mt-1 text-xs text-[#F8F9FA]/85 leading-relaxed">{activeMission.story}</p>
+            <div className="mt-4 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMissionExpanded(false);
+                  onOpenCommandMode('look');
+                }}
+                className="flex-1 rounded-xl border border-[#38BDF8]/50 bg-[#0D213B] py-2 text-xs font-bold text-[#38BDF8] active:scale-95 cursor-pointer"
+              >
+                Look & Play
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMobileMissionExpanded(false);
+                  onOpenCommandMode('compare');
+                }}
+                className="flex-1 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] py-2 text-xs font-extrabold text-[#071324] active:scale-95 cursor-pointer"
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3. Mobile Rover Comms Modal */}
+      {isTouch && mobileRustyOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          onClick={() => setMobileRustyOpen(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border-2 border-[#FFB703]/50 bg-[#071324]/95 p-4 shadow-2xl text-[#F8F9FA]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🤖</span>
+                <span className="font-extrabold text-sm text-[#FFB703]">{simState.roverName} Comms</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileRustyOpen(false)}
+                className="rounded-lg p-1 text-white/70 hover:text-white cursor-pointer"
+                aria-label="Close Rover Comms"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-3">
+              <RoverAssistant
+                roverName={simState.roverName}
+                mood={roverMood}
+                damaged={simState.roverDamaged}
+                hushed={simState.roverHushed}
+                lastLine={simState.roverLastLine}
+                activeHint={simState.roverActiveHint}
+                hintLevelUsed={currentHintLevel}
+                crewSlotsRemaining={simState.crewSlotsRemaining}
+                collapsed={false}
+                showHintButtons={simState.tutorialStep === 'complete'}
+                onAskHint={onAskRoverHint}
+                onToggleHush={onToggleRoverHush}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. Mobile Inspected Crew Modal */}
+      {isTouch && inspectedCrew && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          onClick={onCloseInspectedCrew}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border-2 border-[#38BDF8]/65 bg-[#071324]/95 p-4 shadow-2xl text-[#F8F9FA]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2 border-b border-white/10 pb-2">
+              <div>
+                <p className="inline-flex items-center gap-1 text-[11px] font-bold text-[#38BDF8]">
+                  <Users className="h-3.5 w-3.5" aria-hidden="true" />
+                  {inspectedCrew.role}
+                </p>
+                <h3 className="mt-0.5 text-base font-extrabold text-white">{inspectedCrew.name}</h3>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    narrativeVoice.speakCrewMember(inspectedCrew.id);
+                  }}
+                  className="rounded-lg border border-white/15 bg-[#0E2038] p-1.5 text-[#38BDF8] cursor-pointer"
+                >
+                  <Volume2 className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={onCloseInspectedCrew}
+                  className="rounded-lg p-1.5 text-white/70 hover:text-white cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-xs font-bold text-[#FFB703]">
+              Status: {inspectedCrew.modeLabel} · {inspectedCrew.stationLabel}
+            </p>
+            <div className="mt-1 flex items-center gap-3 text-xs font-bold tabular-nums">
+              <span className="text-[#22C55E]">Health {inspectedCrew.health}%</span>
+              <span className="text-[#38BDF8]">Stress {inspectedCrew.stress}%</span>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-[#F8F9FA]/90">{inspectedCrew.note}</p>
+          </div>
+        </div>
+      )}
+
+      {/* 5. Mobile Inspected Landmark Modal */}
+      {isTouch && inspectedInfo && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm"
+          onClick={onCloseInspected}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border-2 border-[#E85D04]/60 bg-[#071324]/95 p-4 shadow-2xl text-[#F8F9FA]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-2 border-b border-white/10 pb-2">
+              <div>
+                <p className="text-[11px] font-bold text-[#FFB703]">{inspectedInfo.role}</p>
+                <h3 className="mt-0.5 text-base font-extrabold text-white">{inspectedInfo.name}</h3>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    narrativeVoice.speakLandmark(inspectedInfo.id);
+                  }}
+                  className="rounded-lg border border-white/15 bg-[#0E2038] p-1.5 text-[#FFB703] cursor-pointer"
+                >
+                  <Volume2 className="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={onCloseInspected}
+                  className="rounded-lg p-1.5 text-white/70 hover:text-white cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-[#F8F9FA]/90">{inspectedInfo.description}</p>
+            <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-[#FFB703]/25 bg-[#0E2038]/85 px-2.5 py-1.5 text-[11px] font-semibold text-[#FFB703]">
+              <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>{inspectedInfo.funFact}</span>
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );
