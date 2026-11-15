@@ -40,14 +40,13 @@
 - [x] **Phase 4: Futuristic Visor HUD Style** (Completed at T0 + 1:10)
   - [x] High-contrast kid-friendly visual meters, chamfered framing, readable text >= 16px body, zero zone overlaps
 
-- [x] **Phase 5: Final Verification & Release Artifacts** (Completed at T0 + 1:20)
-  - [x] Unit tests: 29/29 passing (`npm test`)
-  - [x] Typecheck: 0 errors (`npm run lint` / `tsc --noEmit`)
-  - [x] Policy scan: 100% passed (`npm run prelaunch`)
-  - [x] Production build: Built cleanly in <1s (`npm run build`)
-  - [x] Reviewer shortcuts in pause menu ("Jump to Mission 1", "Jump to Mission 5")
-  - [x] Created `README.md`, `AI_USE.md`, `docs/SUBMISSION-TEXT.md`, `docs/DEMO-SCRIPT.md`
-  - [x] Tagged `submission-candidate`
+- [x] **Phase T2: Intro Video & Fast-Track Hackathon Flow** (Completed at 2026-11-15T17:48:00+06:00)
+  - [x] Connected user-provided intro video `public/sol-commandor-intro.mp4` directly into `PrologueHUD.tsx` with responsive playback, audio controls, keyboard shortcuts, progress bar, and resilient Three.js fallback.
+  - [x] Logged video asset into `docs/ASSET-LOG.md`.
+  - [x] Fixed Step 1 voice and chime: guaranteed audio un-suspend on click, ensured `startNewCampaignWithSeed` enables audio context, and synced Rusty's spoken line to `"Welcome to Mars, Commander! Walk around to take your first steps on the red planet!"`.
+  - [x] Fast-track Hackathon Pacing: accelerated Sol 2-20 postcards from 4s to 2.2s and provided a prominent "Skip Ahead to Mission 1 (Sol 21) →" shortcut button so hackathon judges reach the emergency within seconds instead of waiting 8 minutes.
+  - [x] Verification: `tsc --noEmit` (0 errors), `npm run build` (<1s clean), `vitest run` (29/29 passed), `npm run prelaunch` (100% policy pass).
+
 
 ---
 

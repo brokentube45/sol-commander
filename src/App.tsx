@@ -433,6 +433,8 @@ export default function App() {
   const startNewCampaignWithSeed = useCallback(
     (nextSeed: number) => {
       soundEngine.stopWeatherLoop();
+      const enabled = soundEngine.setEnabled(true);
+      setSoundEnabled(enabled);
       soundEngine.playMissionStart();
       setSeed(nextSeed);
       mission1AlertTriggeredRef.current = false;

@@ -36,3 +36,6 @@ All runtime visuals, textures, 3D geometries, and audio in this project are eith
 - `card_explore_mars_1794588147230.jpg`
 - `card_survive_outpost_1794588148605.jpg`
 (Educational briefing cards bundled locally; zero runtime external image fetches.)
+
+## 6. Video Asset (`public/`)
+- `sol-commandor-intro.mp4`: Project cinematic arrival intro sequence (MP4, H.264) played on mission launch (`PrologueHUD.tsx`) with real-time in-engine Three.js fallback. Zero agency logos or copyright marks.

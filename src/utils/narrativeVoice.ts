@@ -114,7 +114,7 @@ class NarrativeVoiceManager {
       case 'move':
         this.speakAs(
           'rusty',
-          'Beep! Hello, Commander. Walk to the yellow light. Mars is bouncy, so take it easy.',
+          'Welcome to Mars, Commander! Walk around to take your first steps on the red planet!',
           'tut-move',
           4000,
         );

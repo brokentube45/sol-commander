@@ -1190,6 +1190,9 @@ class SoundEngine {
     if (!this.enabled || this.roverHushed) return;
     const ctx = this.ensureContext();
     if (!ctx || !this.effectsBus) return;
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
 
     try {
       const now = ctx.currentTime;

@@ -62,7 +62,7 @@ export function TutorialOverlay({
   const [bannerVisible, setBannerVisible] = useState(true);
   const firstStepRef = useRef(true);
 
-  // Time-lapse Sols 2-20: 4 seconds each, auto-advance or skip (Bible Section 5.1)
+  // Time-lapse Sols 2-20: 2.2 seconds each, fast auto-advance or skip (Bible Section 5.1)
   useEffect(() => {
     if (act1Phase !== 'postcards') return;
     const timer = window.setTimeout(() => {
@@ -72,7 +72,7 @@ export function TutorialOverlay({
         soundEngine.playMissionStart();
         onAdvanceStep('complete');
       }
-    }, reducedMotion ? 2500 : 4000);
+    }, reducedMotion ? 1500 : 2200);
     return () => window.clearTimeout(timer);
   }, [act1Phase, postcardIdx, onAdvanceStep, reducedMotion]);
 
@@ -464,9 +464,9 @@ export function TutorialOverlay({
                     soundEngine.playMissionStart();
                     onAdvanceStep('complete');
                   }}
-                  className="min-h-[40px] cursor-pointer rounded-xl border border-white/20 bg-[#1B3A5F]/60 px-4 text-xs font-bold text-[#F8F9FA]/80 hover:border-[#FFB703]"
+                  className="min-h-[40px] cursor-pointer rounded-xl border border-[#FFB703]/60 bg-[#1B3A5F]/80 px-4 text-xs font-bold text-[#FFB703] hover:border-[#FFB703] hover:bg-[#1B3A5F] transition-all"
                 >
-                  Skip Time-Lapse
+                  Skip Ahead to Mission 1 (Sol 21) →
                 </button>
 
                 <button
