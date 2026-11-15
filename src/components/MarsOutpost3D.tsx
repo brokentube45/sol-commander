@@ -1992,8 +1992,8 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
         outpost.zoneBeaconGroup.visible = false;
       }
 
-      // Ground Chevron Path Guide (available from start when Guide: On, hidden within 3 m)
-      if (phase === 'gameplay' && activeObj) {
+      // Ground Chevron Path Guide (available from start when Guide: On, hidden within 3 m; hidden in free-roam)
+      if (phase === 'gameplay' && activeObj && activeObj.id !== 'free-roam-exploration') {
         const guideState = computePathGuideState({
           playerX: playerPos.x,
           playerZ: playerPos.y,
@@ -2531,7 +2531,7 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           let roverFollowTargetZ = playerPos.y;
           if ((simState.guidanceStage ?? 0) >= 2 && !isFrozenInCommandMode) {
             const obj = simState.activeObjective;
-            if (obj) {
+            if (obj && obj.id !== 'free-roam-exploration') {
               const dxObj = obj.x - playerPos.x;
               const dzObj = obj.z - playerPos.y;
               const dObj = Math.hypot(dxObj, dzObj);
@@ -3443,7 +3443,7 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
             8.0,
             delta,
           );
-          outpost.roverGuideBeam.visible = !sim.commandModeOpen;
+          outpost.roverGuideBeam.visible = !sim.commandModeOpen && sim.activeObjective?.id !== 'free-roam-exploration';
         } else {
           roverController = createInitialRoverController(
             outpost.roverBasePos.x,

@@ -32,6 +32,7 @@ interface WristMapModalProps {
   telemetry: GameplayPoseTelemetry;
   activeMission: MissionDefinition;
   activeObjective?: ActiveObjective;
+  isFreeRoam?: boolean;
   weatherAlertActive: boolean;
   quickMode: boolean;
   roverName: string;
@@ -80,6 +81,7 @@ export function WristMapModal({
   telemetry,
   activeMission,
   activeObjective,
+  isFreeRoam = false,
   weatherAlertActive,
   quickMode,
   roverName,
@@ -325,7 +327,7 @@ export function WristMapModal({
                   })}
 
                   {/* Walkable Path Guide on Map */}
-                  {showGuidancePath && routePointsAttr && (
+                  {!isFreeRoam && showGuidancePath && routePointsAttr && (
                     <polyline
                       points={routePointsAttr}
                       fill="none"
@@ -338,24 +340,26 @@ export function WristMapModal({
                   )}
 
                   {/* Pulsing Active Objective Target Ring */}
-                  <g transform={`translate(${activeGoal.x}, ${activeGoal.z})`}>
-                    <circle
-                      cx={0}
-                      cy={0}
-                      r={2.5}
-                      fill="none"
-                      stroke={activeGoal.colorHex}
-                      strokeWidth={0.35}
-                      strokeDasharray="0.9 0.5"
-                    />
-                    <circle
-                      cx={0}
-                      cy={0}
-                      r={0.85}
-                      fill={activeGoal.colorHex}
-                      opacity={0.9}
-                    />
-                  </g>
+                  {!isFreeRoam && (
+                    <g transform={`translate(${activeGoal.x}, ${activeGoal.z})`}>
+                      <circle
+                        cx={0}
+                        cy={0}
+                        r={2.5}
+                        fill="none"
+                        stroke={activeGoal.colorHex}
+                        strokeWidth={0.35}
+                        strokeDasharray="0.9 0.5"
+                      />
+                      <circle
+                        cx={0}
+                        cy={0}
+                        r={0.85}
+                        fill={activeGoal.colorHex}
+                        opacity={0.9}
+                      />
+                    </g>
+                  )}
 
                   {/* ROVER-7 Live Dot */}
                   <g transform={`translate(${telemetry.roverX}, ${telemetry.roverZ})`}>
@@ -435,28 +439,43 @@ export function WristMapModal({
               {/* Side Legend & Travel ETA Panel */}
               <div className="flex flex-col justify-between gap-3 border-t border-white/10 bg-[#09182D] p-4 lg:border-l lg:border-t-0">
                 <div className="space-y-3">
-                  <div
-                    className={`rounded-xl border p-3 ${
-                      weatherAlertActive
-                        ? 'border-[#22C55E]/70 bg-[#0D2A24]'
-                        : 'border-[#FFB703]/55 bg-[#0E2038]'
-                    }`}
-                  >
-                    <p className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-[#FFB703]">
-                      {weatherAlertActive ? (
-                        <ShieldAlert className="h-3.5 w-3.5 text-[#22C55E]" aria-hidden="true" />
-                      ) : (
-                        <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
-                      )}
-                      <span>{weatherAlertActive ? 'Shelter Target' : 'Active Mission Target'}</span>
-                    </p>
-                    <p className="mt-1 text-sm font-extrabold text-[#F8F9FA]">
-                      {activeGoal.label}
-                    </p>
-                    <p className="mt-1 text-xs font-bold text-[#38BDF8] tabular-nums">
-                      Distance: {goalDistM} m · Walk ~{walkEtaS}s · Lope ~{lopeEtaS}s
-                    </p>
-                  </div>
+                  {isFreeRoam ? (
+                    <div className="rounded-xl border border-[#22C55E]/70 bg-[#0D2A24] p-3">
+                      <p className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-[#22C55E]">
+                        <Compass className="h-3.5 w-3.5 text-[#22C55E]" aria-hidden="true" />
+                        <span>Outpost Status</span>
+                      </p>
+                      <p className="mt-1 text-sm font-extrabold text-[#F8F9FA]">
+                        All Missions Complete!
+                      </p>
+                      <p className="mt-1 text-xs font-semibold text-[#22C55E]/90">
+                        Explore the base and Mars terrain freely, Commander.
+                      </p>
+                    </div>
+                  ) : (
+                    <div
+                      className={`rounded-xl border p-3 ${
+                        weatherAlertActive
+                          ? 'border-[#22C55E]/70 bg-[#0D2A24]'
+                          : 'border-[#FFB703]/55 bg-[#0E2038]'
+                      }`}
+                    >
+                      <p className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-[#FFB703]">
+                        {weatherAlertActive ? (
+                          <ShieldAlert className="h-3.5 w-3.5 text-[#22C55E]" aria-hidden="true" />
+                        ) : (
+                          <MapPin className="h-3.5 w-3.5" aria-hidden="true" />
+                        )}
+                        <span>{weatherAlertActive ? 'Shelter Target' : 'Active Mission Target'}</span>
+                      </p>
+                      <p className="mt-1 text-sm font-extrabold text-[#F8F9FA]">
+                        {activeGoal.label}
+                      </p>
+                      <p className="mt-1 text-xs font-bold text-[#38BDF8] tabular-nums">
+                        Distance: {goalDistM} m · Walk ~{walkEtaS}s · Lope ~{lopeEtaS}s
+                      </p>
+                    </div>
+                  )}
 
                   <div className="space-y-1.5 text-xs">
                     <p className="inline-flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-wide text-[#F8F9FA]/70">

@@ -88,6 +88,19 @@ export function getActiveObjective(
   playerX?: number,
   playerZ?: number,
 ): ActiveObjective {
+  // Free roam / Debrief: Campaign won! No active mission task or waypoint arrow.
+  if (state.phase === 'free-roam' || state.phase === 'debrief') {
+    return {
+      id: 'free-roam-exploration',
+      label: 'Mars Outpost',
+      x: layout.destinationWaypoints.airlock.x,
+      z: layout.destinationWaypoints.airlock.z,
+      ownerScene: 'free-roam',
+      colorHex: '#22C55E',
+      showMarkerAndRing: false,
+      isTank2: false,
+    };
+  }
   // Priority 0: Active localized weather shelter alert
   if (state.activeWeatherEvent) {
     return {

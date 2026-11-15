@@ -560,12 +560,12 @@ export default function App() {
     console.info('[DEBUG OBJECTIVE]', {
       tutorialStep: simState.tutorialStep,
       choresVisited: simState.choresVisited,
-      activeObjectiveId: activeObjective.id,
-      activeObjectiveLabel: activeObjective.label,
-      ownerScene: activeObjective.ownerScene,
-      pos: { x: activeObjective.x, z: activeObjective.z },
-      showMarkerAndRing: activeObjective.showMarkerAndRing,
-      isTank2: activeObjective.isTank2,
+      activeObjectiveId: activeObjective?.id,
+      activeObjectiveLabel: activeObjective?.label,
+      ownerScene: activeObjective?.ownerScene,
+      pos: activeObjective ? { x: activeObjective.x, z: activeObjective.z } : null,
+      showMarkerAndRing: activeObjective?.showMarkerAndRing,
+      isTank2: activeObjective?.isTank2,
       tank2SceneActive: isTank2SceneActive(simState),
       guideEnabled,
       cameraTakeover: false,
@@ -575,13 +575,13 @@ export default function App() {
     gamePhase,
     simState.tutorialStep,
     simState.choresVisited,
-    activeObjective.id,
-    activeObjective.label,
-    activeObjective.ownerScene,
-    activeObjective.x,
-    activeObjective.z,
-    activeObjective.showMarkerAndRing,
-    activeObjective.isTank2,
+    activeObjective?.id,
+    activeObjective?.label,
+    activeObjective?.ownerScene,
+    activeObjective?.x,
+    activeObjective?.z,
+    activeObjective?.showMarkerAndRing,
+    activeObjective?.isTank2,
     simState,
     guideEnabled,
   ]);
@@ -1598,6 +1598,10 @@ export default function App() {
             quickMode={quickMode}
             m5ShelterSecondsLeft={m5ShelterSecondsLeft}
             onOpenDebrief={() => setSimState((prev) => reopenDebrief(prev))}
+            onRestart={() => {
+              soundEngine.playMissionStart();
+              startNewCampaignWithSeed(seed);
+            }}
             moveInputRef={moveInputRef}
             reducedMotion={reducedMotion}
           />
@@ -1784,6 +1788,7 @@ export default function App() {
             telemetry={poseTelemetry}
             activeMission={activeMission}
             activeObjective={activeObjective}
+            isFreeRoam={simState.phase === 'free-roam'}
             weatherAlertActive={Boolean(simState.activeWeatherEvent)}
             quickMode={quickMode}
             roverName={simState.roverName}

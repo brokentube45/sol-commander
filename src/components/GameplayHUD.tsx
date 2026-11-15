@@ -124,6 +124,7 @@ interface GameplayHUDProps {
   quickMode?: boolean;
   m5ShelterSecondsLeft?: number;
   onOpenDebrief?: () => void;
+  onRestart?: () => void;
   moveInputRef: MutableRefObject<GameplayInputState>;
   reducedMotion: boolean;
 }
@@ -172,13 +173,15 @@ function formatCardinal(deg: number): string {
 function TopCompassNav({
   activeGoal,
   activeObjective,
+  isFreeRoam = false,
   guideEnabled = true,
   weatherActive,
   quickMode,
   initialPose,
 }: {
-  activeGoal: { label: string; x: number; z: number; colorHex?: string };
+  activeGoal?: { label: string; x: number; z: number; colorHex?: string };
   activeObjective?: ActiveObjective;
+  isFreeRoam?: boolean;
   guideEnabled?: boolean;
   weatherActive: boolean;
   quickMode: boolean;
@@ -200,13 +203,16 @@ function TopCompassNav({
     return () => window.removeEventListener('mars-pose-telemetry', onTelemetry);
   }, []);
 
-  const waypointDistM = Math.max(0, Math.round(Math.hypot(activeGoal.x - pose.x, activeGoal.z - pose.z)));
+  const waypointDistM = activeGoal
+    ? Math.max(0, Math.round(Math.hypot(activeGoal.x - pose.x, activeGoal.z - pose.z)))
+    : 0;
   const baselineWalkMs =
     PHYSICS_CONSTANTS.MARS_WALK_SPEED_MS * (quickMode ? PHYSICS_CONSTANTS.QUICK_MODE_SPEED_MULT : 1);
   const effectiveSpeedMs = Math.max(pose.speedMs, baselineWalkMs);
   const waypointEtaS = waypointDistM <= 2 ? 0 : Math.max(1, Math.round(waypointDistM / effectiveSpeedMs));
-  const targetBearingDeg =
-    ((Math.atan2(activeGoal.x - pose.x, -(activeGoal.z - pose.z)) * 180) / Math.PI + 360) % 360;
+  const targetBearingDeg = activeGoal
+    ? ((Math.atan2(activeGoal.x - pose.x, -(activeGoal.z - pose.z)) * 180) / Math.PI + 360) % 360
+    : 0;
 
   const wrapRelDeg = (deg: number) => {
     let d = ((deg - pose.headingDeg + 540) % 360) - 180;
@@ -215,13 +221,17 @@ function TopCompassNav({
   };
 
   const goalRelDeg = wrapRelDeg(targetBearingDeg);
-  const offLeft = goalRelDeg < -82;
-  const offRight = goalRelDeg > 82;
+  const offLeft = !isFreeRoam && Boolean(activeGoal) && goalRelDeg < -82;
+  const offRight = !isFreeRoam && Boolean(activeGoal) && goalRelDeg > 82;
   const clampedGoalRelDeg = Math.max(-84, Math.min(84, goalRelDeg));
-  const accentHex = weatherActive ? '#22C55E' : (activeGoal.colorHex ?? '#FFB703');
+  const accentHex = isFreeRoam
+    ? '#22C55E'
+    : weatherActive
+      ? '#22C55E'
+      : (activeGoal?.colorHex ?? '#FFB703');
   const roundedHeading = Math.round(((pose.headingDeg % 360) + 360) % 360) % 360;
 
-  const edgeGuide = activeObjective
+  const edgeGuide = !isFreeRoam && activeObjective
     ? computeScreenEdgeGuide(pose.x, pose.z, pose.headingDeg, activeObjective)
     : null;
 
@@ -282,8 +292,8 @@ function TopCompassNav({
               );
             })}
 
-            {/* Waypoint diamond beacon */}
-            {!offLeft && !offRight && (
+            {/* Waypoint diamond beacon - hidden in free roam */}
+            {!isFreeRoam && activeGoal && !offLeft && !offRight && (
               <div
                 title={`${activeGoal.label} (${Math.round(targetBearingDeg)}°)`}
                 style={{ left: `${50 + (clampedGoalRelDeg / 90) * 50}%` }}
@@ -309,12 +319,12 @@ function TopCompassNav({
           </div>
 
           {/* Off-axis directional cues */}
-          {offLeft && (
+          {!isFreeRoam && offLeft && (
             <div className="absolute left-1.5 top-1/2 -translate-y-1/2 flex items-center text-[10px] font-black" style={{ color: accentHex }}>
               <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
             </div>
           )}
-          {offRight && (
+          {!isFreeRoam && offRight && (
             <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center text-[10px] font-black" style={{ color: accentHex }}>
               <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
             </div>
@@ -331,22 +341,38 @@ function TopCompassNav({
           </div>
 
           <div className="flex items-center gap-1.5 text-[#F8F9FA]">
-            {weatherActive ? (
-              <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" aria-hidden="true" />
-            ) : (
-              <MapPin className="h-3.5 w-3.5" style={{ color: accentHex }} aria-hidden="true" />
-            )}
-            <span className="font-extrabold">{activeGoal.label}</span>
-            <span className="text-white/30" aria-hidden="true">·</span>
-            <span className="text-[#F8F9FA]/85">{waypointDistM} m</span>
-            <span className="text-white/30" aria-hidden="true">·</span>
-            <span style={{ color: accentHex }}>{waypointEtaS}s</span>
+            {isFreeRoam ? (
+              <>
+                <Compass className="h-3.5 w-3.5 text-[#22C55E]" aria-hidden="true" />
+                <span className="font-extrabold text-[#22C55E]">Mars Outpost</span>
+                <span className="text-white/30" aria-hidden="true">·</span>
+                <span className="text-[#F8F9FA]/80">Free Exploration</span>
+              </>
+            ) : weatherActive ? (
+              <>
+                <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" aria-hidden="true" />
+                <span className="font-extrabold">{activeGoal?.label}</span>
+                <span className="text-white/30" aria-hidden="true">·</span>
+                <span className="text-[#F8F9FA]/85">{waypointDistM} m</span>
+                <span className="text-white/30" aria-hidden="true">·</span>
+                <span style={{ color: accentHex }}>{waypointEtaS}s</span>
+              </>
+            ) : activeGoal ? (
+              <>
+                <MapPin className="h-3.5 w-3.5" style={{ color: accentHex }} aria-hidden="true" />
+                <span className="font-extrabold">{activeGoal.label}</span>
+                <span className="text-white/30" aria-hidden="true">·</span>
+                <span className="text-[#F8F9FA]/85">{waypointDistM} m</span>
+                <span className="text-white/30" aria-hidden="true">·</span>
+                <span style={{ color: accentHex }}>{waypointEtaS}s</span>
+              </>
+            ) : null}
           </div>
         </div>
       </div>
 
-      {/* Kid-Friendly Screen-Edge Turning Arrow & Distance Badge (only distance text, hidden when Guide: Off) */}
-      {guideEnabled && edgeGuide && edgeGuide.visible && (
+      {/* Kid-Friendly Screen-Edge Turning Arrow & Distance Badge (only distance text, hidden when Guide: Off or in Free-Roam) */}
+      {!isFreeRoam && guideEnabled && edgeGuide && edgeGuide.visible && (
         <div
           aria-label={`Objective distance ${edgeGuide.distanceLabel}`}
           className={`flex items-center gap-1.5 rounded-full border bg-[#071324]/92 px-3 py-0.5 text-xs font-black tabular-nums shadow-lg ${
@@ -429,6 +455,7 @@ export function GameplayHUD({
   quickMode = false,
   m5ShelterSecondsLeft,
   onOpenDebrief,
+  onRestart,
   moveInputRef,
   reducedMotion,
 }: GameplayHUDProps) {
@@ -519,19 +546,22 @@ export function GameplayHUD({
   };
 
   // Single source of truth for active objective (compass, 3D marker, ring, path guide, wrist map)
-  const activeGoal = activeObjective
-    ? {
-        label: activeObjective.label,
-        x: activeObjective.x,
-        z: activeObjective.z,
-        colorHex: activeObjective.colorHex,
-      }
-    : {
-        label: zoneTitleMap[activeMission.zoneId],
-        x: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].x,
-        z: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].z,
-        colorHex: '#FFB703',
-      };
+  const isFreeRoam = simState.phase === 'free-roam' || simState.phase === 'debrief';
+  const activeGoal = isFreeRoam
+    ? undefined
+    : activeObjective
+      ? {
+          label: activeObjective.label,
+          x: activeObjective.x,
+          z: activeObjective.z,
+          colorHex: activeObjective.colorHex,
+        }
+      : {
+          label: zoneTitleMap[activeMission.zoneId],
+          x: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].x,
+          z: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].z,
+          colorHex: '#FFB703',
+        };
 
   return (
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between gap-2 p-3 sm:p-4 md:grid md:grid-cols-[minmax(0,324px)_minmax(300px,1fr)_minmax(0,296px)] md:grid-rows-[auto_1fr_auto] md:gap-x-3 md:gap-y-2 font-[family-name:var(--font-game)]">
@@ -905,6 +935,7 @@ export function GameplayHUD({
           <TopCompassNav
             activeGoal={activeGoal}
             activeObjective={activeObjective}
+            isFreeRoam={isFreeRoam}
             guideEnabled={guideEnabled}
             weatherActive={Boolean(simState.activeWeatherEvent)}
             quickMode={quickMode}
@@ -1050,19 +1081,34 @@ export function GameplayHUD({
               <p className="mt-1 text-xs text-[#F8F9FA]/85">
                 {simState.roverName}: &ldquo;We did it! Walk anywhere you like, Commander.&rdquo;
               </p>
-              {onOpenDebrief && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    soundEngine.playClick();
-                    onOpenDebrief();
-                  }}
-                  className="mt-2.5 inline-flex min-h-[34px] w-full items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#22C55E] to-[#38BDF8] px-2.5 text-xs font-extrabold text-[#071324] hover:brightness-110 transition-all cursor-pointer"
-                >
-                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>View Debrief &amp; Badges</span>
-                </button>
-              )}
+              <div className="mt-2.5 flex flex-col gap-1.5">
+                {onOpenDebrief && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playClick();
+                      onOpenDebrief();
+                    }}
+                    className="inline-flex min-h-[32px] w-full items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#22C55E] to-[#38BDF8] px-2.5 text-xs font-extrabold text-[#071324] hover:brightness-110 transition-all cursor-pointer"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>View Debrief &amp; Badges</span>
+                  </button>
+                )}
+                {onRestart && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playClick();
+                      onRestart();
+                    }}
+                    className="inline-flex min-h-[30px] w-full items-center justify-center gap-1.5 rounded-lg border border-[#FFB703]/50 bg-[#1B3A5F]/80 px-2.5 text-xs font-bold text-[#FFB703] hover:bg-[#FFB703] hover:text-[#0B1D36] transition-all cursor-pointer"
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Restart Campaign</span>
+                  </button>
+                )}
+              </div>
             </section>
           ) : (
             simState.tutorialStep === 'complete' && (
