@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Bot,
@@ -14,9 +14,11 @@ import {
   Wind,
   ArrowRight,
   HelpCircle,
+  Volume2,
 } from 'lucide-react';
 import { JuniorQuizDef } from '../sim/juniorData';
 import { soundEngine } from '../utils/soundEngine';
+import { narrativeVoice } from '../utils/narrativeVoice';
 
 interface JuniorQuizCardProps {
   quiz: JuniorQuizDef;
@@ -67,14 +69,22 @@ export function JuniorQuizCard({
   const [selected, setSelected] = useState<'A' | 'B' | null>(null);
   const [solved, setSolved] = useState(false);
 
+  // Read quiz question aloud upon opening
+  useEffect(() => {
+    narrativeVoice.speakQuizQuestion(quiz.question, quiz.optionA.label, quiz.optionB.label);
+  }, [quiz]);
+
   const handlePick = (choice: 'A' | 'B') => {
     if (solved) return;
     setSelected(choice);
-    if (choice === quiz.correctOption) {
+    const isCorrect = choice === quiz.correctOption;
+    if (isCorrect) {
       setSolved(true);
       soundEngine.playQuizCorrect();
+      narrativeVoice.speakQuizFeedback(true, quiz.correctFeedback);
     } else {
       soundEngine.playQuizHint();
+      narrativeVoice.speakQuizFeedback(false, quiz.wrongFeedback);
     }
   };
 
@@ -98,9 +108,22 @@ export function JuniorQuizCard({
       />
 
       <div className="p-5 sm:p-6">
-        <div className="flex items-center gap-2 text-xs font-bold text-[#FFB703]">
-          <Bot className="h-4 w-4 text-[#22C55E]" aria-hidden="true" />
-          <span>{roverName} Quick Science Check</span>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-xs font-bold text-[#FFB703]">
+            <Bot className="h-4 w-4 text-[#22C55E]" aria-hidden="true" />
+            <span>{roverName} Quick Science Check</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playClick();
+              narrativeVoice.speakQuizQuestion(quiz.question, quiz.optionA.label, quiz.optionB.label);
+            }}
+            title="Listen to question"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#FFB703]/20 text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] transition-colors cursor-pointer"
+          >
+            <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         </div>
 
         <h3 className="mt-2 font-[family-name:var(--font-display)] text-lg font-extrabold leading-snug text-[#F8F9FA] sm:text-xl">

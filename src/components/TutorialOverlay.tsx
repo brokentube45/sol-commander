@@ -10,6 +10,7 @@ import {
   Footprints,
   ArrowUpFromLine,
   Search,
+  Volume2,
 } from 'lucide-react';
 import {
   JUNIOR_SCIENCE_CARDS,
@@ -22,6 +23,7 @@ import { JuniorQuizCard } from './JuniorQuizCard';
 import { ScienceCardModal } from './ScienceCardModal';
 import { POPUP_TUTORIAL_STEP_PAUSE_MS } from './hudPopupQueue';
 import { soundEngine } from '../utils/soundEngine';
+import { narrativeVoice } from '../utils/narrativeVoice';
 
 interface TutorialOverlayProps {
   tutorialStep: TutorialStepId;
@@ -50,10 +52,11 @@ export function TutorialOverlay({
   const [bannerVisible, setBannerVisible] = useState(true);
   const firstStepRef = useRef(true);
 
-  // Synthesized Rusty beep + 600 ms calm gap when advancing between tutorial instruction banners
+  // Synthesized Rusty beep + Web Speech Voice + 600 ms calm gap when advancing between tutorial instruction banners
   useEffect(() => {
     if (tutorialStep === 'complete') return;
     soundEngine.playRoverBeep(tutorialStep === 'jump-crystals' ? 'happy' : 'ok');
+    narrativeVoice.speakTutorialStep(tutorialStep);
 
     if (firstStepRef.current) {
       firstStepRef.current = false;
@@ -116,9 +119,22 @@ export function TutorialOverlay({
                 Training · Step {stepInfo.stepNumber} of {stepInfo.totalSteps}
               </span>
             </span>
-            <span className="text-[10px] font-semibold text-[#F8F9FA]/50">
-              Hold [X] or Esc → Skip
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playClick();
+                  narrativeVoice.speakTutorialStep(tutorialStep);
+                }}
+                title="Listen to Rusty"
+                className="inline-flex h-5 w-5 items-center justify-center rounded bg-[#22C55E]/20 text-[#22C55E] hover:bg-[#22C55E] hover:text-[#071324] transition-colors cursor-pointer"
+              >
+                <Volume2 className="h-3 w-3" aria-hidden="true" />
+              </button>
+              <span className="text-[10px] font-semibold text-[#F8F9FA]/50">
+                Hold [X] or Esc → Skip
+              </span>
+            </div>
           </div>
 
           <div className="mt-1 flex items-start gap-2.5">

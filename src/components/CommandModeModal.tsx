@@ -30,6 +30,7 @@ import {
   Leaf,
   Snowflake,
   FastForward,
+  Volume2,
 } from 'lucide-react';
 import { CREW_PROFILES, ProvenanceTag } from '../sim/constants';
 import { MissionDefinition, OptionId } from '../sim/missionsData';
@@ -46,6 +47,7 @@ import { MissionMiniActivities } from './MissionMiniActivities';
 import { JuniorQuizCard } from './JuniorQuizCard';
 import { ScienceCardModal } from './ScienceCardModal';
 import { soundEngine } from '../utils/soundEngine';
+import { narrativeVoice } from '../utils/narrativeVoice';
 
 interface CommandModeModalProps {
   open: boolean;
@@ -168,6 +170,17 @@ export function CommandModeModal({
       soundEngine.playBadgeUnlock();
     }
   }, [open, state.phase, state.lastOutcome, mission.id, state.sol]);
+
+  // Read mission decisions aloud when opening the compare choices tab
+  useEffect(() => {
+    if (open && activeTab === 'compare' && juniorMission?.decisions?.length >= 2) {
+      narrativeVoice.speakMissionDecisions(
+        mission.id,
+        juniorMission.decisions[0].title,
+        juniorMission.decisions[1].title,
+      );
+    }
+  }, [open, activeTab, mission.id]);
 
   // Scaled Earth-Mars speed-of-light delay countdown (1 real second = 1 simulated minute)
   useEffect(() => {
@@ -603,13 +616,32 @@ export function CommandModeModal({
                 {activeTab === 'compare' && (
                   <div className="space-y-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-base font-extrabold text-[#FFB703] sm:text-lg">
-                          Choose a safe plan, Commander!
-                        </p>
-                        <p className="text-xs text-[#F8F9FA]/80">
-                          Both choices have pros and trade-offs — there is no free choice on Mars.
-                        </p>
+                      <div className="flex items-center gap-2.5">
+                        <div>
+                          <p className="text-base font-extrabold text-[#FFB703] sm:text-lg">
+                            Choose a safe plan, Commander!
+                          </p>
+                          <p className="text-xs text-[#F8F9FA]/80">
+                            Both choices have pros and trade-offs — there is no free choice on Mars.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            soundEngine.playClick();
+                            if (juniorMission?.decisions?.length >= 2) {
+                              narrativeVoice.speakMissionDecisions(
+                                mission.id,
+                                juniorMission.decisions[0].title,
+                                juniorMission.decisions[1].title,
+                              );
+                            }
+                          }}
+                          title="Listen to choices"
+                          className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#FFB703]/20 text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] transition-colors cursor-pointer"
+                        >
+                          <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
                       </div>
                       <span className="inline-flex items-center gap-1.5 rounded-lg border border-[#38BDF8]/35 bg-[#0D213B] px-3 py-1.5 text-xs font-bold text-[#38BDF8] tabular-nums">
                         Crew Ready: {state.crewSlotsRemaining}/4
@@ -633,6 +665,7 @@ export function CommandModeModal({
                             onMouseEnter={() => soundEngine.playHoverSound()}
                             onClick={() => {
                               soundEngine.playDecisionMade('safe');
+                              narrativeVoice.speakDecisionResolution(mission.id);
                               onSelectOption(jOpt.engineOptionId);
                             }}
                             className="group flex flex-col justify-between rounded-2xl border-2 border-[#FFB703]/45 bg-[#0D213B]/85 p-4 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-[#FFB703] hover:bg-[#132C4E] hover:shadow-[0_0_26px_rgba(255,183,3,0.24)] disabled:opacity-45 cursor-pointer active:scale-[0.99]"
@@ -712,6 +745,7 @@ export function CommandModeModal({
                                 onMouseEnter={() => soundEngine.playHoverSound()}
                                 onClick={() => {
                                   soundEngine.playDecisionMade('safe');
+                                  narrativeVoice.speakDecisionResolution(mission.id);
                                   onSelectOption(opt.id);
                                 }}
                                 className="flex flex-col justify-between rounded-xl border border-white/15 bg-[#0D213B]/65 p-3 text-left hover:border-[#38BDF8] hover:bg-[#132C4E] disabled:opacity-45 cursor-pointer transition-colors active:scale-[0.99]"

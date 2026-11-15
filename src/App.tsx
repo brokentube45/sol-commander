@@ -34,7 +34,7 @@ import {
 } from './data/missionData';
 import { CREW_PROFILES, CrewMemberId, SIM_CONSTANTS, getResourceStatus } from './sim/constants';
 import { CrewInspectCardData } from './sim/crewAndRoverSim';
-import { MissionZoneId, OptionId } from './sim/missionsData';
+import { MISSIONS, MissionZoneId, OptionId } from './sim/missionsData';
 import { GAMEPLAY_LAYOUT } from './sim/outpostLayout';
 import {
   ARCHIVED_DONKI_FALLBACK,
@@ -73,6 +73,7 @@ import {
   computeDiurnalMarsWeather,
 } from './sim/marsPhysics';
 import { OutpostAudioZone, soundEngine } from './utils/soundEngine';
+import { narrativeVoice } from './utils/narrativeVoice';
 import { isDebugModeEnabled } from './debug/diagnostics';
 import { DebugPanel } from './components/DebugPanel';
 
@@ -245,12 +246,27 @@ export default function App() {
     return () => window.clearTimeout(tid);
   }, [gamePhase, controlsStripVisible]);
 
-  // Expand Rusty companion panel automatically once training completes
+  const mission1AlertTriggeredRef = useRef(false);
+
+  // Expand Rusty companion panel automatically & trigger Mission 1 emergency once training completes
   useEffect(() => {
     if (simState.tutorialStep === 'complete') {
       setRustyCollapsed(false);
+      if (!mission1AlertTriggeredRef.current) {
+        mission1AlertTriggeredRef.current = true;
+        soundEngine.playDustDevilAlert();
+        narrativeVoice.speakMissionIncident('m1');
+        enqueueToast({
+          id: `m1-incident-${Date.now()}`,
+          kind: 'hint',
+          priority: 'P3',
+          title: 'CRITICAL ALERT · OXYGEN LEAK',
+          detail: 'Rafi: "Sensors just spiked—Oxygen Tank 2 has a high-pressure fracture! Rush to Tank 2!"',
+          tone: 'critical',
+        });
+      }
     }
-  }, [simState.tutorialStep]);
+  }, [simState.tutorialStep, enqueueToast]);
 
   // Global Gameplay Shortcuts: Esc, C (Quick Actions), H (Toggle Controls Strip), Hold X (Skip Training), Tab (Log), Q (Rover Hint)
   useEffect(() => {
@@ -415,6 +431,7 @@ export default function App() {
       soundEngine.stopWeatherLoop();
       soundEngine.playMissionStart();
       setSeed(nextSeed);
+      mission1AlertTriggeredRef.current = false;
       autoWeatherSolsRef.current.clear();
       lastWeatherIdRef.current = null;
       setWeatherSecondsLeft(0);
@@ -708,6 +725,7 @@ export default function App() {
       const currTutorial = simStateRef.current.tutorialStep;
       if (currTutorial === 'inspect-rover') {
         soundEngine.playInspect();
+        narrativeVoice.speakLandmark(stationId);
         setInspectedCrew(null);
         setInspectedStation(stationId);
         setSimState((prev) => setTutorialStep(prev, 'jump-crystals'));
@@ -715,6 +733,7 @@ export default function App() {
       }
       if (currTutorial !== 'complete') {
         soundEngine.playInspect();
+        narrativeVoice.speakLandmark(stationId);
         setInspectedCrew(null);
         setInspectedStation(stationId);
         return;
@@ -731,6 +750,7 @@ export default function App() {
         return;
       }
       soundEngine.playInspect();
+      narrativeVoice.speakLandmark(stationId);
       setInspectedCrew(null);
       setInspectedStation(stationId);
     },
@@ -743,6 +763,7 @@ export default function App() {
       const mem = simState.crew.find((c) => c.id === crewId);
       if (!prof) return;
       soundEngine.playInspect();
+      narrativeVoice.speakCrewMember(crewId);
       setInspectedStation(null);
       setInspectedCrew({
         id: crewId,
@@ -1279,7 +1300,23 @@ export default function App() {
             onProceedNextCriticalSol={() => {
               soundEngine.playMissionStart();
               setCommandModeOpen(false);
-              setSimState((prev) => proceedToNextCriticalSol(prev));
+              setSimState((prev) => {
+                const next = proceedToNextCriticalSol(prev);
+                const nextMission = MISSIONS[next.missionIndex];
+                if (nextMission) {
+                  soundEngine.playDustDevilAlert();
+                  narrativeVoice.speakMissionIncident(nextMission.id);
+                  enqueueToast({
+                    id: `incident-${nextMission.id}-${Date.now()}`,
+                    kind: 'hint',
+                    priority: 'P3',
+                    title: `SOL ${next.sol} · ${nextMission.title.toUpperCase()}`,
+                    detail: nextMission.subtitle,
+                    tone: 'warn',
+                  });
+                }
+                return next;
+              });
             }}
             onCompleteMiniActivity={(mId) => {
               setSimState((prev) => completeMissionMiniActivity(prev, mId));

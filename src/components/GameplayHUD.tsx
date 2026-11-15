@@ -64,6 +64,7 @@ import { GameplayInputState } from './MarsOutpost3D';
 import { RoverAssistant } from './RoverAssistant';
 import { GameplayPoseTelemetry } from './WristMapModal';
 import { OutpostAudioZone, soundEngine } from '../utils/soundEngine';
+import { narrativeVoice } from '../utils/narrativeVoice';
 import { getAudioZoneMeta } from './QuickActionMenuModal';
 import { HudToastItem } from './hudPopupQueue';
 
@@ -1135,16 +1136,29 @@ export function GameplayHUD({
                       {inspectedCrew.name}
                     </h3>
                   </div>
-                  {onCloseInspectedCrew && (
+                  <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      onClick={onCloseInspectedCrew}
-                      aria-label="Close crew info"
-                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
+                      onClick={() => {
+                        soundEngine.playClick();
+                        narrativeVoice.speakCrewMember(inspectedCrew.id);
+                      }}
+                      title={`Listen to ${inspectedCrew.name}`}
+                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#38BDF8] hover:border-[#38BDF8] hover:text-[#F8F9FA] transition-colors cursor-pointer"
                     >
-                      <X className="h-3.5 w-3.5" aria-hidden="true" />
+                      <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
                     </button>
-                  )}
+                    {onCloseInspectedCrew && (
+                      <button
+                        type="button"
+                        onClick={onCloseInspectedCrew}
+                        aria-label="Close crew info"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
+                      >
+                        <X className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <p className="mt-1 text-[11px] font-bold text-[#FFB703]">
                   Status: {inspectedCrew.modeLabel} · {inspectedCrew.stationLabel}
@@ -1174,14 +1188,27 @@ export function GameplayHUD({
                         {inspectedInfo.name}
                       </h3>
                     </div>
-                    <button
-                      type="button"
-                      onClick={onCloseInspected}
-                      aria-label="Close station info"
-                      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
-                    >
-                      <X className="h-3.5 w-3.5" aria-hidden="true" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          soundEngine.playClick();
+                          narrativeVoice.speakLandmark(inspectedInfo.id);
+                        }}
+                        title={`Listen to info about ${inspectedInfo.name}`}
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#FFB703] hover:border-[#FFB703] hover:text-[#F8F9FA] transition-colors cursor-pointer"
+                      >
+                        <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onCloseInspected}
+                        aria-label="Close station info"
+                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-white/15 bg-[#0E2038] text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
+                      >
+                        <X className="h-3.5 w-3.5" aria-hidden="true" />
+                      </button>
+                    </div>
                   </div>
                   <p className="mt-1.5 text-xs leading-relaxed text-[#F8F9FA]/88">
                     {inspectedInfo.description}

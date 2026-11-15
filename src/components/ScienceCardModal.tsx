@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Sparkles, ChevronDown, ChevronUp, ArrowRight, FastForward } from 'lucide-react';
+import { Sparkles, ChevronDown, ChevronUp, ArrowRight, FastForward, Volume2 } from 'lucide-react';
 import { JuniorScienceCardDef } from '../sim/juniorData';
 import { soundEngine } from '../utils/soundEngine';
+import { narrativeVoice } from '../utils/narrativeVoice';
 
 interface ScienceCardModalProps {
   card: JuniorScienceCardDef;
@@ -23,6 +24,11 @@ export function ScienceCardModal({
 }: ScienceCardModalProps) {
   const [exploreOpen, setExploreOpen] = useState(false);
 
+  // Read science discovery fact aloud
+  useEffect(() => {
+    narrativeVoice.speakScienceCard(card.title, card.oneSentence);
+  }, [card.id, card.title, card.oneSentence]);
+
   const body = (
     <motion.section
       role={inline ? undefined : 'dialog'}
@@ -41,6 +47,17 @@ export function ScienceCardModal({
             <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
             <span>Science Card · {card.when}</span>
           </span>
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playClick();
+              narrativeVoice.speakScienceCard(card.title, card.oneSentence);
+            }}
+            title="Listen to Science Fact"
+            className="inline-flex h-6 w-6 items-center justify-center rounded-lg bg-[#38BDF8]/20 text-[#38BDF8] hover:bg-[#38BDF8] hover:text-[#071324] transition-colors cursor-pointer"
+          >
+            <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+          </button>
         </div>
 
         <h3
