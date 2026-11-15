@@ -268,6 +268,16 @@ export default function App() {
     }
   }, [simState.tutorialStep, enqueueToast]);
 
+  // Ensure the initial welcome guidance is spoken cleanly when entering gameplay
+  useEffect(() => {
+    if (gamePhase === 'gameplay' && simState.tutorialStep === 'move') {
+      const timer = window.setTimeout(() => {
+        narrativeVoice.speakTutorialStep('move');
+      }, 500);
+      return () => window.clearTimeout(timer);
+    }
+  }, [gamePhase, simState.tutorialStep]);
+
   // Global Gameplay Shortcuts: Esc, C (Quick Actions), H (Toggle Controls Strip), Hold X (Skip Training), Tab (Log), Q (Rover Hint)
   useEffect(() => {
     if (gamePhase !== 'gameplay') return;

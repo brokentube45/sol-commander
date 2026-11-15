@@ -1215,15 +1215,21 @@ class SoundEngine {
         if (this.cachedVoice) return this.cachedVoice;
         const voices = window.speechSynthesis.getVoices();
         if (!voices || voices.length === 0) return null;
+        const naturalMale = voices.find(
+          (v) =>
+            v.lang.startsWith('en') &&
+            (v.name.includes('Guy') ||
+              v.name.includes('Christopher') ||
+              v.name.includes('Eric') ||
+              (v.name.includes('Natural') && v.name.includes('Male'))),
+        );
         const natural = voices.find(
           (v) =>
             v.lang.startsWith('en') &&
             (v.name.includes('Natural') ||
               v.name.includes('Neural') ||
-              v.name.includes('Jenny') ||
-              v.name.includes('Aria') ||
-              v.name.includes('Google US English') ||
-              v.name.includes('Samantha')),
+              v.name.includes('Google UK English Male') ||
+              v.name.includes('Google US English')),
         );
         const nonRobotic = voices.find(
           (v) =>
@@ -1231,7 +1237,7 @@ class SoundEngine {
             !v.name.includes('David Desktop') &&
             !v.name.toLowerCase().includes('robot'),
         );
-        this.cachedVoice = natural ?? nonRobotic ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
+        this.cachedVoice = naturalMale ?? natural ?? nonRobotic ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
         return this.cachedVoice;
       };
 

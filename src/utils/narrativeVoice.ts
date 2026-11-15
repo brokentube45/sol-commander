@@ -15,20 +15,64 @@ interface CharacterVoiceProfile {
   gender: 'female' | 'male';
 }
 
+export function cleanTextForSpeech(text: string): string {
+  if (!text) return '';
+  return text
+    // Strip technical provenance and UI brackets
+    .replace(/\[REAL[^\]]*\]/gi, '')
+    .replace(/\[SIM[^\]]*\]/gi, '')
+    .replace(/\[DERIVED[^\]]*\]/gi, '')
+    .replace(/\[[A-Z0-9_\s-]{1,12}\]/gi, '')
+    // Units and symbols to friendly spoken words
+    .replace(/(\d+)\s*m\/s\^?2/gi, '$1 meters per second squared')
+    .replace(/m\/s\^?2/gi, 'meters per second squared')
+    .replace(/(\d+)\s*m\/s²/gi, '$1 meters per second squared')
+    .replace(/m\/s²/gi, 'meters per second squared')
+    .replace(/(\d+)\s*m\/s\b/gi, '$1 meters per second')
+    .replace(/m\/s\b/gi, 'meters per second')
+    .replace(/(\d+)\s*kg\/sol/gi, '$1 kilograms per sol')
+    .replace(/kg\/sol/gi, 'kilograms per sol')
+    .replace(/(\d+)\s*kg\b/gi, '$1 kilograms')
+    .replace(/kg\b/gi, 'kilograms')
+    .replace(/(\d+)\s*km\/h/gi, '$1 kilometers per hour')
+    .replace(/(\d+)\s*km\b/gi, '$1 kilometers')
+    .replace(/(\d+)\s*kPa\b/gi, '$1 kilopascals')
+    .replace(/kPa\b/gi, 'kilopascals')
+    .replace(/(\d+)\s*Pa\b/g, '$1 pascals')
+    .replace(/\bPa\b/g, 'pascals')
+    .replace(/(\d+)\s*mSv\b/gi, '$1 millisieverts')
+    .replace(/mSv\b/gi, 'millisieverts')
+    .replace(/(\d+)\s*kWh\b/gi, '$1 kilowatt hours')
+    .replace(/kWh\b/gi, 'kilowatt hours')
+    .replace(/CO[2₂]/g, 'carbon dioxide')
+    .replace(/O[2₂]/g, 'oxygen')
+    .replace(/H2O|H₂O/g, 'water')
+    .replace(/-(\d+)\s*°?C\b/gi, 'minus $1 degrees')
+    .replace(/(\d+)\s*°?C\b/gi, '$1 degrees Celsius')
+    .replace(/(\d+)%/g, '$1 percent')
+    .replace(/\bWASD\b/g, 'W, A, S, D')
+    .replace(/\bD-Pad\b/gi, 'D-pad')
+    // Punctuation and formatting
+    .replace(/[*_#`~«»]/g, '')
+    .replace(/["“”]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const CHARACTERS: Record<string, CharacterVoiceProfile> = {
   rusty: {
     name: 'Rover Rusty',
     role: 'Companion Guide',
     rate: 0.96, // Clear, friendly cadence for kids
-    pitch: 1.0, // Natural human tone (not robotic or squeaky)
-    gender: 'female', // Prefers Jenny / Aria / Samantha
+    pitch: 1.0, // Natural human tone with emotion (not robotic or squeaky)
+    gender: 'male', // Expressive natural male voice (Guy / Christopher)
   },
   rafi: {
     name: 'Rafi',
     role: 'Life Support Botanist',
     rate: 0.98,
     pitch: 1.0,
-    gender: 'male', // Prefers Guy / Natural Male
+    gender: 'male', // Natural male voice
   },
   amara: {
     name: 'Dr. Amara',
@@ -56,7 +100,7 @@ const CHARACTERS: Record<string, CharacterVoiceProfile> = {
     role: 'Base Computer Alert',
     rate: 0.92,
     pitch: 0.98,
-    gender: 'female',
+    gender: 'male',
   },
 };
 
@@ -77,39 +121,53 @@ class NarrativeVoiceManager {
     const voices = window.speechSynthesis.getVoices();
     if (!voices || voices.length === 0) return null;
 
-    // 1. Natural Neural / Cloud voices (Jenny, Aria, Guy, Google US English, Samantha)
-    const naturalVoices = voices.filter(
-      (v) =>
-        v.lang.startsWith('en') &&
-        (v.name.includes('Natural') ||
-          v.name.includes('Neural') ||
-          v.name.includes('Online (Natural)') ||
-          v.name.includes('Google US English') ||
-          v.name.includes('Samantha')),
-    );
+    if (gender === 'male') {
+      // 1. Natural Neural Expressive Male voices (Microsoft Guy, Christopher, Eric, Ryan)
+      const neuralMale = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('Guy') ||
+            v.name.includes('Christopher') ||
+            v.name.includes('Eric') ||
+            v.name.includes('Ryan') ||
+            (v.name.includes('Natural') && v.name.includes('Male'))),
+      );
+      if (neuralMale) return neuralMale;
 
-    if (naturalVoices.length > 0) {
-      if (gender === 'female') {
-        const female = naturalVoices.find(
-          (v) =>
-            v.name.includes('Jenny') ||
+      // 2. High-quality standard male voices
+      const goodMale = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('Google UK English Male') ||
+            v.name.includes('Google US English') ||
+            v.name.includes('Mark') ||
+            v.name.includes('Daniel') ||
+            v.name.includes('Oliver') ||
+            v.name.includes('George')),
+      );
+      if (goodMale) return goodMale;
+
+      // 3. Any English voice that is not robotic David Desktop
+      const nonDavid = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          !v.name.includes('David Desktop') &&
+          !v.name.toLowerCase().includes('robot'),
+      );
+      if (nonDavid) return nonDavid;
+    } else {
+      // Natural Neural Female voices (Jenny, Aria, Samantha)
+      const neuralFemale = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('Jenny') ||
             v.name.includes('Aria') ||
             v.name.includes('Samantha') ||
-            v.name.includes('Female'),
-        );
-        if (female) return female;
-      } else {
-        const male = naturalVoices.find(
-          (v) => v.name.includes('Guy') || v.name.includes('Male') || v.name.includes('Christopher'),
-        );
-        if (male) return male;
-      }
-      return naturalVoices[0];
-    }
+            (v.name.includes('Natural') && v.name.includes('Female'))),
+      );
+      if (neuralFemale) return neuralFemale;
 
-    // 2. High-quality standard system voices
-    if (gender === 'female') {
-      const preferred = voices.find(
+      const goodFemale = voices.find(
         (v) =>
           v.lang.startsWith('en') &&
           (v.name.includes('Zira') ||
@@ -117,23 +175,12 @@ class NarrativeVoiceManager {
             v.name.includes('Google UK English Female') ||
             v.name.includes('Female')),
       );
-      if (preferred) return preferred;
-    } else {
-      const preferredMale = voices.find(
-        (v) =>
-          v.lang.startsWith('en') &&
-          (v.name.includes('George') ||
-            v.name.includes('Mark') ||
-            v.name.includes('Google UK English Male') ||
-            v.name.includes('Male')),
-      );
-      if (preferredMale) return preferredMale;
+      if (goodFemale) return goodFemale;
     }
 
-    // 3. Fallback: Any English voice, strictly avoiding old robotic David Desktop if another voice exists
     const englishVoices = voices.filter((v) => v.lang.startsWith('en'));
-    const nonRobotic = englishVoices.find((v) => !v.name.includes('David Desktop'));
-    return nonRobotic ?? englishVoices[0] ?? voices[0];
+    const nonDavid = englishVoices.find((v) => !v.name.includes('David Desktop'));
+    return nonDavid ?? englishVoices[0] ?? voices[0];
   }
 
   /**
@@ -143,7 +190,7 @@ class NarrativeVoiceManager {
     characterKey: keyof typeof CHARACTERS,
     text: string,
     dedupKey?: string,
-    minIntervalMs = 4000,
+    minIntervalMs = 2500,
     onEnd?: () => void,
   ): void {
     if (typeof window === 'undefined') return;
@@ -165,12 +212,7 @@ class NarrativeVoiceManager {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
 
-        const cleaned = text
-          .replace(/[*_#`[\]()]/g, '')
-          .replace(/["“”«»]/g, '')
-          .replace(/\s+/g, ' ')
-          .trim();
-
+        const cleaned = cleanTextForSpeech(text);
         if (!cleaned) return;
 
         // If voices aren't loaded in the browser yet, wait for onvoiceschanged
@@ -221,8 +263,9 @@ class NarrativeVoiceManager {
       case 'move':
         this.speakAs(
           'rusty',
-          "Welcome to Mars, Commander! Use your WASD keys or touch D-Pad to take your first steps on the red planet!",
+          "Welcome to Mars, Commander! Use your W, A, S, D keys or touch D-pad to take your first steps on the red planet!",
           'tut-move',
+          1500,
         );
         break;
       case 'inspect-rover':

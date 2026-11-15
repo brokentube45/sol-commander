@@ -53,7 +53,9 @@ export function TutorialOverlay({
   const firstStepRef = useRef(true);
 
   // Synthesized Rusty beep + Web Speech Voice + 600 ms calm gap when advancing between tutorial instruction banners
+  // Only the banner slot orchestrates speech to avoid duplicate mount cancellation
   useEffect(() => {
+    if (renderMode === 'modals-only') return;
     if (tutorialStep === 'complete') return;
     soundEngine.playRoverBeep(tutorialStep === 'jump-crystals' ? 'happy' : 'ok');
 
