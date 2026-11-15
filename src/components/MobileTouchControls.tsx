@@ -1,5 +1,5 @@
 import { MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowUp, Eye, Hand, Zap } from 'lucide-react';
+import { ArrowUp, Eye, Hand } from 'lucide-react';
 import { GameplayInputState } from './MarsOutpost3D';
 import { soundEngine } from '../utils/soundEngine';
 
@@ -28,10 +28,6 @@ export function MobileTouchControls({
   const [knobOffset, setKnobOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const activeTouchIdRef = useRef<number | null>(null);
 
-  // Look touch state
-  const lookTouchIdRef = useRef<number | null>(null);
-  const lastLookPosRef = useRef<{ x: number; y: number } | null>(null);
-
   // Reset inputs on unmount or disable
   useEffect(() => {
     if (disabled && moveInputRef.current) {
@@ -41,8 +37,6 @@ export function MobileTouchControls({
       moveInputRef.current.right = false;
       moveInputRef.current.analogX = 0;
       moveInputRef.current.analogY = 0;
-      moveInputRef.current.lookX = 0;
-      moveInputRef.current.lookY = 0;
     }
   }, [disabled, moveInputRef]);
 
@@ -82,7 +76,7 @@ export function MobileTouchControls({
           setKnobOffset({ x: knobX, y: knobY });
 
           // Normalized analog outputs (-1 to 1)
-          const normX = clampedDist > 0 ? (knobX / maxRadius) : 0;
+          const normX = clampedDist > 0 ? knobX / maxRadius : 0;
           const normY = clampedDist > 0 ? -(knobY / maxRadius) : 0; // inverted for forward = positive Y
 
           if (moveInputRef.current) {
@@ -128,59 +122,6 @@ export function MobileTouchControls({
     [moveInputRef],
   );
 
-  // --- Right-Screen Touch Camera Look Handlers ---
-  const handleLookTouchStart = useCallback(
-    (e: React.TouchEvent<HTMLDivElement>) => {
-      if (disabled) return;
-      const touch = e.changedTouches[0];
-      if (!touch) return;
-      lookTouchIdRef.current = touch.identifier;
-      lastLookPosRef.current = { x: touch.clientX, y: touch.clientY };
-    },
-    [disabled],
-  );
-
-  const handleLookTouchMove = useCallback(
-    (e: React.TouchEvent<HTMLDivElement>) => {
-      if (!lastLookPosRef.current) return;
-
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === lookTouchIdRef.current) {
-          const deltaX = touch.clientX - lastLookPosRef.current.x;
-          const deltaY = touch.clientY - lastLookPosRef.current.y;
-          lastLookPosRef.current = { x: touch.clientX, y: touch.clientY };
-
-          if (moveInputRef.current) {
-            // Sensitivity multiplier for natural smooth rotation
-            moveInputRef.current.lookX = -deltaX * 1.85;
-            moveInputRef.current.lookY = deltaY * 1.65;
-          }
-          break;
-        }
-      }
-    },
-    [moveInputRef],
-  );
-
-  const handleLookTouchEnd = useCallback(
-    (e: React.TouchEvent<HTMLDivElement>) => {
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        const touch = e.changedTouches[i];
-        if (touch.identifier === lookTouchIdRef.current) {
-          lookTouchIdRef.current = null;
-          lastLookPosRef.current = null;
-          if (moveInputRef.current) {
-            moveInputRef.current.lookX = 0;
-            moveInputRef.current.lookY = 0;
-          }
-          break;
-        }
-      }
-    },
-    [moveInputRef],
-  );
-
   const handleJump = useCallback(() => {
     if (disabled || !moveInputRef.current) return;
     soundEngine.playClickConfirm();
@@ -191,17 +132,17 @@ export function MobileTouchControls({
 
   return (
     <div className="pointer-events-none fixed inset-0 z-30 select-none touch-none overflow-hidden font-[family-name:var(--font-game)]">
-      {/* 1. Left Thumb Joystick Area (Lower-Left 45% of Screen) */}
+      {/* 1. Left Thumb Joystick Area (Lower-Left of Screen, bounded to avoid overlapping top HUD) */}
       <div
-        className="pointer-events-auto absolute bottom-0 left-0 h-[65%] w-[48%]"
+        className="pointer-events-auto absolute bottom-0 left-0 h-[55%] w-[45%]"
         onTouchStart={handleJoystickTouchStart}
         onTouchMove={handleJoystickTouchMove}
         onTouchEnd={handleJoystickTouchEnd}
         onTouchCancel={handleJoystickTouchEnd}
       >
-        {/* Resting Virtual Joystick Base indicator (always visible when not dragging) */}
+        {/* Resting Virtual Joystick Base indicator */}
         {!joystickActive && (
-          <div className="absolute bottom-8 left-8 flex h-24 w-24 items-center justify-center rounded-full border-2 border-white/20 bg-white/5 backdrop-blur-xs">
+          <div className="absolute bottom-6 left-6 flex h-24 w-24 items-center justify-center rounded-full border-2 border-white/20 bg-white/5 backdrop-blur-xs">
             <div className="h-10 w-10 rounded-full border border-[#FFB703]/40 bg-[#FFB703]/15 shadow-[0_0_12px_rgba(255,183,3,0.25)]" />
             <span className="absolute -top-5 text-[9px] font-black uppercase tracking-widest text-white/40">
               Move
@@ -230,16 +171,7 @@ export function MobileTouchControls({
         )}
       </div>
 
-      {/* 2. Right Screen Look Swipe Zone (Upper-Right 52% of Screen) */}
-      <div
-        className="pointer-events-auto absolute right-0 top-0 h-[70%] w-[52%]"
-        onTouchStart={handleLookTouchStart}
-        onTouchMove={handleLookTouchMove}
-        onTouchEnd={handleLookTouchEnd}
-        onTouchCancel={handleLookTouchEnd}
-      />
-
-      {/* 3. Bottom-Right Action Cluster (Jump, Interact, View Toggle) */}
+      {/* 2. Bottom-Right Action Cluster (Jump, Interact, View Toggle) */}
       <div className="pointer-events-auto absolute bottom-6 right-6 flex items-end gap-3">
         {/* 1P / 3P View Toggle */}
         <button
@@ -251,7 +183,7 @@ export function MobileTouchControls({
           <Eye className="h-5 w-5 text-[#38BDF8]" />
         </button>
 
-        {/* Action / Interact Button (E equivalent) */}
+        {/* Action / Interact Button (Glowing when in range) */}
         {canInteract && (
           <button
             type="button"
@@ -266,7 +198,7 @@ export function MobileTouchControls({
           </button>
         )}
 
-        {/* Jump Button (Mars suited hop) */}
+        {/* Jump Button (Mars suited hop in 3.73 m/s² gravity) */}
         <button
           type="button"
           onClick={handleJump}

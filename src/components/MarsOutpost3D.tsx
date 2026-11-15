@@ -1642,6 +1642,60 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
     renderer.domElement.addEventListener('wheel', handleWheel, { passive: true });
     window.addEventListener('pointerup', handlePointerUp);
 
+    // Native Mobile 3D Canvas Touch Look & Orbit Handlers
+    let activeTouchLookId: number | null = null;
+    let lastTouchLookX = 0;
+    let lastTouchLookY = 0;
+
+    const handleCanvasTouchStart = (ev: TouchEvent) => {
+      if (gamePhaseRef.current !== 'gameplay') return;
+      if (
+        simVisualsRef.current?.commandModeOpen ||
+        simVisualsRef.current?.mapOpen ||
+        simVisualsRef.current?.quickMenuOpen ||
+        pausedRef.current
+      ) {
+        return;
+      }
+      const touch = ev.changedTouches[0];
+      if (touch && activeTouchLookId === null) {
+        activeTouchLookId = touch.identifier;
+        lastTouchLookX = touch.clientX;
+        lastTouchLookY = touch.clientY;
+      }
+    };
+
+    const handleCanvasTouchMove = (ev: TouchEvent) => {
+      if (activeTouchLookId === null) return;
+      for (let i = 0; i < ev.changedTouches.length; i++) {
+        const touch = ev.changedTouches[i];
+        if (touch.identifier === activeTouchLookId) {
+          const dx = touch.clientX - lastTouchLookX;
+          const dy = touch.clientY - lastTouchLookY;
+          lastTouchLookX = touch.clientX;
+          lastTouchLookY = touch.clientY;
+          applyLookDelta(dx, dy);
+          break;
+        }
+      }
+    };
+
+    const handleCanvasTouchEnd = (ev: TouchEvent) => {
+      if (activeTouchLookId === null) return;
+      for (let i = 0; i < ev.changedTouches.length; i++) {
+        const touch = ev.changedTouches[i];
+        if (touch.identifier === activeTouchLookId) {
+          activeTouchLookId = null;
+          break;
+        }
+      }
+    };
+
+    renderer.domElement.addEventListener('touchstart', handleCanvasTouchStart, { passive: true });
+    renderer.domElement.addEventListener('touchmove', handleCanvasTouchMove, { passive: true });
+    renderer.domElement.addEventListener('touchend', handleCanvasTouchEnd, { passive: true });
+    renderer.domElement.addEventListener('touchcancel', handleCanvasTouchEnd, { passive: true });
+
     let isMobile = width < 768;
     const handleResize = () => {
       if (!container) return;
@@ -3578,6 +3632,10 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
       renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
       renderer.domElement.removeEventListener('wheel', handleWheel);
+      renderer.domElement.removeEventListener('touchstart', handleCanvasTouchStart);
+      renderer.domElement.removeEventListener('touchmove', handleCanvasTouchMove);
+      renderer.domElement.removeEventListener('touchend', handleCanvasTouchEnd);
+      renderer.domElement.removeEventListener('touchcancel', handleCanvasTouchEnd);
       renderer.domElement.removeEventListener('webglcontextlost', handleContextLost);
       renderer.domElement.removeEventListener('webglcontextrestored', handleContextRestored);
 
