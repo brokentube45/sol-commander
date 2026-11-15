@@ -26,6 +26,7 @@ interface PauseMenuModalProps {
   onToggleSound: () => void;
   tutorialActive?: boolean;
   onSkipTutorial?: () => void;
+  onJumpToMission?: (index: number) => void;
   onResume: () => void;
   onQuitToTitle: () => void;
   reducedMotion: boolean;
@@ -49,6 +50,7 @@ export function PauseMenuModal({
   onToggleSound,
   tutorialActive = false,
   onSkipTutorial,
+  onJumpToMission,
   onResume,
   onQuitToTitle,
   reducedMotion,
@@ -213,6 +215,40 @@ export function PauseMenuModal({
                   <span>Sound: {soundEnabled ? 'On' : 'Off'}</span>
                 </button>
               </div>
+
+              {/* Reviewer / Fast-Track Jump to Mission (Judges Shortcut) */}
+              {onJumpToMission && (
+                <div className="rounded-xl border border-[#38BDF8]/40 bg-[#071324]/85 p-3 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-black uppercase tracking-wider text-[#38BDF8]">
+                    <span>Skip Ahead (For Reviewers)</span>
+                    <span className="text-white/50 text-[10px]">Judge Fast-Track</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playClick();
+                        onJumpToMission(4);
+                        onResume();
+                      }}
+                      className="flex min-h-[38px] items-center justify-center rounded-lg border border-[#E85D04]/60 bg-[#E85D04]/20 px-2 text-[11px] font-black text-[#FFB703] hover:bg-[#E85D04] hover:text-[#071324] transition-colors cursor-pointer text-center"
+                    >
+                      ⚡ Jump to Mission 5 (Sol 88)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playClick();
+                        onJumpToMission(0);
+                        onResume();
+                      }}
+                      className="flex min-h-[38px] items-center justify-center rounded-lg border border-[#38BDF8]/50 bg-[#0E2038] px-2 text-[11px] font-bold text-[#38BDF8] hover:bg-[#38BDF8] hover:text-[#071324] transition-colors cursor-pointer text-center"
+                    >
+                      Jump to Mission 1 (Sol 21)
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {tutorialActive && onSkipTutorial && (
                 <button

@@ -67,6 +67,7 @@ import {
   enterFreeRoam,
   getActiveMission,
   getResourceDaysSummary,
+  jumpToMission,
   markDataInspected,
   markMissionControlAsked,
   proceedToNextCriticalSol,
@@ -217,6 +218,25 @@ export default function App() {
     return () => {
       active = false;
     };
+  }, []);
+
+  // Quick Direct Jump via URL: ?mission=5 or ?sol=88 jumps straight to Mission 5 (Sol 88 Solar Storm)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const m = params.get('mission');
+    const s = params.get('sol');
+    if (m === '5' || s === '88') {
+      soundEngine.setEnabled(true);
+      setSoundEnabled(true);
+      setGamePhase('gameplay');
+      setSimState((prev) => jumpToMission(prev, 4));
+    } else if (m === '1' || s === '21') {
+      soundEngine.setEnabled(true);
+      setSoundEnabled(true);
+      setGamePhase('gameplay');
+      setSimState((prev) => jumpToMission(prev, 0));
+    }
   }, []);
 
   useEffect(() => {
@@ -1246,6 +1266,14 @@ export default function App() {
     setSimState((prev) => setTutorialStep(prev, 'complete'));
   }, []);
 
+  const handleJumpToMission = useCallback((targetIndex: number) => {
+    soundEngine.playMissionStart();
+    setInspectedStation(null);
+    setInspectedCrew(null);
+    setSimState((prev) => jumpToMission(prev, targetIndex));
+    narrativeVoice.speakMissionIncident(MISSIONS[targetIndex].id);
+  }, []);
+
   // Derive 3D visuals directly from Simulation State
   const simVisuals: SimVisualState | undefined = useMemo(() => {
     if (gamePhase !== 'gameplay') return undefined;
@@ -1722,6 +1750,7 @@ export default function App() {
             onToggleSound={handleToggleSound}
             tutorialActive={simState.tutorialStep !== 'complete'}
             onSkipTutorial={handleSkipTutorial}
+            onJumpToMission={handleJumpToMission}
             onResume={() => {
               soundEngine.playClick();
               setCursorUnlockedInGame(false);
