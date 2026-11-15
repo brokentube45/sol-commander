@@ -2127,56 +2127,74 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           _tpLook,
         );
 
-        if (t < 6) {
-          // Scene 1 (0-6s): A New World — Wide establishing shot revealing Mars Outpost
-          const u = easeInOutCubic(t / 6);
-          _sceneA.set(-10.5, 6.4, 18.2);
-          _sceneB.set(-4.2, 4.1, 14.4);
-          _lookA.set(4.5, 1.2, -1.8);
-          _lookB.set(4.8, 1.5, -1.2);
+        if (t < 4) {
+          // Shot 1 (0-4s): MARS OUTPOST · SOL 1 — Wide establishing sunrise over outpost
+          const u = easeInOutCubic(t / 4);
+          _sceneA.set(-12.0, 7.2, 18.5);
+          _sceneB.set(-5.5, 5.0, 15.2);
+          _lookA.set(3.5, 1.2, 0.0);
+          _lookB.set(4.0, 1.5, 0.5);
           _targetCam.lerpVectors(_sceneA, _sceneB, isStatic ? 0.5 : u);
           _targetLook.lerpVectors(_lookA, _lookB, isStatic ? 0.5 : u);
           outpost.astroGroup.rotation.y = outpost.astroBasePos.yaw;
-        } else if (t < 13) {
-          // Scene 2 (6-13s): The Outpost — Sweep past Solar Arrays, Habitat & Greenhouse with ROVER-7 moving
-          const u = easeInOutCubic((t - 6) / 7);
-          _sceneA.set(12.2, 3.6, 5.4);
-          _sceneB.set(5.4, 2.75, 6.5);
-          _lookA.set(5.5, 1.5, -2.1);
-          _lookB.set(2.4, 0.95, 2.5);
+        } else if (t < 8) {
+          // Shot 2 (4-8s): HABITAT — your home on Mars
+          const u = easeInOutCubic((t - 4) / 4);
+          _sceneA.set(-2.5, 3.8, 12.0);
+          _sceneB.set(1.5, 3.2, 9.5);
+          _lookA.set(0.0, 2.2, 5.2);
+          _lookB.set(0.0, 2.0, 4.0);
           _targetCam.lerpVectors(_sceneA, _sceneB, isStatic ? 0.5 : u);
           _targetLook.lerpVectors(_lookA, _lookB, isStatic ? 0.5 : u);
           outpost.astroGroup.rotation.y = outpost.astroBasePos.yaw;
-        } else if (t < 21) {
-          // Scene 3 (13-21s): Your Mission — Close-up reveal of Junior Commander face & gold-tinted visor
-          const u = easeInOutCubic((t - 13) / 8);
-          _sceneA.set(4.15, ay + 1.54, 3.85);
-          _sceneB.set(4.72, ay + 1.62, 3.92);
-          _lookA.set(ax, ay + 1.48, az);
-          _lookB.set(ax, ay + 1.52, az);
+        } else if (t < 12) {
+          // Shot 3 (8-12s): GREENHOUSE — fresh food and air
+          const u = easeInOutCubic((t - 8) / 4);
+          _sceneA.set(-6.5, 3.2, 0.0);
+          _sceneB.set(-3.5, 2.6, -3.2);
+          _lookA.set(-5.0, 2.2, -6.8);
+          _lookB.set(-4.5, 2.0, -7.2);
           _targetCam.lerpVectors(_sceneA, _sceneB, isStatic ? 0.5 : u);
           _targetLook.lerpVectors(_lookA, _lookB, isStatic ? 0.5 : u);
           outpost.astroGroup.rotation.y = outpost.astroBasePos.yaw;
-          outpost.astroHeadGroup.rotation.y = Math.sin(u * Math.PI) * 0.14;
-        } else if (t < 29) {
-          // Scene 4 (21-29s): The Challenge — Space-weather shimmer & solar arrays framing the horizon
-          const u = easeInOutCubic((t - 21) / 8);
-          _sceneA.set(6.4, 2.35, 5.4);
-          _sceneB.set(2.8, 3.15, 8.2);
-          _lookA.set(8.8, 2.1, -3.8);
-          _lookB.set(7.4, 2.35, -3.2);
+        } else if (t < 16) {
+          // Shot 4 (12-16s): OXYGEN TANK 2 — keep it safe
+          const u = easeInOutCubic((t - 12) / 4);
+          _sceneA.set(2.8, 2.9, -4.2);
+          _sceneB.set(4.2, 2.4, -6.0);
+          _lookA.set(5.2, 1.8, -8.2);
+          _lookB.set(5.5, 1.8, -8.0);
+          _targetCam.lerpVectors(_sceneA, _sceneB, isStatic ? 0.5 : u);
+          _targetLook.lerpVectors(_lookA, _lookB, isStatic ? 0.5 : u);
+          outpost.astroGroup.rotation.y = outpost.astroBasePos.yaw;
+        } else if (t < 20) {
+          // Shot 5 (16-20s): ROVER RUSTY — your rover friend
+          const u = easeInOutCubic((t - 16) / 4);
+          _sceneA.set(3.2, 2.2, 7.2);
+          _sceneB.set(1.8, 1.8, 8.8);
+          _lookA.set(0.8, 1.0, 10.5);
+          _lookB.set(0.4, 0.9, 10.8);
+          _targetCam.lerpVectors(_sceneA, _sceneB, isStatic ? 0.5 : u);
+          _targetLook.lerpVectors(_lookA, _lookB, isStatic ? 0.5 : u);
+          outpost.astroGroup.rotation.y = outpost.astroBasePos.yaw;
+        } else if (t < 24) {
+          // Shot 6 (20-24s): SOLAR ARRAY — power for the base
+          const u = easeInOutCubic((t - 20) / 4);
+          _sceneA.set(10.5, 3.8, 4.2);
+          _sceneB.set(6.8, 3.0, 2.2);
+          _lookA.set(12.2, 2.2, -3.2);
+          _lookB.set(10.2, 2.0, -4.2);
           _targetCam.lerpVectors(_sceneA, _sceneB, isStatic ? 0.5 : u);
           _targetLook.lerpVectors(_lookA, _lookB, isStatic ? 0.5 : u);
           outpost.astroGroup.rotation.y = outpost.astroBasePos.yaw;
         } else {
-          // Scene 5 (29-34s): Take Command — Seamless swing behind Astronaut into exact third-person gameplay camera
-          const u = easeInOutCubic((t - 29) / 5);
+          // Shot 7 (24-28s): You are Commander Nova — Seamless swing behind Astronaut
+          const u = easeInOutCubic((t - 24) / 4);
           _sceneA.set(2.8, 3.15, 8.2);
           _lookA.set(7.4, 2.35, -3.2);
           _targetCam.lerpVectors(_sceneA, _tpCam, isStatic ? 1 : u);
           _targetLook.lerpVectors(_lookA, _tpLook, isStatic ? 1 : u);
 
-          // Smoothly rotate Astronaut to face into the outpost ready to explore
           const turnDiff = shortestAngleDiff(outpost.astroBasePos.yaw, THIRD_PERSON_INIT_YAW);
           outpost.astroGroup.rotation.y = outpost.astroBasePos.yaw + turnDiff * (isStatic ? 1 : u);
           outpost.astroHeadGroup.rotation.y = THREE.MathUtils.damp(
@@ -2187,7 +2205,7 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           );
         }
 
-        const followRate = t >= 29 ? 10.0 : 5.5;
+        const followRate = t >= 24 ? 10.0 : 5.5;
         currentCamPos.lerp(_targetCam, isStatic ? 1 : Math.min(1, delta * followRate));
         currentLookAt.lerp(_targetLook, isStatic ? 1 : Math.min(1, delta * followRate));
         camera.position.copy(currentCamPos);

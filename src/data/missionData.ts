@@ -112,7 +112,7 @@ export interface CinematicSceneBeat {
   advisory?: string;
 }
 
-export const PROLOGUE_DURATION_SEC = 34;
+export const PROLOGUE_DURATION_SEC = 28;
 
 export const PROLOGUE_SCENES: CinematicSceneBeat[] = [
   {

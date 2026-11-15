@@ -57,8 +57,6 @@ class SoundEngine {
   private roverVoiceEnabled = true;
   private roverHushed = false;
   private speechSpeaking = false;
-  private cachedVoice: SpeechSynthesisVoice | null = null;
-  private speechListenersBound = false;
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
@@ -1156,7 +1154,7 @@ class SoundEngine {
     this.playTone(880, 0.025, 'sine', 0.02, 0);
   }
 
-  // --- Web Speech API TTS for Rover Voice ---
+  // --- Procedural Speaker Chimes & Dialogue Audio (Zero TTS per Space Apps submission rules) ---
 
   public isRoverVoiceEnabled(): boolean {
     return this.roverVoiceEnabled;
@@ -1164,8 +1162,7 @@ class SoundEngine {
 
   public setRoverVoiceEnabled(enabled: boolean): void {
     this.roverVoiceEnabled = enabled;
-    if (!enabled && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    if (!enabled) {
       this.speechSpeaking = false;
     }
   }
@@ -1176,8 +1173,7 @@ class SoundEngine {
 
   public setRoverHushed(hushed: boolean): void {
     this.roverHushed = hushed;
-    if (hushed && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+    if (hushed) {
       this.speechSpeaking = false;
     }
   }
@@ -1186,95 +1182,142 @@ class SoundEngine {
     return this.roverHushed;
   }
 
-  public speakRover(text: string, onEnd?: () => void): void {
-    if (!this.roverVoiceEnabled || this.roverHushed || typeof window === 'undefined') return;
-    if (!('speechSynthesis' in window)) return;
+  /**
+   * Procedural character audio chimes:
+   * Distinct sonic identity for each speaker so kids know who is talking.
+   */
+  public playSpeakerChime(speaker: 'rusty' | 'hab' | 'amara' | 'kenji' | 'lucia' | 'rafi' | 'earth' | 'log' | string): void {
+    if (!this.enabled || this.roverHushed) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.effectsBus) return;
 
     try {
-      window.speechSynthesis.cancel();
-
-      // Strip markdown and clean text
-      const cleaned = text
-        .replace(/[*_#`[\]()]/g, '')
-        .replace(/["“”«»]/g, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-      if (!cleaned) return;
-
-      // Limit to 2 sentences for kids
-      const sentences = cleaned.match(/[^.!?]+[.!?]+/g) ?? [cleaned];
-      const speechText = sentences.slice(0, 2).join(' ').trim();
-
-      const utterance = new SpeechSynthesisUtterance(speechText);
-      utterance.rate = 0.96;   // Clear, friendly pace for kids
-      utterance.pitch = 1.0;   // Natural, warm human tone (not robotic)
-      utterance.volume = Math.max(0.2, this.mixer.master * this.mixer.effects);
-
-      const selectVoice = () => {
-        if (this.cachedVoice) return this.cachedVoice;
-        const voices = window.speechSynthesis.getVoices();
-        if (!voices || voices.length === 0) return null;
-        const naturalMale = voices.find(
-          (v) =>
-            v.lang.startsWith('en') &&
-            (v.name.includes('Guy') ||
-              v.name.includes('Christopher') ||
-              v.name.includes('Eric') ||
-              (v.name.includes('Natural') && v.name.includes('Male'))),
-        );
-        const natural = voices.find(
-          (v) =>
-            v.lang.startsWith('en') &&
-            (v.name.includes('Natural') ||
-              v.name.includes('Neural') ||
-              v.name.includes('Google UK English Male') ||
-              v.name.includes('Google US English')),
-        );
-        const nonRobotic = voices.find(
-          (v) =>
-            v.lang.startsWith('en') &&
-            !v.name.includes('David Desktop') &&
-            !v.name.toLowerCase().includes('robot'),
-        );
-        this.cachedVoice = naturalMale ?? natural ?? nonRobotic ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
-        return this.cachedVoice;
-      };
-
-      const voice = selectVoice();
-      if (voice) utterance.voice = voice;
-
-      if (!this.speechListenersBound && window.speechSynthesis.onvoiceschanged !== undefined) {
-        window.speechSynthesis.onvoiceschanged = () => {
-          this.cachedVoice = null;
-          selectVoice();
-        };
-        this.speechListenersBound = true;
+      const now = ctx.currentTime;
+      switch (speaker) {
+        case 'rusty': {
+          // Rusty: bright friendly two-tone chirp (880 Hz -> 1174 Hz)
+          this.playTone(880, 0.08, 'sine', 0.04, 0);
+          this.playTone(1174, 0.12, 'sine', 0.045, 0.09);
+          break;
+        }
+        case 'hab': {
+          // Hab Computer: calm neutral dual chime (523.25 Hz + 659.25 Hz C5+E5)
+          this.playTone(523.25, 0.22, 'sine', 0.035, 0);
+          this.playTone(659.25, 0.25, 'sine', 0.035, 0.06);
+          break;
+        }
+        case 'amara': {
+          // Dr. Amara: gentle warm bell tone (440 Hz -> 554.37 Hz)
+          this.playTone(440, 0.2, 'triangle', 0.035, 0);
+          this.playTone(554.37, 0.24, 'sine', 0.03, 0.08);
+          break;
+        }
+        case 'kenji': {
+          // Kenji: relaxed lower-mid workshop chime (329.63 Hz -> 392.00 Hz)
+          this.playTone(329.63, 0.18, 'triangle', 0.04, 0);
+          this.playTone(392.0, 0.22, 'triangle', 0.035, 0.08);
+          break;
+        }
+        case 'lucia': {
+          // Lucía: energetic bright crystal chime (659.25 Hz -> 880 Hz)
+          this.playTone(659.25, 0.12, 'sine', 0.04, 0);
+          this.playTone(880, 0.18, 'sine', 0.04, 0.07);
+          break;
+        }
+        case 'rafi': {
+          // Rafi: melodic garden arpeggio (392 Hz -> 493.88 Hz -> 587.33 Hz)
+          this.playTone(392.0, 0.12, 'sine', 0.03, 0);
+          this.playTone(493.88, 0.14, 'sine', 0.03, 0.07);
+          this.playTone(587.33, 0.22, 'sine', 0.035, 0.14);
+          break;
+        }
+        case 'earth': {
+          // Earth: deep space telemetry packet blips (440 Hz short pulses)
+          this.playTone(440, 0.05, 'sine', 0.025, 0);
+          this.playTone(550, 0.05, 'sine', 0.025, 0.08);
+          this.playTone(660, 0.08, 'sine', 0.025, 0.16);
+          break;
+        }
+        case 'log': {
+          // Commander's Log: warm calm keystroke tone
+          this.playTone(587.33, 0.15, 'sine', 0.03, 0);
+          break;
+        }
+        default: {
+          this.playTone(600, 0.12, 'sine', 0.03, 0);
+          break;
+        }
       }
+    } catch {
+      // Safe fallback
+    }
+  }
 
-      this.speechSpeaking = true;
-      utterance.onstart = () => {
-        this.speechSpeaking = true;
-      };
-      utterance.onend = () => {
+  /**
+   * Faint Tank 2 tick-hiss ambient sound for Sol 1 check and Sol 21 leak detection
+   */
+  public playTankTickHiss(): void {
+    if (!this.enabled) return;
+    const ctx = this.ensureContext();
+    if (!ctx || !this.effectsBus) return;
+
+    try {
+      const now = ctx.currentTime;
+      // 1. Subtle metal 'tick' click
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(2400, now);
+      osc.frequency.exponentialRampToValueAtTime(800, now + 0.015);
+      gain.gain.setValueAtTime(0.04, now);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.02);
+      osc.connect(gain);
+      gain.connect(this.effectsBus);
+      osc.start(now);
+      osc.stop(now + 0.025);
+
+      // 2. Whisper hiss puff (filtered white noise)
+      const bufferSize = Math.floor(ctx.sampleRate * 0.35);
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * 0.08;
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(3200, now + 0.02);
+      filter.Q.setValueAtTime(2.5, now + 0.02);
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.0001, now + 0.02);
+      noiseGain.gain.linearRampToValueAtTime(0.035, now + 0.06);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+
+      noise.connect(filter);
+      filter.connect(noiseGain);
+      noiseGain.connect(this.effectsBus);
+      noise.start(now + 0.02);
+      noise.stop(now + 0.38);
+    } catch {
+      // Safe fallback
+    }
+  }
+
+  public speakRover(text: string, onEnd?: () => void): void {
+    if (!this.roverVoiceEnabled || this.roverHushed) return;
+    this.speechSpeaking = true;
+    this.playSpeakerChime('rusty');
+    if (typeof window !== 'undefined') {
+      window.setTimeout(() => {
         this.speechSpeaking = false;
         onEnd?.();
-      };
-      utterance.onerror = () => {
-        this.speechSpeaking = false;
-      };
-
-      window.speechSynthesis.speak(utterance);
-    } catch {
-      this.speechSpeaking = false;
+      }, 900);
     }
   }
 
   public stopSpeaking(): void {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      this.speechSpeaking = false;
-    }
+    this.speechSpeaking = false;
   }
 }
 

@@ -64,7 +64,8 @@ export interface JuniorMissionConfig {
   };
 }
 
-export const BADGE_DISCLAIMER = 'In-game achievement — not an official NASA certificate.';
+export const BADGE_DISCLAIMER =
+  'Junior Mars Commander — In-game achievement, not an official NASA certificate.';
 
 export const JUNIOR_TUTORIAL_STEPS: Record<
   Exclude<TutorialStepId, 'complete'>,
@@ -252,17 +253,17 @@ export const JUNIOR_MISSIONS: Record<MissionId, JuniorMissionConfig> = {
   m1: {
     missionId: 'm1',
     storyKid:
-      'Rafi sees the pressure in Tank 2 dropping! Oxygen is leaking from the tank. Let’s find the leak and keep our crew safe.',
-    simpleSubtitle: 'Mission 1 · Stop the Air Leak',
+      'Notice. Oxygen Tank 2 pressure is dropping slowly. Let us follow the whisper sound and inspect the pipes.',
+    simpleSubtitle: 'Mission 1 · Whisper in Tank 2',
     learnGoal: 'Learn what oxygen is, why Mars air is unsafe, and how a valve stops a leak.',
     quiz: {
       id: 'quiz-m1',
-      question: 'What do astronauts need to breathe?',
-      optionA: { label: 'Water', icon: 'water' },
-      optionB: { label: 'Oxygen', icon: 'oxygen' },
-      correctOption: 'B',
-      correctFeedback: 'Yes! Astronauts need oxygen to breathe.',
-      wrongFeedback: 'Try again! Look at the oxygen tank.',
+      question: 'How can a valve help with a leak?',
+      optionA: { label: 'It can close one part of the pipe', icon: 'valve' },
+      optionB: { label: 'It makes the tank bigger', icon: 'oxygen' },
+      correctOption: 'A',
+      correctFeedback: 'Yes! A valve can close off the leaky part.',
+      wrongFeedback: 'Try again. What does a valve do to a pipe?',
     },
     miniActivity: {
       id: 'pipe-detective',

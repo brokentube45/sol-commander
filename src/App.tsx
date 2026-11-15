@@ -55,6 +55,7 @@ import {
   createInitialCampaignState,
   getActiveMission,
   getResourceDaysSummary,
+  jumpToMission,
   markDataInspected,
   markMissionControlAsked,
   proceedToNextCriticalSol,
@@ -94,6 +95,7 @@ export default function App() {
 
   // Intro Video Playback State
   const [prologuePaused, setProloguePaused] = useState(false);
+  const [prologueElapsed, setPrologueElapsed] = useState(0);
   const [prologueReplayToken, setPrologueReplayToken] = useState(0);
 
   // Campaign Setup & Live NASA DONKI Weather
@@ -260,9 +262,9 @@ export default function App() {
           id: `m1-incident-${Date.now()}`,
           kind: 'hint',
           priority: 'P3',
-          title: 'CRITICAL ALERT · OXYGEN LEAK',
-          detail: 'Rafi: "Sensors just spiked—Oxygen Tank 2 has a high-pressure fracture! Rush to Tank 2!"',
-          tone: 'critical',
+          title: 'NOTICE · OXYGEN TANK 2',
+          detail: 'Rafi: "Notice: Tank 2 pressure is dropping slowly. Can you meet me at the oxygen bay?"',
+          tone: 'warn',
         });
       }
     }
@@ -397,6 +399,7 @@ export default function App() {
     setSelectedLandmark(null);
     setHudHidden(false);
     setProloguePaused(false);
+    setPrologueElapsed(0);
     setPrologueReplayToken((t) => t + 1);
     setGamePhase('prologue');
   };
@@ -412,6 +415,7 @@ export default function App() {
     setLogOpen(false);
     setCreditsOpen(false);
     setProloguePaused(false);
+    setPrologueElapsed(0);
     setPrologueReplayToken((t) => t + 1);
     setGamePhase('prologue');
   };
@@ -1009,7 +1013,7 @@ export default function App() {
           gamePhase={gamePhase}
           selectedLandmark={selectedLandmark}
           onSelectLandmark={handleSelectLandmark}
-          prologueElapsed={0}
+          prologueElapsed={prologueElapsed}
           tutorialStep={simState.tutorialStep === 'move' ? 1 : 'complete'}
           powerAllocation={dynamicPowerAlloc}
           simVisuals={simVisuals}
@@ -1114,6 +1118,7 @@ export default function App() {
           soundEnabled={soundEnabled}
           onToggleSound={handleToggleSound}
           reducedMotion={reducedMotion}
+          onElapsedTick={setPrologueElapsed}
         />
       )}
 
@@ -1394,6 +1399,11 @@ export default function App() {
             onToggleQuality={handleToggleQuality}
             tutorialActive={simState.tutorialStep !== 'complete'}
             onSkipTutorial={handleSkipTutorial}
+            onJumpToMission={(idx) => {
+              setSimState((prev) => jumpToMission(prev, idx));
+              setCommandModeOpen(false);
+              setLogOpen(false);
+            }}
             onResume={() => {
               soundEngine.playClick();
               setPaused(false);

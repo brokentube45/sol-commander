@@ -1094,6 +1094,34 @@ export function proceedToNextCriticalSol(state: CampaignState): CampaignState {
   };
 }
 
+/**
+ * Reviewer shortcut (SOL_COMMANDER_STORY_BIBLE Section 8):
+ * Directly jumps to Mission 1 (Sol 21) or Mission 5 (Sol 88) for judges and reviewers.
+ */
+export function jumpToMission(state: CampaignState, targetIndex: number): CampaignState {
+  const safeIdx = Math.max(0, Math.min(MISSIONS.length - 1, targetIndex));
+  const targetMission = MISSIONS[safeIdx];
+  const dustTau = targetMission.id === 'm2' ? 2.1 : targetMission.id === 'm5' ? 2.8 : 0.8;
+  return {
+    ...state,
+    missionIndex: safeIdx,
+    sol: targetMission.missionSol,
+    phase: 'active-mission',
+    tutorialStep: 'complete',
+    crewSlotsRemaining: SIM_CONSTANTS.CREW_SLOTS_PER_SOL,
+    inspectedDataThisMission: false,
+    mcAskedThisMission: false,
+    mcReplyArrived: false,
+    lastOutcome: null,
+    lastRoutineSummary: null,
+    activeWeatherEvent: null,
+    dustTau,
+    dustFactor: dustFactorFromTau(dustTau),
+    greenhouseFrost: targetMission.id === 'm4',
+    roverActiveHint: null,
+  };
+}
+
 const WEATHER_EVENT_TEMPLATES: Record<
   WeatherEventKind,
   {
@@ -1121,12 +1149,12 @@ const WEATHER_EVENT_TEMPLATES: Record<
       '[REAL] Cold air rushing down Mars crater slopes creates sudden gusts that kick up rusty red dust.',
   },
   'electrostatic-squall': {
-    title: 'Static Dust Squall',
+    title: 'Martian Dust Storm',
     windRange: [26, 36],
     dropRange: [5, 11],
     durationSeconds: 25,
     scienceNote:
-      '[REAL] Swishing Mars dust grains build static electricity that causes radio static and sticks to visors.',
+      '[REAL] Swishing Mars dust grains build static electricity that causes radio crackle and sticks to visors.',
   },
 };
 

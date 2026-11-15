@@ -11,7 +11,8 @@ All runtime visuals, textures, 3D geometries, and audio in this project are eith
 - **Regolith Mechanics**: Sullivan et al., *J. Geophys. Res.* (2011) internal friction angle `30°–37°` (`33°` midpoint).
 - **Live Space Weather Feed**: NASA DONKI API (`FLR` / `SEP` / `CME`) with deterministic archived fallback (`src/sim/nasaData.ts`).
 
-## 2. Procedural 3D Models (`src/three/`)
+## 2. Procedural 3D Models & In-Engine Cinematic (`src/three/`, `src/components/`)
+- In-Engine 28s Real-Time Cinematic (`src/components/PrologueHUD.tsx`, `MarsOutpost3D.tsx`): 100% in-engine Three.js camera trajectory (7 shots: Outpost sunrise, Habitat, Greenhouse, Tank 2, Rover Rusty, Solar Array, Commander Nova handoff) rendered at native display resolution with zero pre-rendered video files.
 - `src/three/marsEnvironment.ts`:
   - Dual-layout heightfield terrain (`SHOWCASE_LAYOUT` `170 m × 170 m` hero crater; `GAMEPLAY_LAYOUT` `180 m × 180 m` with flattened `90 m × 90 m` graded base pad, vertex-blended compacted road shoulders, and outer canyon ridge rings & mesas beyond `48 m`).
   - Martian butterscotch atmospheric sky dome shader + Henyey–Greenstein (`g = 0.7`) blue forward-scattering halo around a `~21 arcmin` solar disc + `dustTau` attenuation.
