@@ -11,6 +11,7 @@ import {
   ArrowUpFromLine,
   Search,
   Volume2,
+  Moon,
 } from 'lucide-react';
 import {
   JUNIOR_SCIENCE_CARDS,
@@ -37,6 +38,13 @@ interface TutorialOverlayProps {
   reducedMotion: boolean;
 }
 
+const ACT1_POSTCARDS = [
+  { sol: 3, text: 'Lucía finds striped rocks near the crater.' },
+  { sol: 8, text: "Rafi's first tomato seed pops up!" },
+  { sol: 12, text: 'Message from Earth: The sky looks calm for now. (Sent 12 minutes ago.)' },
+  { sol: 17, text: 'Kenji checks Tank 2 again. It is a little lower than Tank 1.' },
+];
+
 export function TutorialOverlay({
   tutorialStep,
   crystalsCollected,
@@ -49,8 +57,24 @@ export function TutorialOverlay({
   reducedMotion,
 }: TutorialOverlayProps) {
   const [airCardStage, setAirCardStage] = useState<'none' | 'air' | 'sol'>('none');
+  const [act1Phase, setAct1Phase] = useState<'normal' | 'sunset-log' | 'postcards'>('normal');
+  const [postcardIdx, setPostcardIdx] = useState(0);
   const [bannerVisible, setBannerVisible] = useState(true);
   const firstStepRef = useRef(true);
+
+  // Time-lapse Sols 2-20: 4 seconds each, auto-advance or skip (Bible Section 5.1)
+  useEffect(() => {
+    if (act1Phase !== 'postcards') return;
+    const timer = window.setTimeout(() => {
+      if (postcardIdx < ACT1_POSTCARDS.length - 1) {
+        setPostcardIdx((prev) => prev + 1);
+      } else {
+        soundEngine.playMissionStart();
+        onAdvanceStep('complete');
+      }
+    }, reducedMotion ? 2500 : 4000);
+    return () => window.clearTimeout(timer);
+  }, [act1Phase, postcardIdx, onAdvanceStep, reducedMotion]);
 
   // Synthesized Rusty beep + Web Speech Voice + 600 ms calm gap when advancing between tutorial instruction banners
   // Only the banner slot orchestrates speech to avoid duplicate mount cancellation
@@ -239,8 +263,8 @@ export function TutorialOverlay({
         />
       )}
 
-      {/* Step 6: Crew & Habitat Home Intro -> Unlock Mission 1 */}
-      {showModalSlot && tutorialStep === 'crew-map-intro' && (
+      {/* Step 6: Crew & Habitat Home Intro */}
+      {showModalSlot && tutorialStep === 'crew-map-intro' && act1Phase === 'normal' && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#040A15]/72 p-4 backdrop-blur-[2px]">
           <motion.section
             role="dialog"
@@ -292,11 +316,10 @@ export function TutorialOverlay({
                 ))}
               </div>
 
-              <div className="mt-4 flex items-center gap-2 rounded-xl border border-[#FFB703]/45 bg-[#1B3A5F]/65 px-3.5 py-2.5 text-xs font-bold text-[#FFB703]">
-                <Wind className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <div className="mt-4 flex items-center gap-2 rounded-xl border border-[#22C55E]/45 bg-[#1B3A5F]/65 px-3.5 py-2.5 text-xs font-bold text-[#22C55E]">
+                <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
                 <span>
-                  Training complete! Wait—Rafi just spotted an alert at Oxygen Tank 2. Let&apos;s
-                  start Mission 1!
+                  {roverName}: &ldquo;Great job! You learned the controls and checked our systems. Let&apos;s watch the Sol 1 sunset!&rdquo;
                 </span>
               </div>
 
@@ -316,13 +339,150 @@ export function TutorialOverlay({
                 <button
                   type="button"
                   onClick={() => {
-                    soundEngine.playMissionStart();
-                    onAdvanceStep('complete');
+                    soundEngine.playClick();
+                    soundEngine.playSpeakerChime('rusty');
+                    setAct1Phase('sunset-log');
                   }}
                   className="inline-flex min-h-[46px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-5 py-2 text-xs font-extrabold text-[#0B1D36] shadow-xl transition-transform hover:scale-[1.02]"
                 >
-                  <Users className="h-4 w-4" aria-hidden="true" />
-                  <span>Start Mission 1: Whisper in Tank 2</span>
+                  <Moon className="h-4 w-4" aria-hidden="true" />
+                  <span>Sol 1 Sunset Log</span>
+                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </div>
+            </div>
+          </motion.section>
+        </div>
+      )}
+
+      {/* Step 7: Sol 1 Sunset Log Modal (Bible Section 5.1 / S1.7) */}
+      {showModalSlot && tutorialStep === 'crew-map-intro' && act1Phase === 'sunset-log' && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#040A15]/78 p-4 backdrop-blur-[3px]">
+          <motion.section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="sunset-log-title"
+            initial={reducedMotion ? false : { opacity: 0, y: 14, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.25 }}
+            className="w-full max-w-lg overflow-hidden rounded-2xl border border-[#38BDF8]/60 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_36px_rgba(56,189,248,0.25)] font-[family-name:var(--font-game)]"
+          >
+            <div className="h-1 w-full bg-gradient-to-r from-[#38BDF8] via-[#FFB703] to-[#E85D04]" />
+            <div className="p-6">
+              <div className="flex items-center justify-between text-xs font-extrabold text-[#38BDF8]">
+                <span className="flex items-center gap-1.5 uppercase tracking-wider">
+                  <Moon className="h-4 w-4" aria-hidden="true" />
+                  <span id="sunset-log-title">Sol 01 · Sunset Log</span>
+                </span>
+                <span className="text-[11px] text-[#F8F9FA]/60">Ares Crater Outpost</span>
+              </div>
+
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-[#22C55E]/40 bg-[#0D213B]/80 px-3.5 py-2 text-xs font-bold text-[#22C55E]">
+                <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>{roverName}: &ldquo;This is our home. Everyone is safe inside.&rdquo;</span>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-white/10 bg-[#040A15]/80 p-4">
+                <p className="text-xs uppercase tracking-wider text-[#FFB703] font-bold">Commander&apos;s Evening Log</p>
+                <p className="mt-1.5 text-sm sm:text-base italic leading-relaxed text-[#F8F9FA]">
+                  &ldquo;Sol 1. We are home. The crew is great. Tank 2 made a funny little noise.&rdquo;
+                </p>
+              </div>
+
+              <p className="mt-3 text-xs leading-relaxed text-[#F8F9FA]/70">
+                The sky turns a calm Martian blue around the setting Sun. Time to rest before routine outpost maintenance.
+              </p>
+
+              <div className="mt-5 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    soundEngine.playSpeakerChime('log');
+                    setAct1Phase('postcards');
+                    setPostcardIdx(0);
+                  }}
+                  className="inline-flex min-h-[46px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#1D4ED8] px-6 py-2.5 font-[family-name:var(--font-display)] text-xs font-extrabold tracking-wider text-white shadow-xl transition-transform hover:scale-[1.02]"
+                >
+                  <Moon className="h-4 w-4" aria-hidden="true" />
+                  <span>SLEEP (TIME-LAPSE SOLS 2–20)</span>
+                </button>
+              </div>
+            </div>
+          </motion.section>
+        </div>
+      )}
+
+      {/* Step 8: Sols 2-20 Time-Lapse Postcards (Bible Section 5.1 / S1.8) */}
+      {showModalSlot && tutorialStep === 'crew-map-intro' && act1Phase === 'postcards' && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#040A15]/85 p-4 backdrop-blur-[3px]">
+          <motion.section
+            key={postcardIdx}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="postcard-title"
+            initial={reducedMotion ? false : { opacity: 0, scale: 0.96 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={reducedMotion ? undefined : { opacity: 0, scale: 1.04 }}
+            transition={{ duration: 0.3 }}
+            className="w-full max-w-lg overflow-hidden rounded-2xl border border-[#FFB703]/60 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_42px_rgba(255,183,3,0.28)] font-[family-name:var(--font-game)]"
+          >
+            <div className="h-1 w-full bg-gradient-to-r from-[#E85D04] via-[#FFB703] to-[#22C55E]" />
+            <div className="p-6">
+              <div className="flex items-center justify-between text-xs font-bold text-[#FFB703]">
+                <span className="flex items-center gap-1.5 uppercase tracking-wider" id="postcard-title">
+                  <Sparkles className="h-4 w-4" aria-hidden="true" />
+                  <span>Sol {ACT1_POSTCARDS[postcardIdx].sol} Postcard</span>
+                </span>
+                <span className="text-[11px] text-[#F8F9FA]/60">
+                  {postcardIdx + 1} of {ACT1_POSTCARDS.length}
+                </span>
+              </div>
+
+              <div className="mt-4 rounded-xl border border-white/10 bg-[#040A15]/85 p-5 text-center">
+                <p className="font-[family-name:var(--font-display)] text-lg sm:text-xl font-extrabold text-[#F8F9FA] leading-snug">
+                  &ldquo;{ACT1_POSTCARDS[postcardIdx].text}&rdquo;
+                </p>
+              </div>
+
+              <div className="mt-4 flex items-center justify-center gap-1.5">
+                {ACT1_POSTCARDS.map((_, i) => (
+                  <span
+                    key={i}
+                    className={`h-2 rounded-full transition-all ${
+                      i === postcardIdx ? 'w-6 bg-[#FFB703]' : 'w-2 bg-white/20'
+                    }`}
+                  />
+                ))}
+              </div>
+
+              <div className="mt-5 flex items-center justify-between gap-3 border-t border-white/10 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    soundEngine.playMissionStart();
+                    onAdvanceStep('complete');
+                  }}
+                  className="min-h-[40px] cursor-pointer rounded-xl border border-white/20 bg-[#1B3A5F]/60 px-4 text-xs font-bold text-[#F8F9FA]/80 hover:border-[#FFB703]"
+                >
+                  Skip Time-Lapse
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    if (postcardIdx < ACT1_POSTCARDS.length - 1) {
+                      setPostcardIdx(postcardIdx + 1);
+                    } else {
+                      soundEngine.playMissionStart();
+                      onAdvanceStep('complete');
+                    }
+                  }}
+                  className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-5 py-2 font-[family-name:var(--font-display)] text-xs font-extrabold text-[#0B1D36] shadow-xl hover:scale-[1.02]"
+                >
+                  <span>{postcardIdx < ACT1_POSTCARDS.length - 1 ? 'Next Sol' : 'Start Sol 21'}</span>
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </button>
               </div>

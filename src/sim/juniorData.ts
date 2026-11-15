@@ -196,7 +196,7 @@ export const JUNIOR_SCIENCE_CARDS: Record<string, JuniorScienceCardDef> = {
   m1: {
     id: 'm1',
     when: 'Mission 1 · Sol 21',
-    title: 'Isolation Valves',
+    title: 'Shut-off Valves',
     oneSentence: 'A valve can close one part of a pipe system. This helps stop a leak.',
     grownUpInfo:
       'Engineers divide spacecraft and Mars tanks into separate sections with shut-off valves so one small leak never drains the whole habitat.',
@@ -295,7 +295,7 @@ export const JUNIOR_MISSIONS: Record<MissionId, JuniorMissionConfig> = {
       id: 'm1',
       title: 'Oxygen Guardian',
       icon: 'oxygen',
-      journalFact: 'Mars air cannot be breathed directly; isolation valves stop pipe leaks fast.',
+      journalFact: 'Mars air cannot be breathed directly; shut-off valves stop pipe leaks fast.',
       disclaimer: BADGE_DISCLAIMER,
     },
   },

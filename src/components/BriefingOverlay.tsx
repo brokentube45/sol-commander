@@ -11,6 +11,7 @@ import {
   Rocket,
   FastForward,
   Compass,
+  Radio,
 } from 'lucide-react';
 import { COMMANDER_CALLSIGNS } from '../data/missionData';
 import { CREW_PROFILES } from '../sim/constants';
@@ -177,6 +178,22 @@ export function BriefingOverlay({
                   Your ship touched down safely. Explore the base, discover real Mars science, and
                   keep your crew safe across 88 sols!
                 </motion.p>
+
+                {/* Message from Earth (Bible Section 4.1 / 5.0) */}
+                <motion.div
+                  initial={reducedMotion ? false : { opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.45, delay: 0.36 }}
+                  className="mt-3.5 rounded-xl border border-[#38BDF8]/40 bg-[#0C4A6E]/35 p-3 text-xs leading-relaxed text-[#E0F2FE]"
+                >
+                  <div className="flex items-center gap-1.5 font-bold text-[#38BDF8] text-[11px] uppercase tracking-wider">
+                    <Radio className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Message from Earth · Mission Control</span>
+                  </div>
+                  <p className="mt-1 text-xs sm:text-sm italic font-medium text-[#F0F9FF]">
+                    &ldquo;Welcome to Mars, Commander. Take care of each other. We believe in you.&rdquo;
+                  </p>
+                </motion.div>
               </div>
 
               {/* Right: Animated Rusty Rover Companion Card */}

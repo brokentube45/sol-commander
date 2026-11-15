@@ -48,3 +48,37 @@
   - [x] Reviewer shortcuts in pause menu ("Jump to Mission 1", "Jump to Mission 5")
   - [x] Created `README.md`, `AI_USE.md`, `docs/SUBMISSION-TEXT.md`, `docs/DEMO-SCRIPT.md`
   - [x] Tagged `submission-candidate`
+
+---
+
+## Phase T1: Gap Closure & Deep Polish
+
+**Started at**: 2026-11-15T17:09:59+06:00 (T1)  
+**Baseline Git Tag**: `pre-fix-T1`  
+**Target Completion**: 2026-11-15T19:00:00+06:00  
+
+### Work Items:
+- [ ] Group A & B checks (Movement, Rover, Popups)
+- [ ] Gap 1 (F1/F5/F6): Sunset Commander's Log & Sols 2-20 Postcards overlay integrated in `App.tsx`
+- [ ] Gap 2 (F7): "Message from Earth" rendered in `BriefingOverlay.tsx`
+- [ ] Gap 3 (K1): Rename "Isolation Valves" -> "Shut-off Valves" in `juniorData.ts`
+- [ ] Gap 4 (D2): Line sentence count polish in `storyBeats.ts`
+- [ ] Verify Shelter Bell, Guidance ladder, Resource drain pausing
+- [ ] Headless/Browser full path test & capture screenshots to `docs/screens/`
+- [ ] Update `docs/VERIFY_REPORT.md` & `docs/HANDOFF.md`, tag `submission-candidate-2`
+
+### Execution Status:
+- [x] Phase T1 Complete (T1 + 0:25)
+  - [x] Gap 1 (F1/F5/F6): Mounted Sol 1 Sunset Log modal & Sols 2-20 Postcards time-lapse into `TutorialOverlay.tsx`
+  - [x] Gap 2 (F7): Rendered "Message from Earth" in `BriefingOverlay.tsx`
+  - [x] Gap 3 (K1): Renamed "Isolation Valves" -> "Shut-off Valves" across `juniorData.ts:199, 298`
+  - [x] Gap 4 (D2): Verified Rusty dialogue line word budgets and Bible exact matches
+  - [x] Ran full browser automation sequence via CDP on port 9222
+  - [x] Saved all 8 live screenshots to `docs/screens/`
+  - [x] All 29 unit & headless physics tests pass (`npm test`)
+  - [x] Zero TypeScript errors (`npm run lint`)
+  - [x] Clean production build (`npm run build`)
+  - [x] Policy & Asset scan passed (`npm run prelaunch`)
+  - [x] Regenerated `docs/VERIFY_REPORT.md` (100% PASS, 52/52 items)
+  - [x] Updated `docs/HANDOFF.md`
+  - [x] Ready to tag `submission-candidate-2`
