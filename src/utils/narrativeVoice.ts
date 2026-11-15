@@ -5,61 +5,136 @@ import { soundEngine } from './soundEngine';
 
 /**
  * Character Audio Profiles for Web Speech API
+ * Clean, warm, human-like voice settings with natural pitch
  */
 interface CharacterVoiceProfile {
   name: string;
   role: string;
   rate: number;
   pitch: number;
+  gender: 'female' | 'male';
 }
 
 const CHARACTERS: Record<string, CharacterVoiceProfile> = {
   rusty: {
     name: 'Rover Rusty',
-    role: 'Companion AI',
-    rate: 0.96,
-    pitch: 1.18, // Cheerful, slightly robotic companion pitch
+    role: 'Companion Guide',
+    rate: 0.96, // Clear, friendly cadence for kids
+    pitch: 1.0, // Natural human tone (not robotic or squeaky)
+    gender: 'female', // Prefers Jenny / Aria / Samantha
   },
   rafi: {
     name: 'Rafi',
     role: 'Life Support Botanist',
-    rate: 1.02,
-    pitch: 1.05, // Expressive, energetic
+    rate: 0.98,
+    pitch: 1.0,
+    gender: 'male', // Prefers Guy / Natural Male
   },
   amara: {
     name: 'Dr. Amara',
     role: 'Flight Surgeon',
-    rate: 0.94,
-    pitch: 1.0, // Calm, reassuring medical tone
+    rate: 0.95,
+    pitch: 1.0,
+    gender: 'female',
   },
   kenji: {
     name: 'Kenji',
     role: 'Chief Engineer',
     rate: 0.98,
-    pitch: 0.92, // Practical, steady engineer
+    pitch: 0.98,
+    gender: 'male',
   },
   lucia: {
     name: 'Lucía',
     role: 'Lead Geologist',
-    rate: 1.0,
-    pitch: 1.1, // Enthusiastic explorer
+    rate: 0.98,
+    pitch: 1.0,
+    gender: 'female',
   },
   capcom: {
     name: 'Outpost AI',
     role: 'Base Computer Alert',
-    rate: 0.9,
-    pitch: 0.85, // Authoritative, deep alarm tone
+    rate: 0.92,
+    pitch: 0.98,
+    gender: 'female',
   },
 };
 
 /**
  * Narrative Voice Manager
  * Orchestrates all real-time voiceovers for missions, quizzes, landmarks,
- * crew members, and weather emergencies.
+ * crew members, and weather emergencies using natural human voices.
  */
 class NarrativeVoiceManager {
   private lastSpokenKey = '';
   private lastSpokenAt = 0;
+
+  /**
+   * Select best natural, human-sounding neural voice for kids
+   */
+  private getBestNaturalVoice(gender: 'female' | 'male'): SpeechSynthesisVoice | null {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    if (!voices || voices.length === 0) return null;
+
+    // 1. Natural Neural / Cloud voices (Jenny, Aria, Guy, Google US English, Samantha)
+    const naturalVoices = voices.filter(
+      (v) =>
+        v.lang.startsWith('en') &&
+        (v.name.includes('Natural') ||
+          v.name.includes('Neural') ||
+          v.name.includes('Online (Natural)') ||
+          v.name.includes('Google US English') ||
+          v.name.includes('Samantha')),
+    );
+
+    if (naturalVoices.length > 0) {
+      if (gender === 'female') {
+        const female = naturalVoices.find(
+          (v) =>
+            v.name.includes('Jenny') ||
+            v.name.includes('Aria') ||
+            v.name.includes('Samantha') ||
+            v.name.includes('Female'),
+        );
+        if (female) return female;
+      } else {
+        const male = naturalVoices.find(
+          (v) => v.name.includes('Guy') || v.name.includes('Male') || v.name.includes('Christopher'),
+        );
+        if (male) return male;
+      }
+      return naturalVoices[0];
+    }
+
+    // 2. High-quality standard system voices
+    if (gender === 'female') {
+      const preferred = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('Zira') ||
+            v.name.includes('Victoria') ||
+            v.name.includes('Google UK English Female') ||
+            v.name.includes('Female')),
+      );
+      if (preferred) return preferred;
+    } else {
+      const preferredMale = voices.find(
+        (v) =>
+          v.lang.startsWith('en') &&
+          (v.name.includes('George') ||
+            v.name.includes('Mark') ||
+            v.name.includes('Google UK English Male') ||
+            v.name.includes('Male')),
+      );
+      if (preferredMale) return preferredMale;
+    }
+
+    // 3. Fallback: Any English voice, strictly avoiding old robotic David Desktop if another voice exists
+    const englishVoices = voices.filter((v) => v.lang.startsWith('en'));
+    const nonRobotic = englishVoices.find((v) => !v.name.includes('David Desktop'));
+    return nonRobotic ?? englishVoices[0] ?? voices[0];
+  }
 
   /**
    * Play speech using character profile and deduplication
@@ -68,7 +143,7 @@ class NarrativeVoiceManager {
     characterKey: keyof typeof CHARACTERS,
     text: string,
     dedupKey?: string,
-    minIntervalMs = 6000,
+    minIntervalMs = 4000,
     onEnd?: () => void,
   ): void {
     if (typeof window === 'undefined') return;
@@ -85,7 +160,7 @@ class NarrativeVoiceManager {
 
     const char = CHARACTERS[characterKey] ?? CHARACTERS.rusty;
 
-    // Use Web Speech API directly with character pitch/rate tuning
+    // Use Web Speech API directly with natural pitch/rate tuning
     try {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -98,27 +173,31 @@ class NarrativeVoiceManager {
 
         if (!cleaned) return;
 
+        // If voices aren't loaded in the browser yet, wait for onvoiceschanged
+        const voices = window.speechSynthesis.getVoices();
+        if (!voices || voices.length === 0) {
+          const onVoicesReady = () => {
+            window.speechSynthesis.onvoiceschanged = null;
+            this.speakAs(characterKey, text, dedupKey, minIntervalMs, onEnd);
+          };
+          window.speechSynthesis.onvoiceschanged = onVoicesReady;
+          window.setTimeout(() => {
+            if (window.speechSynthesis.onvoiceschanged === onVoicesReady) {
+              window.speechSynthesis.onvoiceschanged = null;
+              this.speakAs(characterKey, text, dedupKey, minIntervalMs, onEnd);
+            }
+          }, 250);
+          return;
+        }
+
         const utterance = new SpeechSynthesisUtterance(cleaned);
         utterance.rate = char.rate;
         utterance.pitch = char.pitch;
         utterance.volume = Math.max(0.2, soundEngine.getMixerLevels().master);
 
-        const voices = window.speechSynthesis.getVoices();
-        if (voices && voices.length > 0) {
-          // Select preferred English voice
-          const preferred =
-            characterKey === 'kenji' || characterKey === 'capcom'
-              ? voices.find((v) => v.lang.startsWith('en') && (v.name.includes('David') || v.name.includes('Male')))
-              : voices.find(
-                  (v) =>
-                    v.lang.startsWith('en') &&
-                    (v.name.includes('Natural') ||
-                      v.name.includes('Zira') ||
-                      v.name.includes('Samantha') ||
-                      v.name.includes('Google UK English Female') ||
-                      v.name.includes('Female')),
-                );
-          utterance.voice = preferred ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
+        const voice = this.getBestNaturalVoice(char.gender);
+        if (voice) {
+          utterance.voice = voice;
         }
 
         utterance.onend = () => {

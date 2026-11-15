@@ -1207,24 +1207,31 @@ class SoundEngine {
       const speechText = sentences.slice(0, 2).join(' ').trim();
 
       const utterance = new SpeechSynthesisUtterance(speechText);
-      utterance.rate = 0.95;   // Clear, friendly pace for kids
-      utterance.pitch = 1.15;  // Friendly, slightly bright robotic companion pitch
-      utterance.volume = Math.max(0.15, this.mixer.master * this.mixer.effects);
+      utterance.rate = 0.96;   // Clear, friendly pace for kids
+      utterance.pitch = 1.0;   // Natural, warm human tone (not robotic)
+      utterance.volume = Math.max(0.2, this.mixer.master * this.mixer.effects);
 
       const selectVoice = () => {
         if (this.cachedVoice) return this.cachedVoice;
         const voices = window.speechSynthesis.getVoices();
         if (!voices || voices.length === 0) return null;
-        const preferred = voices.find(
+        const natural = voices.find(
           (v) =>
             v.lang.startsWith('en') &&
             (v.name.includes('Natural') ||
-              v.name.includes('Zira') ||
-              v.name.includes('Samantha') ||
-              v.name.includes('Google UK English Female') ||
-              v.name.includes('Female')),
+              v.name.includes('Neural') ||
+              v.name.includes('Jenny') ||
+              v.name.includes('Aria') ||
+              v.name.includes('Google US English') ||
+              v.name.includes('Samantha')),
         );
-        this.cachedVoice = preferred ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
+        const nonRobotic = voices.find(
+          (v) =>
+            v.lang.startsWith('en') &&
+            !v.name.includes('David Desktop') &&
+            !v.name.toLowerCase().includes('robot'),
+        );
+        this.cachedVoice = natural ?? nonRobotic ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
         return this.cachedVoice;
       };
 

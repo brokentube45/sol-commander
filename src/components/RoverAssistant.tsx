@@ -145,7 +145,9 @@ export function RoverAssistant({
   const [isSpeaking, setIsSpeaking] = useState(false);
 
   // When speech starts/stops or new text arrives, synchronize voice
+  // During training, TutorialOverlay orchestrates step instructions so RoverAssistant does not clash on mount
   useEffect(() => {
+    if (!showHintButtons) return;
     const textToSpeak = activeHint ?? lastLine;
     if (!hushed && textToSpeak) {
       soundEngine.speakRover(textToSpeak, () => setIsSpeaking(false));
@@ -155,7 +157,7 @@ export function RoverAssistant({
       soundEngine.stopSpeaking();
       setIsSpeaking(false);
     };
-  }, [activeHint, lastLine, hushed]);
+  }, [activeHint, lastLine, hushed, showHintButtons]);
 
   const handleSpeakAgain = () => {
     const textToSpeak = activeHint ?? lastLine;

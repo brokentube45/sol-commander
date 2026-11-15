@@ -56,12 +56,15 @@ export function TutorialOverlay({
   useEffect(() => {
     if (tutorialStep === 'complete') return;
     soundEngine.playRoverBeep(tutorialStep === 'jump-crystals' ? 'happy' : 'ok');
-    narrativeVoice.speakTutorialStep(tutorialStep);
+
+    const voiceTid = window.setTimeout(() => {
+      narrativeVoice.speakTutorialStep(tutorialStep);
+    }, 280);
 
     if (firstStepRef.current) {
       firstStepRef.current = false;
       setBannerVisible(true);
-      return;
+      return () => window.clearTimeout(voiceTid);
     }
 
     const isInlineBannerStep =
@@ -71,14 +74,18 @@ export function TutorialOverlay({
 
     if (!isInlineBannerStep) {
       setBannerVisible(false);
-      return;
+      return () => window.clearTimeout(voiceTid);
     }
 
     setBannerVisible(false);
     const tid = window.setTimeout(() => {
       setBannerVisible(true);
     }, POPUP_TUTORIAL_STEP_PAUSE_MS);
-    return () => window.clearTimeout(tid);
+
+    return () => {
+      window.clearTimeout(voiceTid);
+      window.clearTimeout(tid);
+    };
   }, [tutorialStep]);
 
   if (tutorialStep === 'complete') return null;

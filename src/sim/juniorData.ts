@@ -80,8 +80,9 @@ export const JUNIOR_TUTORIAL_STEPS: Record<
     stepNumber: 1,
     totalSteps: 6,
     title: 'Walk on Mars',
-    actionPrompt: 'Use W A S D or Arrow keys to walk forward.',
-    rustyLine: 'Welcome to Mars, Commander! Use WASD to move.',
+    actionPrompt: 'Use WASD keys or touch D-Pad to take your first steps.',
+    rustyLine:
+      'Welcome to Mars, Commander! Use your WASD keys or touch D-Pad to take your first steps on the red planet!',
   },
   'inspect-rover': {
     stepNumber: 2,
