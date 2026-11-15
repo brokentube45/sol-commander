@@ -430,11 +430,17 @@ export function Modals({
                   </p>
 
                   <div className="rounded-2xl border border-white/10 bg-[#1B3A5F]/55 p-4 text-sm leading-relaxed text-[#F8F9FA]/85 space-y-2">
-                    <p className="font-bold text-[#F8F9FA]">NASA Space Apps Challenge 2026</p>
+                    <p className="font-bold text-[#F8F9FA]">NASA International Space Apps Challenge</p>
                     <p>
                       Built around real NASA datasets (NSSDC Mars Fact Sheet, Curiosity RAD,
                       Opportunity dust-storm power curves, Perseverance MOXIE &amp; MEDA, SWIM ice
                       maps, BVAD life-support baselines, and live/archived NASA DONKI space weather).
+                    </p>
+                    <p>
+                      <strong className="text-[#F8F9FA]">Audio &amp; Voice Policy:</strong> Character
+                      dialogues use subtitles accompanied by procedural Web Audio synthesized chimes
+                      and beeps by default (one voice at a time, with a Voice / Rover Beeps On/Off
+                      toggle). Zero AI-generated voice or TTS is used in the runtime game.
                     </p>
                     <p className="text-xs text-[#FFB703]">
                       Every number in-game is transparently tagged REAL, DERIVED, or SIMULATION

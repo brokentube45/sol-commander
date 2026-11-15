@@ -16,6 +16,7 @@ import {
 import { COMMANDER_CALLSIGNS } from '../data/missionData';
 import { CREW_PROFILES } from '../sim/constants';
 import { sanitizeRoverName } from '../sim/roverData';
+import { BIBLE_BRIEFING_DATA, JUNIOR_MISSIONS } from '../sim/storyBeats';
 import { soundEngine } from '../utils/soundEngine';
 
 interface BriefingOverlayProps {
@@ -32,22 +33,17 @@ interface BriefingOverlayProps {
 
 type BriefingStage = 'meet-rusty' | 'crew-setup' | 'launching';
 
-const ROVER_PRESETS = ['Rusty', 'Sparky', 'Nova-7', 'Pebble'];
+const ROVER_PRESETS = BIBLE_BRIEFING_DATA.roverNameChoices;
 
-const CREW_KID_LINES: Record<string, string> = {
-  amara: 'Keeps everyone healthy & calm',
-  kenji: 'Fixes valves, pipes & rover wheels',
-  lucia: 'Hunts for buried ice & Mars rocks',
-  rafi: 'Runs air, water & warm plant lights',
-};
+const CREW_KID_LINES: Record<string, string> = Object.fromEntries(
+  BIBLE_BRIEFING_DATA.crewCards.map((c) => [c.id, c.oneLiner]),
+);
 
-const MISSION_ROADMAP = [
-  { sol: 'Sol 21', name: 'Tank 2 Air' },
-  { sol: 'Sol 34', name: 'Red Sky' },
-  { sol: 'Sol 52', name: 'Buried Ice' },
-  { sol: 'Sol 67', name: 'Greenhouse' },
-  { sol: 'Sol 88', name: 'Safe Shelter' },
-];
+const MISSION_ROADMAP = Object.values(JUNIOR_MISSIONS).map((m) => ({
+  sol: `Sol ${m.sol}`,
+  name: m.simpleSubtitle.split('·')[1]?.trim() ?? m.simpleSubtitle,
+}));
+
 
 export function BriefingOverlay({
   callsign,
@@ -175,7 +171,7 @@ export function BriefingOverlay({
                   transition={{ duration: 0.45, delay: 0.28 }}
                   className="mt-3 text-sm leading-relaxed text-[#F8F9FA]/90 sm:text-base"
                 >
-                  Your ship touched down safely. Explore the base, discover real Mars science, and
+                  The lander touched down safely. Explore the base, discover real Mars science, and
                   keep your crew safe across 88 sols!
                 </motion.p>
 
@@ -186,12 +182,15 @@ export function BriefingOverlay({
                   transition={{ duration: 0.45, delay: 0.36 }}
                   className="mt-3.5 rounded-xl border border-[#38BDF8]/40 bg-[#0C4A6E]/35 p-3 text-xs leading-relaxed text-[#E0F2FE]"
                 >
-                  <div className="flex items-center gap-1.5 font-bold text-[#38BDF8] text-[11px] uppercase tracking-wider">
-                    <Radio className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Message from Earth · Mission Control</span>
+                  <div className="flex items-center justify-between gap-1.5 font-bold text-[#38BDF8] text-[11px] uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5">
+                      <Radio className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>Message from Earth · Mission Control</span>
+                    </span>
+                    <span className="text-[10px] text-[#38BDF8]/80">Sent 12 minutes ago</span>
                   </div>
                   <p className="mt-1 text-xs sm:text-sm italic font-medium text-[#F0F9FF]">
-                    &ldquo;Welcome to Mars, Commander. Take care of each other. We believe in you.&rdquo;
+                    &ldquo;{BIBLE_BRIEFING_DATA.earthWelcomeLine}&rdquo;
                   </p>
                 </motion.div>
               </div>
@@ -474,7 +473,7 @@ export function BriefingOverlay({
                   className="inline-flex min-h-[48px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-extrabold tracking-wide text-[#0B1D36] shadow-xl transition-transform hover:scale-[1.02]"
                 >
                   <Play className="h-4 w-4 fill-current" aria-hidden="true" />
-                  <span>ENTER MARS BASE</span>
+                  <span>Step onto Mars →</span>
                 </button>
               </div>
             </div>

@@ -18,7 +18,7 @@ import {
   pickNonRepeatingRoverLine,
   sanitizeRoverName,
 } from './roverData';
-import { JUNIOR_MISSIONS, TutorialStepId } from './juniorData';
+import { ChorePlaceId, JUNIOR_MISSIONS, TutorialStepId } from './juniorData';
 
 export interface CrewMemberState {
   id: CrewMemberId;
@@ -99,7 +99,7 @@ export interface CampaignState {
   roverName: string;
   sol: number;
   missionIndex: number; // 0..4 (for m1..m5)
-  phase: 'active-mission' | 'mission-review' | 'routine-summary' | 'debrief';
+  phase: 'active-mission' | 'mission-review' | 'routine-summary' | 'debrief' | 'free-roam';
   campaignFailedReason: string | null;
 
   // Resources [SIM] anchored to [REAL] baselines
@@ -184,6 +184,7 @@ export interface CampaignState {
   juniorMode: boolean;
   grownUpScienceOpen: boolean;
   tutorialStep: TutorialStepId;
+  choresVisited: Record<ChorePlaceId, boolean>;
   crystalsCollected: number;
   collectedCrystalIds: string[];
   tutorialQuizDone: boolean;
@@ -224,7 +225,7 @@ export function createInitialCampaignState(
     seed,
     callsign: callsign.trim() || 'Commander Nova',
     roverName,
-    sol: SIM_CONSTANTS.START_SOL,
+    sol: 1,
     missionIndex: 0,
     phase: 'active-mission',
     campaignFailedReason: null,
@@ -244,7 +245,7 @@ export function createInitialCampaignState(
     panelsCleanedBonus: false,
     panelsDusty: false,
     tank2Isolated: false,
-    tank2LeakActive: true,
+    tank2LeakActive: false,
     recyclerEfficiency: SIM_CONSTANTS.WATER_RECYCLER_NOMINAL,
     greenhouseFrost: false,
     greenhouseDisabled: false,
@@ -301,7 +302,12 @@ export function createInitialCampaignState(
 
     juniorMode: true,
     grownUpScienceOpen: false,
-    tutorialStep: 'move',
+    tutorialStep: 'take-control',
+    choresVisited: {
+      greenhouse: false,
+      solar: false,
+      habitat: false,
+    },
     crystalsCollected: 0,
     collectedCrystalIds: [],
     tutorialQuizDone: false,
@@ -490,7 +496,7 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
         tank2LeakActive = false;
         oxygenKg -= 1.2;
         immediateText =
-          'Kenji Sato seals Tank 2 cleanly. Pressure stabilizes immediately; ~18 kg stays locked inside Tank 2 until an engineering window.';
+          'Kenji seals Tank 2 cleanly. Pressure stabilizes immediately; ~18 kg stays locked inside Tank 2 until an engineering window.';
         verdict = 'safe';
       } else {
         oxygenKg -= 4.5;
@@ -505,7 +511,7 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
       crew = adjustCrew(crew, ['amara', 'kenji', 'lucia', 'rafi'], 0, 10);
       ripples.m1LeakUnsealed = true;
       immediateText =
-        'Dr. Amara moves everyone safely into the backup compartment while ~6.5 kg O₂ escapes. Stress rises +10, and Tank 2 still needs sealing.';
+        'Amara moves everyone safely into the backup compartment while ~6.5 kg O₂ escapes. Stress rises +10, and Tank 2 still needs sealing.';
       rippleTriggered = 'Tank 2 stayed unsealed — oxygen starts Sol 34 lower.';
       verdict = 'risky';
       passedObjective = false;
@@ -520,13 +526,13 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
       passedObjective = false;
     } else {
       const leakWorsens = rng.chance(0.45);
-      const hypoxia = rng.chance(0.2);
+      const lowAir = rng.chance(0.2);
       ripples.m1LeakUnsealed = true;
       oxygenKg -= leakWorsens ? 15 : 8;
-      if (hypoxia) {
+      if (lowAir) {
         crew = adjustCrew(crew, ['amara', 'kenji', 'lucia', 'rafi'], -15, 14);
         immediateText =
-          'Ignoring the valve backfires: Tank 2 loses heavy air and low cabin pressure triggers crew headaches and hypoxia (−15 Health)!';
+          'Ignoring the valve lets Tank 2 lose air and low cabin pressure gives the crew headaches and dizziness (−15 Health)!';
       } else {
         crew = adjustCrew(crew, ['amara', 'kenji', 'lucia', 'rafi'], -4, 10);
         immediateText =
@@ -565,11 +571,11 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
         roverDamaged = true;
         crew = adjustCrew(crew, ['kenji'], 0, 12);
         immediateText =
-          `Brushing panels in swirling tau > 3.0 haze yields only +5% power — and ${state.roverName} slips in a boulder drift, damaging a wheel strut!`;
-        rippleTriggered = `${state.roverName} was damaged in the storm (limps & crackles in M3–M5).`;
+          `${state.roverName}: "I am brave! Beep." ... "Oh no, my wheels are stuck! Please wait for me." Brushing panels in swirling dust yields only +5% power.`;
+        rippleTriggered = `${state.roverName} got stuck in the storm drift (slower in M3–M5).`;
       } else {
         immediateText =
-          `${state.roverName} battles gusting red dust to wipe the arrays (+5% power during storm), draining 20 kWh while airborne dust quickly re-coats them.`;
+          `${state.roverName}: "I am brave! Beep." ${state.roverName} battles gusting red dust to wipe the arrays (+5% power during storm), draining 20 kWh while airborne dust quickly re-coats them.`;
       }
       verdict = 'ineffective';
       passedObjective = batteryKwh >= 40;
@@ -612,7 +618,7 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
       greenhouseGrowthMult *= 0.85;
       crew = adjustCrew(crew, ['amara', 'kenji', 'lucia', 'rafi'], 0, 8);
       immediateText =
-        'Dr. Amara institutes strict hygiene water limits, stretching tanks while raising crew stress (+8) and slowing greenhouse misting (−15%).';
+        'Amara institutes strict hygiene water limits, stretching tanks while raising crew stress (+8) and slowing greenhouse misting (−15%).';
       verdict = 'risky';
       passedObjective = waterKg >= 90;
     } else if (optionId === 'C') {
@@ -624,13 +630,13 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
         waterKg += 40; // initial test melt yield
         batteryKwh -= 15;
         immediateText =
-          `Lucía and ${state.roverName} confirm buried water-ice 4 km away using SWIM radar! Initial test melt nets +40 kg and boosts Mission 5 drilling odds to 70%.`;
-        rippleTriggered = 'SWIM buried ice seam confirmed (+70% drilling success in M5).';
+          `Lucía and ${state.roverName} locate possible ice 4 km away using SWIM radar! Initial test melt nets +40 kg and boosts Mission 5 drilling odds to 70%.`;
+        rippleTriggered = 'SWIM buried possible ice seam mapped (+70% drilling success in M5).';
         verdict = 'safe';
         passedObjective = true;
       } else {
         immediateText =
-          `${state.roverName} trenches the target ridge, but hits hard bedrock above the ice layer. No water gained today (30 kWh spent).`;
+          `${state.roverName} trenches the target ridge, but hits hard bedrock above the possible ice layer. No water gained today (30 kWh spent).`;
         verdict = 'risky';
         passedObjective = false;
       }
@@ -717,8 +723,8 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
       crew = adjustCrew(crew, ['amara', 'kenji', 'lucia', 'rafi'], 0, 5);
       iceDrilledSuccess = drillOk;
       iceObjectivePct = drillOk ? 100 : 55;
-      immediateText = `All four astronauts shelter behind thick blue water-wall tanks (~15 mSv Event Dose). ${state.roverName} drills remotely after the storm peak: ${
-        drillOk ? 'ice core confirmed!' : 'partial frozen sample recovered!'
+      immediateText = `All four astronauts shelter behind thick blue water-wall tanks. ${state.roverName} drills remotely after the storm peak: ${
+        drillOk ? 'frozen ice core recovered!' : 'partial frozen sample recovered!'
       }`;
       verdict = 'safe';
       passedObjective = eventDoseMsv < 250 && iceObjectivePct >= 50;
@@ -729,7 +735,7 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
       const glitch = rng.chance(0.2);
       iceDrilledSuccess = !glitch && drillOk;
       iceObjectivePct = iceDrilledSuccess ? 100 : 50;
-      immediateText = `Crew stays inside normal Habitat quarters (~60 mSv Event Dose) while ${state.roverName} drives out remotely. ${
+      immediateText = `Crew stays inside normal Habitat quarters while ${state.roverName} drives out remotely. ${
         glitch ? 'Storm static stalls the drill halfway (50% core).' : 'Sample core stowed!'
       }`;
       verdict = state.donki.isSevereStorm ? 'risky' : 'safe';
@@ -740,23 +746,22 @@ export function resolveMissionOption(state: CampaignState, optionId: OptionId): 
       careerDoseMsv += 30;
       iceDrilledSuccess = drillOk;
       iceObjectivePct = drillOk ? 90 : 50;
-      immediateText = `Rafi and Dr. Amara stack potable water bladders around sleeping quarters (~30 mSv Event Dose), then ${state.roverName} completes the delayed ice run!`;
+      immediateText = `Rafi and Amara stack potable water bladders around sleeping quarters, then ${state.roverName} completes the delayed ice run!`;
       verdict = 'safe';
       passedObjective = eventDoseMsv < 250 && iceObjectivePct >= 50;
     } else {
       eventDoseMsv += 180;
       careerDoseMsv += 180;
       ripples.m5EvaDuringStorm = true;
-      const acute = rng.chance(0.3);
-      crew = adjustCrew(crew, ['lucia', 'kenji'], acute ? -30 : -12, 22);
+      // Bible M5.5: "Everyone is okay. But we took more radiation than we needed. Next time, let's be careful." (No injury, no fear.)
+      crew = adjustCrew(crew, ['lucia', 'kenji'], 0, 8);
       iceDrilledSuccess = true;
       iceObjectivePct = 100;
-      immediateText = acute
-        ? 'Sending Lucía and Kenji onto the surface during a solar storm spikes Event Dose to ~180 mSv and triggers acute radiation symptoms (−30 Health)!'
-        : 'The EVA grabs the ice core fast, but ~180 mSv solar dose permanently climbs on Lucía and Kenji’s NASA Career Dose clocks.';
-      rippleTriggered = 'High Career Radiation Dose permanently recorded on debrief.';
-      verdict = 'ineffective';
-      passedObjective = false;
+      immediateText =
+        "Everyone is okay. But we took more radiation than we needed. Next time, let's be careful.";
+      rippleTriggered = 'Higher radiation exposure recorded on debrief.';
+      verdict = 'risky';
+      passedObjective = true;
     }
   }
 
@@ -1117,6 +1122,7 @@ export function jumpToMission(state: CampaignState, targetIndex: number): Campai
     activeWeatherEvent: null,
     dustTau,
     dustFactor: dustFactorFromTau(dustTau),
+    tank2LeakActive: safeIdx === 0 && !state.tank2Isolated ? true : state.tank2LeakActive,
     greenhouseFrost: targetMission.id === 'm4',
     roverActiveHint: null,
   };
@@ -1470,9 +1476,51 @@ export function getResourceDaysSummary(state: CampaignState) {
 
 export function setTutorialStep(state: CampaignState, nextStep: TutorialStepId): CampaignState {
   if (state.tutorialStep === nextStep) return state;
+  if (nextStep === 'complete') {
+    return {
+      ...state,
+      tutorialStep: 'complete',
+      sol: state.missionIndex === 0 ? Math.max(state.sol, SIM_CONSTANTS.START_SOL) : state.sol,
+      tank2LeakActive:
+        state.missionIndex === 0 && !state.tank2Isolated ? true : state.tank2LeakActive,
+    };
+  }
   return {
     ...state,
     tutorialStep: nextStep,
+  };
+}
+
+export function visitChoreSpot(state: CampaignState, spot: ChorePlaceId): CampaignState {
+  const nextChores: Record<ChorePlaceId, boolean> = {
+    ...state.choresVisited,
+    [spot]: true,
+  };
+  const allDone = nextChores.greenhouse && nextChores.solar && nextChores.habitat;
+  const nextStep: TutorialStepId =
+    allDone && state.tutorialStep === 'chores' ? 'inspect-oxygen' : state.tutorialStep;
+  return {
+    ...state,
+    choresVisited: nextChores,
+    tutorialStep: nextStep,
+  };
+}
+
+export function enterFreeRoam(state: CampaignState): CampaignState {
+  return {
+    ...state,
+    phase: 'free-roam',
+    dustTau: 0.8,
+    dustFactor: 1.0,
+    activeWeatherEvent: null,
+    roverLastLine: 'We did it! Walk anywhere you like, Commander.',
+  };
+}
+
+export function reopenDebrief(state: CampaignState): CampaignState {
+  return {
+    ...state,
+    phase: 'debrief',
   };
 }
 

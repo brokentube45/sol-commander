@@ -42,6 +42,16 @@ import {
   fetchDonkiSpaceWeather,
 } from './sim/nasaData';
 import { generateNewSeed } from './sim/rng';
+import { ChorePlaceId } from './sim/juniorData';
+import {
+  GUIDANCE_LADDER_THRESHOLDS_SEC,
+  JUNIOR_MISSIONS,
+  formatWithRoverName,
+} from './sim/storyBeats';
+import {
+  getActiveObjective,
+  isTank2SceneActive,
+} from './sim/activeObjective';
 import {
   CampaignState,
   advanceRoutineSols,
@@ -53,12 +63,14 @@ import {
   completeTutorialQuiz,
   computeRoverMood,
   createInitialCampaignState,
+  enterFreeRoam,
   getActiveMission,
   getResourceDaysSummary,
   jumpToMission,
   markDataInspected,
   markMissionControlAsked,
   proceedToNextCriticalSol,
+  reopenDebrief,
   resolveMissionOption,
   resolveWeatherEventShelter,
   setTutorialStep,
@@ -68,6 +80,7 @@ import {
   triggerWeatherGustPulse,
   unlockScienceCard,
   useRoverHint,
+  visitChoreSpot,
 } from './sim/simEngine';
 import {
   MarsEnvironmentSnapshot,
@@ -110,7 +123,8 @@ export default function App() {
   );
   const simStateRef = useRef(simState);
   simStateRef.current = simState;
-  const [cameraMode, setCameraMode] = useState<'3p' | '1p'>('3p');
+  const [cameraMode, setCameraMode] = useState<'3p' | '1p'>('1p');
+  const [guideEnabled, setGuideEnabled] = useState<boolean>(true);
   const [lensOpen, setLensOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
   const [poseTelemetry, setPoseTelemetry] = useState<GameplayPoseTelemetry>(() => ({
@@ -166,12 +180,20 @@ export default function App() {
     deg: 0,
   });
   const [weatherSecondsLeft, setWeatherSecondsLeft] = useState<number>(0);
+  const [m5ShelterSecondsLeft, setM5ShelterSecondsLeft] = useState<number>(180);
   const [habitatDistMeters, setHabitatDistMeters] = useState<number>(7);
   const [marsPhysics, setMarsPhysics] = useState<MarsEnvironmentSnapshot>(() =>
     computeDiurnalMarsWeather(21, 0, 1.0, 1.0, 4.95, 2.65, 0),
   );
   const autoWeatherSolsRef = useRef<Set<number>>(new Set());
   const lastWeatherIdRef = useRef<string | null>(null);
+  const tank2WhisperPlayedRef = useRef(false);
+  const [guidanceSeconds, setGuidanceSeconds] = useState<number>(0);
+  const guidanceSpokenStageRef = useRef<number>(0);
+
+  useEffect(() => {
+    narrativeVoice.setRoverName(simState.roverName || roverName);
+  }, [simState.roverName, roverName]);
 
   const moveInputRef = useRef<GameplayInputState>({
     forward: false,
@@ -250,6 +272,22 @@ export default function App() {
 
   const mission1AlertTriggeredRef = useRef(false);
 
+  // Clean up previous step toasts (especially 'landing-comparison' and crystal toasts) whenever tutorialStep changes
+  useEffect(() => {
+    setPopupQueue((prev) => {
+      let next = prev;
+      for (const toastId of [
+        'landing-comparison',
+        'crystal-toast-1',
+        'crystal-toast-2',
+        'crystal-toast-3',
+      ]) {
+        next = dismissPopupToast(next, toastId);
+      }
+      return next;
+    });
+  }, [simState.tutorialStep]);
+
   // Expand Rusty companion panel automatically & trigger Mission 1 emergency once training completes
   useEffect(() => {
     if (simState.tutorialStep === 'complete') {
@@ -270,7 +308,7 @@ export default function App() {
     }
   }, [simState.tutorialStep, enqueueToast]);
 
-  // Global Gameplay Shortcuts: Esc, C (Quick Actions), H (Toggle Controls Strip), Hold X (Skip Training), Tab (Log), Q (Rover Hint)
+  // Global Gameplay Shortcuts: Esc, C (Quick Actions), G (Toggle Path Guide), H (Toggle Controls Strip), Hold X (Skip Training), Tab (Log), Q (Rover Hint)
   useEffect(() => {
     if (gamePhase !== 'gameplay') return;
     let skipHoldTid: number | null = null;
@@ -293,6 +331,10 @@ export default function App() {
         if (anyModalBlockingRef.current || mapOpen) return;
         soundEngine.playClick();
         setQuickMenuOpen((prev) => !prev);
+      } else if (ev.code === 'KeyG' && !ev.repeat) {
+        if (anyModalBlockingRef.current) return;
+        soundEngine.playClick();
+        setGuideEnabled((prev) => !prev);
       } else if (ev.code === 'KeyH' && !ev.repeat) {
         if (anyModalBlockingRef.current) return;
         soundEngine.playClick();
@@ -438,11 +480,14 @@ export default function App() {
       soundEngine.playMissionStart();
       setSeed(nextSeed);
       mission1AlertTriggeredRef.current = false;
+      tank2WhisperPlayedRef.current = false;
       autoWeatherSolsRef.current.clear();
       lastWeatherIdRef.current = null;
       setWeatherSecondsLeft(0);
+      setM5ShelterSecondsLeft(180);
       setSimState(createInitialCampaignState(nextSeed, callsign, roverName, donkiWeather));
-      setCameraMode('3p');
+      setCameraMode('1p');
+      setGuideEnabled(true);
       setLensOpen(false);
       setMapOpen(false);
       setQuickMenuOpen(false);
@@ -490,6 +535,42 @@ export default function App() {
   };
 
   const activeMission = useMemo(() => getActiveMission(simState), [simState]);
+
+  const activeObjective = useMemo(
+    () => getActiveObjective(simState, GAMEPLAY_LAYOUT, poseTelemetry.x, poseTelemetry.z),
+    [simState, poseTelemetry.x, poseTelemetry.z],
+  );
+
+  useEffect(() => {
+    if (!debugMode || gamePhase !== 'gameplay') return;
+    console.info('[DEBUG OBJECTIVE]', {
+      tutorialStep: simState.tutorialStep,
+      choresVisited: simState.choresVisited,
+      activeObjectiveId: activeObjective.id,
+      activeObjectiveLabel: activeObjective.label,
+      ownerScene: activeObjective.ownerScene,
+      pos: { x: activeObjective.x, z: activeObjective.z },
+      showMarkerAndRing: activeObjective.showMarkerAndRing,
+      isTank2: activeObjective.isTank2,
+      tank2SceneActive: isTank2SceneActive(simState),
+      guideEnabled,
+      cameraTakeover: false,
+    });
+  }, [
+    debugMode,
+    gamePhase,
+    simState.tutorialStep,
+    simState.choresVisited,
+    activeObjective.id,
+    activeObjective.label,
+    activeObjective.ownerScene,
+    activeObjective.x,
+    activeObjective.z,
+    activeObjective.showMarkerAndRing,
+    activeObjective.isTank2,
+    simState,
+    guideEnabled,
+  ]);
 
   // Sync audio & P0 non-blocking HUD weather alert whenever a localized weather event spawns
   useEffect(() => {
@@ -568,41 +649,95 @@ export default function App() {
     paused,
   ]);
 
-  // Auto-trigger a seeded localized weather event ~9.5s into free-walk exploration on a Critical Sol
+  // Bible S3 Role 2 Guidance Ladder: 60 s Rusty hint, 120 s Rusty rolls toward objective, 240 s dotted path.
+  // Resources stay frozen while a card is open or while the player explores.
+  useEffect(() => {
+    setGuidanceSeconds(0);
+    guidanceSpokenStageRef.current = 0;
+  }, [
+    simState.missionIndex,
+    simState.phase,
+    simState.tutorialStep,
+    commandModeOpen,
+    simState.missionMiniActivityDone[activeMission.id],
+    simState.missionQuizDone[activeMission.id],
+  ]);
+
   useEffect(() => {
     if (
       gamePhase !== 'gameplay' ||
       simState.phase !== 'active-mission' ||
       simState.tutorialStep !== 'complete' ||
-      simState.activeWeatherEvent ||
-      commandModeOpen ||
-      mapOpen ||
-      logOpen ||
-      creditsOpen ||
-      paused ||
-      autoWeatherSolsRef.current.has(simState.missionIndex)
+      anyModalBlocking
     ) {
       return;
     }
 
-    const timerId = window.setTimeout(() => {
-      autoWeatherSolsRef.current.add(simState.missionIndex);
-      setSimState((prev) => triggerLocalizedWeatherEvent(prev));
-    }, 9500);
+    const tid = window.setInterval(() => {
+      setGuidanceSeconds((prev) => prev + 1);
+    }, 1000);
 
-    return () => window.clearTimeout(timerId);
-  }, [
-    gamePhase,
-    simState.phase,
-    simState.tutorialStep,
-    simState.missionIndex,
-    simState.activeWeatherEvent,
-    commandModeOpen,
-    mapOpen,
-    logOpen,
-    creditsOpen,
-    paused,
-  ]);
+    return () => window.clearInterval(tid);
+  }, [gamePhase, simState.phase, simState.tutorialStep, anyModalBlocking]);
+
+  const guidanceStage: 0 | 1 | 2 | 3 =
+    guidanceSeconds >= GUIDANCE_LADDER_THRESHOLDS_SEC.dottedPath
+      ? 3
+      : guidanceSeconds >= GUIDANCE_LADDER_THRESHOLDS_SEC.roverLead
+        ? 2
+        : guidanceSeconds >= GUIDANCE_LADDER_THRESHOLDS_SEC.hintQuestion
+          ? 1
+          : 0;
+
+  useEffect(() => {
+    if (guidanceStage <= guidanceSpokenStageRef.current) return;
+    guidanceSpokenStageRef.current = guidanceStage;
+    const jMission = JUNIOR_MISSIONS[activeMission.id];
+    const rName = simState.roverName;
+    if (guidanceStage === 1 && jMission) {
+      soundEngine.playRoverBeep('curious');
+      const hintLine = formatWithRoverName(jMission.guidanceHint60s, rName);
+      setSimState((prev) => ({
+        ...prev,
+        roverHintLevelUsed: {
+          ...prev.roverHintLevelUsed,
+          [activeMission.id]: Math.max(prev.roverHintLevelUsed[activeMission.id] ?? 0, 1),
+        },
+        roverActiveHint: hintLine,
+        roverLastLine: hintLine,
+      }));
+      narrativeVoice.speakAs('rusty', hintLine, `guidance-60s-${activeMission.id}`, 600);
+      enqueueToast({
+        id: `guidance-60s-${activeMission.id}-${Date.now()}`,
+        kind: 'hint',
+        priority: 'P3',
+        title: `${rName} · Gentle Hint`,
+        detail: `${rName}: "${hintLine}"`,
+        tone: 'info',
+      });
+    } else if (guidanceStage === 2 && jMission) {
+      soundEngine.playRoverBeep('alert');
+      const leadLine = formatWithRoverName(jMission.guidanceLead120s, rName);
+      setSimState((prev) => ({
+        ...prev,
+        roverHintLevelUsed: {
+          ...prev.roverHintLevelUsed,
+          [activeMission.id]: Math.max(prev.roverHintLevelUsed[activeMission.id] ?? 0, 2),
+        },
+        roverActiveHint: leadLine,
+        roverLastLine: leadLine,
+      }));
+      narrativeVoice.speakAs('rusty', leadLine, `guidance-120s-${activeMission.id}`, 600);
+      enqueueToast({
+        id: `guidance-120s-${activeMission.id}-${Date.now()}`,
+        kind: 'hint',
+        priority: 'P3',
+        title: `${rName} Leading the Way`,
+        detail: `${rName}: "${leadLine}"`,
+        tone: 'info',
+      });
+    }
+  }, [guidanceStage, activeMission.id, simState.roverName, enqueueToast]);
 
   // Seek Shelter countdown timer (pauses cleanly while inspecting modals or Pause Menu)
   useEffect(() => {
@@ -643,6 +778,59 @@ export default function App() {
     paused,
   ]);
 
+  // Calm 3:00 (180s) Shelter Bell timer during Mission 5 (Story Bible S2.5: pauses while cards/modals are open)
+  useEffect(() => {
+    if (activeMission.id === 'm5' && simState.phase === 'active-mission') {
+      setM5ShelterSecondsLeft((prev) => (prev <= 0 ? 180 : prev));
+    }
+  }, [activeMission.id, simState.phase]);
+
+  useEffect(() => {
+    if (
+      gamePhase !== 'gameplay' ||
+      simState.phase !== 'active-mission' ||
+      activeMission.id !== 'm5' ||
+      anyModalBlocking
+    ) {
+      return;
+    }
+    const tid = window.setInterval(() => {
+      setM5ShelterSecondsLeft((prev) => (prev > 1 ? prev - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(tid);
+  }, [gamePhase, simState.phase, activeMission.id, anyModalBlocking]);
+
+  // Tank 2 quiet tick-hiss foreshadowing when approaching Tank 2 during Act 1 inspect-oxygen (Story Bible S1.6)
+  useEffect(() => {
+    if (
+      gamePhase === 'gameplay' &&
+      simState.tutorialStep === 'inspect-oxygen' &&
+      nearbyZone === 'tank2' &&
+      !tank2WhisperPlayedRef.current
+    ) {
+      tank2WhisperPlayedRef.current = true;
+      soundEngine.playInspect();
+      narrativeVoice.speakTutorialStep('inspect-oxygen');
+      enqueueToast({
+        id: 'tank2-foreshadow-whisper',
+        kind: 'hint',
+        priority: 'P3',
+        title: 'Oxygen Tank 2 · Quiet Tick-Hiss',
+        detail: `${simState.roverName}: "This is Tank 2. It holds our air." (Press [E] to check the gauge)`,
+        tone: 'info',
+      });
+    }
+  }, [gamePhase, simState.tutorialStep, nearbyZone, simState.roverName, enqueueToast]);
+
+  // Advance 'take-control' -> 'look' automatically when pointer locks at the airlock
+  useEffect(() => {
+    if (gamePhase === 'gameplay' && pointerLocked && simState.tutorialStep === 'take-control') {
+      setSimState((prev) =>
+        prev.tutorialStep === 'take-control' ? setTutorialStep(prev, 'look') : prev,
+      );
+    }
+  }, [gamePhase, pointerLocked, simState.tutorialStep]);
+
   useEffect(() => {
     return () => {
       soundEngine.stopWeatherLoop();
@@ -674,19 +862,69 @@ export default function App() {
   );
 
   const handleTutorialMoveDone = useCallback(() => {
-    setSimState((prev) => (prev.tutorialStep === 'move' ? setTutorialStep(prev, 'inspect-rover') : prev));
+    setSimState((prev) =>
+      prev.tutorialStep === 'move' ? setTutorialStep(prev, 'jump-crystals') : prev,
+    );
   }, []);
 
-  const handleCrystalCollected = useCallback((crystalId: string) => {
-    setSimState((prev) => {
-      if (prev.tutorialStep !== 'jump-crystals') return prev;
-      const next = collectGravityCrystal(prev, crystalId);
-      if (next.crystalsCollected > prev.crystalsCollected) {
-        soundEngine.playCrystalCollect(next.crystalsCollected);
-      }
-      return next;
-    });
-  }, []);
+  const handleVisitChore = useCallback(
+    (spot: ChorePlaceId) => {
+      soundEngine.playInspect();
+      narrativeVoice.speakChoreSpot(spot);
+      const spotTitle =
+        spot === 'greenhouse'
+          ? 'Chore 1/3 · Greenhouse (Rafi)'
+          : spot === 'solar'
+            ? 'Chore 2/3 · Solar Field (Kenji)'
+            : 'Chore 3/3 · Habitat Core (Amara & Lucía)';
+      const spotLine =
+        spot === 'greenhouse'
+          ? 'Rafi: "Welcome to my garden! These tomato seeds are my babies. They need light, water and warmth."'
+          : spot === 'solar'
+            ? 'Kenji: "These panels turn sunlight into power. Keep them clean and they keep us cozy."'
+            : 'Amara: "Drink some water. Mars air is very dry." · Lucía: "Look at this rock! It has stripes."';
+      enqueueToast({
+        id: `chore-${spot}-${Date.now()}`,
+        kind: 'hint',
+        priority: 'P3',
+        title: spotTitle,
+        detail: spotLine,
+        tone: 'good',
+      });
+      setSimState((prev) => visitChoreSpot(prev, spot));
+    },
+    [enqueueToast],
+  );
+
+  const handleCrystalCollected = useCallback(
+    (crystalId: string) => {
+      setSimState((prev) => {
+        if (prev.tutorialStep !== 'jump-crystals') return prev;
+        const next = collectGravityCrystal(prev, crystalId);
+        if (next.crystalsCollected > prev.crystalsCollected) {
+          soundEngine.playCrystalCollect(next.crystalsCollected);
+          const count = next.crystalsCollected;
+          const rustyJumpLine =
+            count === 1
+              ? 'One!'
+              : count === 2
+                ? 'Two!'
+                : 'Three! Wow, look how high you went!';
+          narrativeVoice.speakAs('rusty', rustyJumpLine, `crystal-${count}`, 500, undefined, true);
+          enqueueToast({
+            id: `crystal-toast-${count}`,
+            kind: 'hint',
+            priority: 'P3',
+            title: `Gravity Crystal ${count}/3`,
+            detail: `${prev.roverName}: "${rustyJumpLine}"`,
+            tone: 'good',
+          });
+        }
+        return next;
+      });
+    },
+    [enqueueToast],
+  );
 
   const handleInteractZone = useCallback(
     (zoneId: MissionZoneId) => {
@@ -694,6 +932,21 @@ export default function App() {
       if (currTutorial === 'inspect-rover') {
         soundEngine.playInspect();
         setSimState((prev) => setTutorialStep(prev, 'jump-crystals'));
+        return;
+      }
+      if (currTutorial === 'chores') {
+        if (zoneId === 'greenhouse') {
+          handleVisitChore('greenhouse');
+          return;
+        }
+        if (zoneId === 'solar') {
+          handleVisitChore('solar');
+          return;
+        }
+        if (zoneId === 'shelter') {
+          handleVisitChore('habitat');
+          return;
+        }
         return;
       }
       if (currTutorial === 'inspect-oxygen') {
@@ -723,7 +976,7 @@ export default function App() {
       else if (zoneId === 'greenhouse') setInspectedStation('greenhouse');
       else handleOpenCommandMode('look');
     },
-    [activeMission.zoneId, handleOpenCommandMode],
+    [activeMission.zoneId, handleOpenCommandMode, handleVisitChore],
   );
 
   const handleInteractStation = useCallback(
@@ -736,6 +989,20 @@ export default function App() {
         setInspectedStation(stationId);
         setSimState((prev) => setTutorialStep(prev, 'jump-crystals'));
         return;
+      }
+      if (currTutorial === 'chores') {
+        if (stationId === 'greenhouse') {
+          handleVisitChore('greenhouse');
+          return;
+        }
+        if (stationId === 'solar') {
+          handleVisitChore('solar');
+          return;
+        }
+        if (stationId === 'habitat') {
+          handleVisitChore('habitat');
+          return;
+        }
       }
       if (currTutorial !== 'complete') {
         soundEngine.playInspect();
@@ -760,11 +1027,17 @@ export default function App() {
       setInspectedCrew(null);
       setInspectedStation(stationId);
     },
-    [activeMission.zoneId, handleOpenCommandMode],
+    [activeMission.zoneId, handleOpenCommandMode, handleVisitChore],
   );
 
   const handleInteractCrewFromHud = useCallback(
     (crewId: CrewMemberId) => {
+      const currTutorial = simStateRef.current.tutorialStep;
+      if (currTutorial === 'chores') {
+        if (crewId === 'rafi') handleVisitChore('greenhouse');
+        else if (crewId === 'kenji') handleVisitChore('solar');
+        else if (crewId === 'amara' || crewId === 'lucia') handleVisitChore('habitat');
+      }
       const prof = CREW_PROFILES.find((p) => p.id === crewId);
       const mem = simState.crew.find((c) => c.id === crewId);
       if (!prof) return;
@@ -783,7 +1056,7 @@ export default function App() {
         note: `${prof.name} is monitoring ${prof.specialty.toLowerCase()}.`,
       });
     },
-    [simState.crew, simState.activeWeatherEvent],
+    [simState.crew, simState.activeWeatherEvent, handleVisitChore],
   );
 
   const handleQuickCheckOxygen = useCallback(() => {
@@ -919,6 +1192,17 @@ export default function App() {
 
   const handleLandingTelemetryWorld = useCallback(
     (summary: LandingTelemetrySummary) => {
+      const currStep = simStateRef.current.tutorialStep;
+      // Do not show the Mars Jump toast if the Gravity card step or another modal is open/opening
+      if (
+        currStep === 'gravity-card' ||
+        currStep === 'chores' ||
+        currStep === 'inspect-oxygen' ||
+        currStep === 'tutorial-quiz' ||
+        anyModalBlockingRef.current
+      ) {
+        return;
+      }
       enqueueToast({
         id: 'landing-comparison',
         kind: 'landing',
@@ -937,7 +1221,13 @@ export default function App() {
     setRoverTiltWarning({ active, deg });
   }, []);
 
-  const handleTutorialLookDone = useCallback(() => {}, []);
+  const handleTutorialLookDone = useCallback(() => {
+    setSimState((prev) => {
+      if (prev.tutorialStep === 'take-control') return setTutorialStep(prev, 'look');
+      if (prev.tutorialStep === 'look') return setTutorialStep(prev, 'move');
+      return prev;
+    });
+  }, []);
 
   const handleRoverMakeWay = useCallback(() => {
     soundEngine.playRoverBeep('happy');
@@ -976,7 +1266,10 @@ export default function App() {
       roverMood: computeRoverMood(simState),
       roverDamaged: simState.roverDamaged,
       commandModeOpen:
-        commandModeOpen || logOpen || simState.phase !== 'active-mission' || tutorialModalOpen,
+        commandModeOpen ||
+        logOpen ||
+        (simState.phase !== 'active-mission' && simState.phase !== 'free-roam') ||
+        tutorialModalOpen,
       mapOpen,
       quickMenuOpen,
       cameraMode,
@@ -995,8 +1288,24 @@ export default function App() {
             z: simState.activeWeatherEvent.worldPos.z,
           }
         : null,
+      guidanceStage,
+      activeObjective,
+      guideEnabled,
     };
-  }, [gamePhase, activeMission, simState, commandModeOpen, logOpen, mapOpen, quickMenuOpen, cameraMode, tutorialModalOpen]);
+  }, [
+    gamePhase,
+    activeMission,
+    simState,
+    commandModeOpen,
+    logOpen,
+    mapOpen,
+    quickMenuOpen,
+    cameraMode,
+    tutorialModalOpen,
+    guidanceStage,
+    activeObjective,
+    guideEnabled,
+  ]);
 
   const dynamicPowerAlloc: PowerAllocation = useMemo(
     () => ({
@@ -1016,7 +1325,7 @@ export default function App() {
           selectedLandmark={selectedLandmark}
           onSelectLandmark={handleSelectLandmark}
           prologueElapsed={prologueElapsed}
-          tutorialStep={simState.tutorialStep === 'move' ? 1 : 'complete'}
+          tutorialStep={simState.tutorialStep}
           powerAllocation={dynamicPowerAlloc}
           simVisuals={simVisuals}
           paused={paused}
@@ -1121,6 +1430,7 @@ export default function App() {
           onToggleSound={handleToggleSound}
           reducedMotion={reducedMotion}
           onElapsedTick={setPrologueElapsed}
+          roverName={roverName}
         />
       )}
 
@@ -1148,6 +1458,12 @@ export default function App() {
           <GameplayHUD
             simState={simState}
             activeMission={activeMission}
+            activeObjective={activeObjective}
+            guideEnabled={guideEnabled}
+            onToggleGuide={() => {
+              soundEngine.playClick();
+              setGuideEnabled((prev) => !prev);
+            }}
             marsPhysics={marsPhysics}
             cameraMode={cameraMode}
             onToggleCameraMode={handleToggleCameraModeWorld}
@@ -1166,6 +1482,7 @@ export default function App() {
                 <TutorialOverlay
                   tutorialStep={simState.tutorialStep}
                   crystalsCollected={simState.crystalsCollected}
+                  choresVisited={simState.choresVisited}
                   roverName={simState.roverName}
                   renderMode="banner-only"
                   onAdvanceStep={(next) => {
@@ -1173,6 +1490,7 @@ export default function App() {
                     setInspectedCrew(null);
                     setSimState((prev) => setTutorialStep(prev, next));
                   }}
+                  onVisitChore={handleVisitChore}
                   onCompleteTutorialQuiz={() => {
                     setSimState((prev) => completeTutorialQuiz(prev));
                   }}
@@ -1248,6 +1566,8 @@ export default function App() {
             }}
             pointerLocked={pointerLocked}
             quickMode={quickMode}
+            m5ShelterSecondsLeft={m5ShelterSecondsLeft}
+            onOpenDebrief={() => setSimState((prev) => reopenDebrief(prev))}
             moveInputRef={moveInputRef}
             reducedMotion={reducedMotion}
           />
@@ -1256,6 +1576,7 @@ export default function App() {
             <TutorialOverlay
               tutorialStep={simState.tutorialStep}
               crystalsCollected={simState.crystalsCollected}
+              choresVisited={simState.choresVisited}
               roverName={simState.roverName}
               renderMode="modals-only"
               onAdvanceStep={(next) => {
@@ -1263,6 +1584,7 @@ export default function App() {
                 setInspectedCrew(null);
                 setSimState((prev) => setTutorialStep(prev, next));
               }}
+              onVisitChore={handleVisitChore}
               onCompleteTutorialQuiz={() => {
                 setSimState((prev) => completeTutorialQuiz(prev));
               }}
@@ -1276,8 +1598,8 @@ export default function App() {
 
           <CommandModeModal
             open={
-              simState.phase === 'debrief'
-                ? false
+              simState.phase === 'debrief' || simState.phase === 'free-roam'
+                ? commandModeOpen
                 : commandModeOpen || simState.phase !== 'active-mission'
             }
             state={simState}
@@ -1350,6 +1672,10 @@ export default function App() {
                 setCreditsOpen(true);
               }}
               onReturnTitle={handleReturnTitle}
+              onEnterFreeRoam={() => {
+                soundEngine.playMissionStart();
+                setSimState((prev) => enterFreeRoam(prev));
+              }}
               onCompleteDebriefQuiz={() => {
                 soundEngine.playBadgeUnlock();
                 setSimState((prev) => completeDebriefQuiz(prev));
@@ -1426,9 +1752,11 @@ export default function App() {
             }}
             telemetry={poseTelemetry}
             activeMission={activeMission}
+            activeObjective={activeObjective}
             weatherAlertActive={Boolean(simState.activeWeatherEvent)}
             quickMode={quickMode}
             roverName={simState.roverName}
+            showGuidancePath={guideEnabled}
             reducedMotion={reducedMotion}
           />
 

@@ -1,6 +1,6 @@
 # SOL COMMANDER · MARS: LAST HABITAT
 
-> **NASA Space Apps Challenge 2026 Entry**  
+> **NASA International Space Apps Challenge Entry**  
 > **Audience**: Kids aged 7–12 and educators  
 > **Theme**: *Look. Listen. Think. Then decide.*
 

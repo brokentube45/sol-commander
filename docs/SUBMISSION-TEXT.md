@@ -1,4 +1,4 @@
-# Space Apps Challenge 2026 — Project Submission Text
+# NASA International Space Apps Challenge — Project Submission Text
 
 ## Project Title
 **SOL COMMANDER — Mars: Last Habitat**
@@ -21,7 +21,7 @@ Every emergency in the game stems from an underlying physical cause that the pla
 ### Gameplay & Mechanics
 1. **Act 1: Settling In (Sol 1)**:
    - Learn low-gravity movement ($3.73\text{ m/s}^2$ gravity vs $9.81\text{ m/s}^2$ Earth) by catching glowing gravity crystals.
-   - Meet the specialist crew through daily base chores: Rafi in the Bio-Dome greenhouse, Kenji at the solar array, and Dr. Amara and Lucía in the Habitat Core.
+   - Meet the specialist crew through daily base chores: Rafi in the Bio-Dome greenhouse, Kenji at the solar array, and Amara and Lucía in the Habitat Core.
    - Inspect Oxygen Tank 2 and notice a faint tick-hiss sound (foreshadowing the Sol 21 leak).
    - Write the sunset Commander's Log and sleep as Sol 2–20 postcards elapse.
 
@@ -33,7 +33,7 @@ Every emergency in the game stems from an underlying physical cause that the pla
    - **Mission 5 (Sol 88) — Storm Over the Ice**: Modelled solar eruption warning from Earth; player coordinates moving the crew and rover behind reinforced water-jacket shelter walls.
 
 3. **Debrief & Celebration**:
-   - Reflection quiz, badge awards (*Oxygen Guardian, Solar Engineer, Ice Explorer, Greenhouse Guardian, Space Safety*), and free-roam exploration.
+   - Reflection quiz, badge awards (*Oxygen Guardian, Power Planner, Water Finder, Plant Protector, Crew Guardian*), and free-roam exploration.
 
 ---
 
@@ -46,7 +46,9 @@ Every emergency in the game stems from an underlying physical cause that the pla
 
 ---
 
-## Disclaimers & Fair Use
+## Disclaimers, Voice Policy & Fair Use
 - In-game achievements and badges are educational game rewards and not official NASA certifications.
 - No NASA, JPL, or government agency logos, patches, or insignias are displayed.
-- Zero AI-generated voice or Web Speech TTS used in runtime; procedural Web Audio sound synthesis is used exclusively.
+- **Voice & Audio Policy**: Character dialogues use subtitles plus procedural Web Audio synthesized chimes and beeps by default (one voice at a time, with an in-game Voice / Rover Beeps On/Off toggle). Zero AI-generated voice or Web Speech TTS is used in the runtime build.
+- **Intro Cutscene**: Plays the attached project video (`/assets/aistudio/sol-commandor-intro_721a1330.mp4`, logged in `docs/ASSET-LOG.md` and `AI_USE.md` without claiming authorship) with a Skip button and an automatic 28-second real-time Three.js in-engine cinematic fallback.
+

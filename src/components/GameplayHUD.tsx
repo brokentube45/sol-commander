@@ -67,10 +67,17 @@ import { OutpostAudioZone, soundEngine } from '../utils/soundEngine';
 import { narrativeVoice } from '../utils/narrativeVoice';
 import { getAudioZoneMeta } from './QuickActionMenuModal';
 import { HudToastItem } from './hudPopupQueue';
+import {
+  ActiveObjective,
+  computeScreenEdgeGuide,
+} from '../sim/activeObjective';
 
 interface GameplayHUDProps {
   simState: CampaignState;
   activeMission: MissionDefinition;
+  activeObjective?: ActiveObjective;
+  guideEnabled?: boolean;
+  onToggleGuide?: () => void;
   marsPhysics: MarsEnvironmentSnapshot;
   cameraMode: '3p' | '1p';
   onToggleCameraMode: () => void;
@@ -116,6 +123,8 @@ interface GameplayHUDProps {
   onOpenPauseMenu?: () => void;
   pointerLocked?: boolean;
   quickMode?: boolean;
+  m5ShelterSecondsLeft?: number;
+  onOpenDebrief?: () => void;
   moveInputRef: MutableRefObject<GameplayInputState>;
   reducedMotion: boolean;
 }
@@ -163,11 +172,15 @@ function formatCardinal(deg: number): string {
 
 function TopCompassNav({
   activeGoal,
+  activeObjective,
+  guideEnabled = true,
   weatherActive,
   quickMode,
   initialPose,
 }: {
-  activeGoal: { label: string; x: number; z: number };
+  activeGoal: { label: string; x: number; z: number; colorHex?: string };
+  activeObjective?: ActiveObjective;
+  guideEnabled?: boolean;
   weatherActive: boolean;
   quickMode: boolean;
   initialPose?: GameplayPoseTelemetry;
@@ -206,11 +219,15 @@ function TopCompassNav({
   const offLeft = goalRelDeg < -82;
   const offRight = goalRelDeg > 82;
   const clampedGoalRelDeg = Math.max(-84, Math.min(84, goalRelDeg));
-  const accentHex = weatherActive ? '#22C55E' : '#FFB703';
+  const accentHex = weatherActive ? '#22C55E' : (activeGoal.colorHex ?? '#FFB703');
   const roundedHeading = Math.round(((pose.headingDeg % 360) + 360) % 360) % 360;
 
+  const edgeGuide = activeObjective
+    ? computeScreenEdgeGuide(pose.x, pose.z, pose.headingDeg, activeObjective)
+    : null;
+
   return (
-    <div className="pointer-events-none hidden w-full flex-col items-center md:flex">
+    <div className="pointer-events-none hidden w-full flex-col items-center gap-1.5 md:flex">
       <div className="w-full max-w-[348px] overflow-hidden rounded-xl border border-white/15 bg-[#071324]/92 shadow-[0_8px_24px_rgba(0,0,0,0.48)]">
         {/* Top visor hairline accent */}
         <div
@@ -318,7 +335,7 @@ function TopCompassNav({
             {weatherActive ? (
               <ShieldCheck className="h-3.5 w-3.5 text-[#22C55E]" aria-hidden="true" />
             ) : (
-              <MapPin className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+              <MapPin className="h-3.5 w-3.5" style={{ color: accentHex }} aria-hidden="true" />
             )}
             <span className="font-extrabold">{activeGoal.label}</span>
             <span className="text-white/30" aria-hidden="true">·</span>
@@ -328,6 +345,32 @@ function TopCompassNav({
           </div>
         </div>
       </div>
+
+      {/* Kid-Friendly Screen-Edge Turning Arrow & Distance Badge (only distance text, hidden when Guide: Off) */}
+      {guideEnabled && edgeGuide && edgeGuide.visible && (
+        <div
+          aria-label={`Objective distance ${edgeGuide.distanceLabel}`}
+          className={`flex items-center gap-1.5 rounded-full border bg-[#071324]/92 px-3 py-0.5 text-xs font-black tabular-nums shadow-lg ${
+            edgeGuide.isOffscreen
+              ? edgeGuide.turnDirection === 'left'
+                ? 'self-start ml-2'
+                : 'self-end mr-2'
+              : 'self-center'
+          }`}
+          style={{
+            borderColor: accentHex,
+            color: accentHex,
+          }}
+        >
+          {edgeGuide.isOffscreen && edgeGuide.turnDirection === 'left' && (
+            <ChevronLeft className="h-4 w-4 shrink-0" aria-hidden="true" />
+          )}
+          <span className="text-[#F8F9FA]">{edgeGuide.distanceLabel}</span>
+          {edgeGuide.isOffscreen && edgeGuide.turnDirection === 'right' && (
+            <ChevronRight className="h-4 w-4 shrink-0" aria-hidden="true" />
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -335,6 +378,9 @@ function TopCompassNav({
 export function GameplayHUD({
   simState,
   activeMission,
+  activeObjective,
+  guideEnabled = true,
+  onToggleGuide,
   marsPhysics,
   cameraMode,
   onToggleCameraMode,
@@ -380,6 +426,8 @@ export function GameplayHUD({
   onOpenPauseMenu,
   pointerLocked = false,
   quickMode = false,
+  m5ShelterSecondsLeft,
+  onOpenDebrief,
   moveInputRef,
   reducedMotion,
 }: GameplayHUDProps) {
@@ -469,33 +517,20 @@ export function GameplayHUD({
     shelter: 'Storm Shelter',
   };
 
-  const activeGoal = simState.activeWeatherEvent
+  // Single source of truth for active objective (compass, 3D marker, ring, path guide, wrist map)
+  const activeGoal = activeObjective
     ? {
-        label: 'Habitat Shelter',
-        x: GAMEPLAY_LAYOUT.destinationWaypoints.airlock.x,
-        z: GAMEPLAY_LAYOUT.destinationWaypoints.airlock.z,
+        label: activeObjective.label,
+        x: activeObjective.x,
+        z: activeObjective.z,
+        colorHex: activeObjective.colorHex,
       }
-    : simState.tutorialStep === 'move'
-      ? { label: 'Mars Courtyard', x: 0.0, z: 10.6 }
-      : simState.tutorialStep === 'inspect-rover'
-        ? {
-            label: `${simState.roverName} / Station`,
-            x: GAMEPLAY_LAYOUT.modules.roverSpawn.x,
-            z: GAMEPLAY_LAYOUT.modules.roverSpawn.z,
-          }
-        : simState.tutorialStep === 'jump-crystals'
-          ? { label: 'Gravity Crystals', x: 0.8, z: 11.0 }
-          : simState.tutorialStep === 'inspect-oxygen'
-            ? {
-                label: 'O₂ Tank 2',
-                x: GAMEPLAY_LAYOUT.zoneCoords.tank2.x,
-                z: GAMEPLAY_LAYOUT.zoneCoords.tank2.z,
-              }
-            : {
-                label: zoneTitleMap[activeMission.zoneId],
-                x: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].x,
-                z: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].z,
-              };
+    : {
+        label: zoneTitleMap[activeMission.zoneId],
+        x: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].x,
+        z: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].z,
+        colorHex: '#FFB703',
+      };
 
   return (
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between gap-2 p-3 sm:p-4 md:grid md:grid-cols-[minmax(0,324px)_minmax(300px,1fr)_minmax(0,296px)] md:grid-rows-[auto_1fr_auto] md:gap-x-3 md:gap-y-2 font-[family-name:var(--font-game)]">
@@ -846,6 +881,23 @@ export function GameplayHUD({
               </button>
             )}
 
+            {onToggleGuide && (
+              <button
+                type="button"
+                onClick={onToggleGuide}
+                aria-pressed={guideEnabled}
+                title="Toggle Ground Chevron Path Guide [G]"
+                className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg border px-2.5 text-[11px] font-bold transition-colors cursor-pointer ${
+                  guideEnabled
+                    ? 'border-[#FFB703] bg-[#FFB703]/20 text-[#FFB703]'
+                    : 'border-[#E85D04]/35 bg-[#071324]/88 text-[#F8F9FA]/70 hover:border-[#FFB703]'
+                }`}
+              >
+                <Navigation className="h-3.5 w-3.5" aria-hidden="true" />
+                <span>{guideEnabled ? 'Guide: On' : 'Guide: Off'}</span>
+              </button>
+            )}
+
             {onOpenPauseMenu && (
               <button
                 type="button"
@@ -937,6 +989,8 @@ export function GameplayHUD({
         <div className="pointer-events-none flex w-full flex-col items-center gap-2 md:col-start-2 md:row-start-1 md:self-start">
           <TopCompassNav
             activeGoal={activeGoal}
+            activeObjective={activeObjective}
+            guideEnabled={guideEnabled}
             weatherActive={Boolean(simState.activeWeatherEvent)}
             quickMode={quickMode}
             initialPose={poseTelemetry}
@@ -1066,53 +1120,92 @@ export function GameplayHUD({
 
         {/* ZONE 3 (TOP-RIGHT): Compact Mission Objective Card (hidden during training) + Station/Crew Inspection */}
         <div className="pointer-events-auto flex w-full max-w-[296px] flex-col items-end gap-2 md:col-start-3 md:row-start-1 md:justify-self-end md:self-start">
-          {simState.tutorialStep === 'complete' && (
+          {simState.phase === 'free-roam' ? (
             <section
               aria-live="polite"
-              className="w-full rounded-xl border border-[#E85D04]/55 bg-[#071324]/88 p-3 shadow-[0_0_24px_rgba(232,93,4,0.22)]"
+              className="w-full rounded-xl border border-[#22C55E]/65 bg-[#071324]/92 p-3 shadow-[0_0_24px_rgba(34,197,94,0.22)]"
             >
               <div className="flex items-center justify-between gap-2 text-[11px] font-bold">
-                <span className="text-[#FFB703] tabular-nums">
-                  {JUNIOR_MISSIONS[activeMission.id].simpleSubtitle}
-                </span>
-                <span className="text-[#22C55E]">{activeMission.zoneLabel}</span>
+                <span className="text-[#22C55E] uppercase tracking-wider">Free-Roam Mode</span>
+                <span className="text-[#FFB703] tabular-nums">Sol {simState.sol}</span>
               </div>
-
               <h2 className="mt-0.5 text-base font-extrabold text-[#F8F9FA] leading-tight">
-                {activeMission.title}
+                Explore Mars Outpost
               </h2>
-
-              {activeMission.id === 'm5' && (
-                <div className="mt-1.5 flex items-center gap-1.5 rounded-lg border border-[#FFB703]/45 bg-[#2A190C]/75 px-2.5 py-1 text-[11px] font-bold text-[#FFB703]">
-                  <span className="h-2 w-2 rounded-full bg-[#FFB703] animate-pulse" />
-                  <span>Space-weather warning — shelter ready</span>
-                </div>
-              )}
-
               <p className="mt-1 text-xs text-[#F8F9FA]/85">
-                Go to <strong className="text-[#FFB703]">{zoneTitleMap[activeMission.zoneId]}</strong>{' '}
-                [E] or open panel.
+                {simState.roverName}: &ldquo;We did it! Walk anywhere you like, Commander.&rdquo;
               </p>
-
-              <div className="mt-2.5 flex gap-2">
+              {onOpenDebrief && (
                 <button
                   type="button"
-                  onClick={() => onOpenCommandMode('look')}
-                  className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-[#38BDF8]/50 bg-[#0D213B] px-2.5 text-xs font-bold text-[#38BDF8] hover:bg-[#38BDF8] hover:text-[#071324] transition-colors cursor-pointer whitespace-nowrap"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    onOpenDebrief();
+                  }}
+                  className="mt-2.5 inline-flex min-h-[34px] w-full items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#22C55E] to-[#38BDF8] px-2.5 text-xs font-extrabold text-[#071324] hover:brightness-110 transition-all cursor-pointer"
                 >
-                  <Eye className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Look &amp; Play</span>
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>View Debrief &amp; Badges</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => onOpenCommandMode('compare')}
-                  className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-2.5 text-xs font-extrabold text-[#071324] hover:brightness-110 transition-all cursor-pointer whitespace-nowrap"
-                >
-                  <Zap className="h-3.5 w-3.5" aria-hidden="true" />
-                  <span>Decide</span>
-                </button>
-              </div>
+              )}
             </section>
+          ) : (
+            simState.tutorialStep === 'complete' && (
+              <section
+                aria-live="polite"
+                className="w-full rounded-xl border border-[#E85D04]/55 bg-[#071324]/88 p-3 shadow-[0_0_24px_rgba(232,93,4,0.22)]"
+              >
+                <div className="flex items-center justify-between gap-2 text-[11px] font-bold">
+                  <span className="text-[#FFB703] tabular-nums">
+                    {JUNIOR_MISSIONS[activeMission.id].simpleSubtitle}
+                  </span>
+                  <span className="text-[#22C55E]">{activeMission.zoneLabel}</span>
+                </div>
+
+                <h2 className="mt-0.5 text-base font-extrabold text-[#F8F9FA] leading-tight">
+                  {activeMission.title}
+                </h2>
+
+                {activeMission.id === 'm5' && (
+                  <div className="mt-1.5 flex items-center justify-between gap-1.5 rounded-lg border border-[#FFB703]/45 bg-[#2A190C]/75 px-2.5 py-1 text-[11px] font-bold text-[#FFB703]">
+                    <span className="flex items-center gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-[#FFB703] animate-pulse" />
+                      <span>Shelter Bell</span>
+                    </span>
+                    {typeof m5ShelterSecondsLeft === 'number' && (
+                      <span className="font-black tabular-nums text-[#F8F9FA]">
+                        {Math.floor(m5ShelterSecondsLeft / 60)}:
+                        {String(m5ShelterSecondsLeft % 60).padStart(2, '0')}
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                <p className="mt-1 text-xs text-[#F8F9FA]/85">
+                  Go to <strong className="text-[#FFB703]">{zoneTitleMap[activeMission.zoneId]}</strong>{' '}
+                  [E] or open panel.
+                </p>
+
+                <div className="mt-2.5 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onOpenCommandMode('look')}
+                    className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-lg border border-[#38BDF8]/50 bg-[#0D213B] px-2.5 text-xs font-bold text-[#38BDF8] hover:bg-[#38BDF8] hover:text-[#071324] transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <Eye className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Look &amp; Play</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenCommandMode('compare')}
+                    className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-2.5 text-xs font-extrabold text-[#071324] hover:brightness-110 transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <Zap className="h-3.5 w-3.5" aria-hidden="true" />
+                    <span>Decide</span>
+                  </button>
+                </div>
+              </section>
+            )
           )}
 
           {/* Right-Docked Station or Crew Inspection Card */}
@@ -1500,6 +1593,8 @@ export function GameplayHUD({
               <span><strong className="text-[#22C55E]">C</strong> Quick</span>
               <span className="text-white/25">·</span>
               <span><strong className="text-[#FFB703]">M</strong> Map</span>
+              <span className="text-white/25">·</span>
+              <span><strong className="text-[#FFB703]">G</strong> Guide</span>
               <span className="text-white/25">·</span>
               <span><strong className="text-[#38BDF8]">F</strong> Lens</span>
               <span className="text-white/25">·</span>

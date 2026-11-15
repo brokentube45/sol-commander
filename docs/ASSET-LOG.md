@@ -37,5 +37,7 @@ All runtime visuals, textures, 3D geometries, and audio in this project are eith
 - `card_survive_outpost_1794588148605.jpg`
 (Educational briefing cards bundled locally; zero runtime external image fetches.)
 
-## 6. Video Asset (`public/`)
-- `sol-commandor-intro.mp4`: Project cinematic arrival intro sequence (MP4, H.264) played on mission launch (`PrologueHUD.tsx`) with real-time in-engine Three.js fallback. Zero agency logos or copyright marks.
+## 6. Video Asset (`public/assets/aistudio/`)
+- `sol-commandor-intro_721a1330.mp4` (`/assets/aistudio/sol-commandor-intro_721a1330.mp4`): Attached project intro cutscene video (MP4, H.264, logged without claiming authorship) played full-bleed on mission launch (`PrologueHUD.tsx`) with a Skip button and an automatic fallback to the 28-second real-time in-engine Three.js camera sequence with `SOL_COMMANDER_STORY_BIBLE.md` S0.2 captions if the video fails to load. Zero agency logos or copyright marks.
+
+

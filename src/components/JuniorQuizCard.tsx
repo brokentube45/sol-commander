@@ -68,9 +68,13 @@ export function JuniorQuizCard({
 }: JuniorQuizCardProps) {
   const [selected, setSelected] = useState<'A' | 'B' | null>(null);
   const [solved, setSolved] = useState(false);
+  const [wrongCount, setWrongCount] = useState(0);
 
   // Read quiz question aloud upon opening
   useEffect(() => {
+    setSelected(null);
+    setSolved(false);
+    setWrongCount(0);
     narrativeVoice.speakQuizQuestion(quiz.question, quiz.optionA.label, quiz.optionB.label);
   }, [quiz]);
 
@@ -83,6 +87,7 @@ export function JuniorQuizCard({
       soundEngine.playQuizCorrect();
       narrativeVoice.speakQuizFeedback(true, quiz.correctFeedback);
     } else {
+      setWrongCount((prev) => prev + 1);
       soundEngine.playQuizHint();
       narrativeVoice.speakQuizFeedback(false, quiz.wrongFeedback);
     }
@@ -177,10 +182,25 @@ export function JuniorQuizCard({
               initial={reducedMotion ? false : { opacity: 0, y: 6 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="mt-4 flex items-center gap-2.5 rounded-xl border border-[#FFB703]/55 bg-[#FFB703]/12 px-4 py-3 text-sm font-bold text-[#FFB703]"
+              className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#FFB703]/55 bg-[#FFB703]/12 px-4 py-3 text-sm font-bold text-[#FFB703]"
             >
-              <Bot className="h-5 w-5 shrink-0" aria-hidden="true" />
-              <span>{quiz.wrongFeedback}</span>
+              <div className="flex items-center gap-2.5">
+                <Bot className="h-5 w-5 shrink-0" aria-hidden="true" />
+                <span>{quiz.wrongFeedback}</span>
+              </div>
+              {wrongCount >= 2 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    onPassed();
+                  }}
+                  className="inline-flex min-h-[36px] cursor-pointer items-center gap-1.5 rounded-xl border border-[#FFB703]/60 bg-[#0B1D36]/80 px-3 py-1.5 text-xs font-extrabold text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] transition-colors"
+                >
+                  <span>Skip Question</span>
+                  <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              )}
             </motion.div>
           )}
 

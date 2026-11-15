@@ -1,3 +1,9 @@
+import {
+  BIBLE_BRIEFING_DATA,
+  BIBLE_S02_CAPTIONS,
+  JUNIOR_TUTORIAL_STEPS,
+} from '../sim/storyBeats';
+
 export type OutpostLandmarkId =
   | 'habitat'
   | 'greenhouse'
@@ -43,8 +49,8 @@ export const OUTPOST_LANDMARKS: Record<OutpostLandmarkId, OutpostLandmark> = {
     name: 'Solar Farm & Batteries',
     role: 'Sun Power & Night Storage',
     description:
-      'Five solar panels follow the Sun across the sky, charging big batteries so the base stays warm at night.',
-    funFact: 'Mars gets only 43% as much sunlight as Earth, and dust on panels lowers power!',
+      'Six solar panels follow the Sun across the sky, charging big batteries so the base stays warm at night.',
+    funFact: 'Mars gets less sunlight than Earth, and dust on panels lowers power!',
   },
   rover: {
     id: 'rover',
@@ -60,7 +66,7 @@ export const OUTPOST_LANDMARKS: Record<OutpostLandmarkId, OutpostLandmark> = {
     role: 'That Is You!',
     description:
       'Your Mars spacesuit has heavy boots, a sky-blue helmet visor, and a backpack full of oxygen and sensors.',
-    funFact: 'Mars gravity is ~3.73 m/s² (38% of Earth), so you can jump over 2.5× higher here!',
+    funFact: 'Mars pulls you down less than Earth does, so you can jump higher here!',
   },
   'power-console': {
     id: 'power-console',
@@ -76,7 +82,7 @@ export const OUTPOST_LANDMARKS: Record<OutpostLandmarkId, OutpostLandmark> = {
     role: 'Backup Ridge Power',
     description:
       'Three wide-blade windmills on the ridge catch Martian breezes—especially helpful during dusty skies!',
-    funFact: 'Mars air is ~61× thinner than Earth air, so the blades must be extra wide.',
+    funFact: 'Mars air is much thinner than Earth air, so the blades must be extra wide.',
   },
   'ice-drill': {
     id: 'ice-drill',
@@ -84,7 +90,7 @@ export const OUTPOST_LANDMARKS: Record<OutpostLandmarkId, OutpostLandmark> = {
     role: 'Underground Water Finder',
     description:
       'A tall drill rig in the crater basin built to reach frozen water buried under Martian dust.',
-    funFact: 'NASA radar shows buried water-ice sits just meters below the surface on Mars!',
+    funFact: 'Radar scans show possible ice buried under the ground on Mars!',
   },
   'landing-pad': {
     id: 'landing-pad',
@@ -96,12 +102,9 @@ export const OUTPOST_LANDMARKS: Record<OutpostLandmarkId, OutpostLandmark> = {
   },
 };
 
-export const COMMANDER_CALLSIGNS = [
-  'Commander Nova',
-  'Commander Orion',
-  'Commander Atlas',
-  'Commander Helios',
-];
+export const COMMANDER_CALLSIGNS = BIBLE_BRIEFING_DATA.callsignChoices.map(
+  (name) => `Commander ${name.trim()}`,
+);
 
 export interface CinematicSceneBeat {
   id: number;
@@ -114,44 +117,16 @@ export interface CinematicSceneBeat {
 
 export const PROLOGUE_DURATION_SEC = 28;
 
-export const PROLOGUE_SCENES: CinematicSceneBeat[] = [
-  {
-    id: 1,
-    title: 'A New World',
-    startSec: 0,
-    endSec: 6,
-    caption: 'A new world. A new beginning.',
-  },
-  {
-    id: 2,
-    title: 'The Outpost',
-    startSec: 6,
-    endSec: 13,
-    caption: 'Here, every bit of power matters.',
-  },
-  {
-    id: 3,
-    title: 'Your Mission',
-    startSec: 13,
-    endSec: 21,
-    caption: 'Your crew is counting on you, Commander.',
-  },
-  {
-    id: 4,
-    title: 'The Challenge',
-    startSec: 21,
-    endSec: 29,
-    caption: 'The Sun can change everything. Every decision matters.',
-    advisory: 'SPACE WEATHER ADVISORY · ELEVATED SOLAR WIND DETECTED',
-  },
-  {
-    id: 5,
-    title: 'Take Command',
-    startSec: 29,
-    endSec: 34,
-    caption: 'YOUR MISSION BEGINS NOW.',
-  },
-];
+/**
+ * Derived directly from BIBLE_S02_CAPTIONS in src/sim/storyBeats.ts
+ */
+export const PROLOGUE_SCENES: CinematicSceneBeat[] = BIBLE_S02_CAPTIONS.map((shot) => ({
+  id: shot.shot,
+  title: shot.camera,
+  startSec: shot.startSec,
+  endSec: shot.endSec,
+  caption: shot.caption,
+}));
 
 export interface TutorialStepInfo {
   step: Exclude<TutorialStepId, 'complete'>;
@@ -162,51 +137,49 @@ export interface TutorialStepInfo {
   keyHint: string;
 }
 
+/**
+ * Derived directly from JUNIOR_TUTORIAL_STEPS in src/sim/storyBeats.ts
+ */
 export const TUTORIAL_STEPS: Record<Exclude<TutorialStepId, 'complete'>, TutorialStepInfo> = {
   1: {
     step: 1,
-    code: 'TUTORIAL 01',
-    title: 'Move Across Mars',
-    instruction: 'Use WASD or Arrow Keys to walk around the outpost.',
-    mentorMessage:
-      'Commander Vega: "Take a few steps in your new Mars boots! Walk forward toward the outpost."',
-    keyHint: 'W A S D',
+    code: 'ACT 1 · S1.1',
+    title: JUNIOR_TUTORIAL_STEPS.look.title,
+    instruction: JUNIOR_TUTORIAL_STEPS.look.actionPrompt,
+    mentorMessage: JUNIOR_TUTORIAL_STEPS.look.rustyLine,
+    keyHint: 'LOOK 60°',
   },
   2: {
     step: 2,
-    code: 'TUTORIAL 02',
-    title: 'Look Around',
-    instruction: 'Drag with your Mouse (or click the scene and look) to scan the horizon.',
-    mentorMessage:
-      'Commander Vega: "Good! Now look around Mars Outpost 01 so you know your surroundings."',
-    keyHint: 'DRAG MOUSE',
+    code: 'ACT 1 · S1.2',
+    title: JUNIOR_TUTORIAL_STEPS.move.title,
+    instruction: JUNIOR_TUTORIAL_STEPS.move.actionPrompt,
+    mentorMessage: JUNIOR_TUTORIAL_STEPS.move.rustyLine,
+    keyHint: 'W A S D (7 m)',
   },
   3: {
     step: 3,
-    code: 'TUTORIAL 03',
-    title: 'Inspect a Station',
-    instruction: 'Walk near ROVER-7, the Habitat, or Greenhouse and press E to inspect.',
-    mentorMessage:
-      'Commander Vega: "Every station has an important job. Walk up to any structure and press E!"',
-    keyHint: 'E',
+    code: 'ACT 1 · S1.3',
+    title: JUNIOR_TUTORIAL_STEPS['jump-crystals'].title,
+    instruction: JUNIOR_TUTORIAL_STEPS['jump-crystals'].actionPrompt,
+    mentorMessage: JUNIOR_TUTORIAL_STEPS['jump-crystals'].rustyLine,
+    keyHint: 'SPACE',
   },
   4: {
     step: 4,
-    code: 'TUTORIAL 04',
-    title: 'Locate the Power Console',
-    instruction: 'Follow the glowing gold marker to the Power Console and press E.',
-    mentorMessage:
-      'Commander Vega: "Now find the Outpost Power Console near the habitat walkway and activate it!"',
-    keyHint: 'FIND & PRESS E',
+    code: 'ACT 1 · S1.5',
+    title: JUNIOR_TUTORIAL_STEPS.chores.title,
+    instruction: JUNIOR_TUTORIAL_STEPS.chores.actionPrompt,
+    mentorMessage: JUNIOR_TUTORIAL_STEPS.chores.rustyLine,
+    keyHint: 'PRESS E',
   },
   5: {
     step: 5,
-    code: 'TUTORIAL 05',
-    title: 'Allocate Outpost Power',
-    instruction: 'Balance your 10 Power Units across Habitat, Greenhouse, and Rover, then Apply.',
-    mentorMessage:
-      'Commander Vega: "Solar energy is limited. Give each system what it needs to keep Sol 01 running smoothly!"',
-    keyHint: 'APPLY POWER',
+    code: 'ACT 1 · S1.6',
+    title: JUNIOR_TUTORIAL_STEPS['inspect-oxygen'].title,
+    instruction: JUNIOR_TUTORIAL_STEPS['inspect-oxygen'].actionPrompt,
+    mentorMessage: JUNIOR_TUTORIAL_STEPS['inspect-oxygen'].rustyLine,
+    keyHint: 'TANK 2 + QUIZ',
   },
 };
 

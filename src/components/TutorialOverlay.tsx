@@ -6,19 +6,28 @@ import {
   ArrowRight,
   Map as MapIcon,
   Users,
-  Wind,
   Footprints,
   ArrowUpFromLine,
   Search,
   Volume2,
   Moon,
+  Eye,
+  CheckCircle2,
+  MousePointerClick,
 } from 'lucide-react';
 import {
+  ACT1_CHORE_SPOTS,
+  ACT1_CRYSTAL_CALLOUTS,
+  ACT1_SUNSET_LOG,
+  ACT1_TANK2_LINES,
+  ChorePlaceId,
+  formatWithRoverName,
   JUNIOR_SCIENCE_CARDS,
   JUNIOR_TUTORIAL_QUIZ,
   JUNIOR_TUTORIAL_STEPS,
+  STORY_POSTCARDS,
   TutorialStepId,
-} from '../sim/juniorData';
+} from '../sim/storyBeats';
 import { CREW_PROFILES } from '../sim/constants';
 import { JuniorQuizCard } from './JuniorQuizCard';
 import { ScienceCardModal } from './ScienceCardModal';
@@ -29,42 +38,68 @@ import { narrativeVoice } from '../utils/narrativeVoice';
 interface TutorialOverlayProps {
   tutorialStep: TutorialStepId;
   crystalsCollected: number;
+  choresVisited?: Record<ChorePlaceId, boolean>;
   roverName: string;
   renderMode?: 'banner-only' | 'modals-only' | 'all';
   onAdvanceStep: (next: TutorialStepId) => void;
+  onVisitChore?: (spot: ChorePlaceId) => void;
   onCompleteTutorialQuiz: () => void;
   onUnlockCard: (cardId: string) => void;
   onOpenMap: () => void;
   reducedMotion: boolean;
 }
 
-const ACT1_POSTCARDS = [
-  { sol: 3, text: 'Lucía finds striped rocks near the crater.' },
-  { sol: 8, text: "Rafi's first tomato seed pops up!" },
-  { sol: 12, text: 'Message from Earth: The sky looks calm for now. (Sent 12 minutes ago.)' },
-  { sol: 17, text: 'Kenji checks Tank 2 again. It is a little lower than Tank 1.' },
-];
+const ACT1_POSTCARDS = STORY_POSTCARDS['sol-2-20'];
 
 export function TutorialOverlay({
   tutorialStep,
   crystalsCollected,
+  choresVisited = { greenhouse: false, solar: false, habitat: false },
   roverName,
   renderMode = 'all',
   onAdvanceStep,
+  onVisitChore,
   onCompleteTutorialQuiz,
   onUnlockCard,
   onOpenMap,
   reducedMotion,
 }: TutorialOverlayProps) {
-  const [airCardStage, setAirCardStage] = useState<'none' | 'air' | 'sol'>('none');
-  const [act1Phase, setAct1Phase] = useState<'normal' | 'sunset-log' | 'postcards'>('normal');
+  const [act1Phase, setAct1Phase] = useState<'sunset-log' | 'postcards'>('sunset-log');
   const [postcardIdx, setPostcardIdx] = useState(0);
   const [bannerVisible, setBannerVisible] = useState(true);
   const firstStepRef = useRef(true);
+  const prevCrystalsRef = useRef(crystalsCollected);
 
-  // Time-lapse Sols 2-20: 2.2 seconds each, fast auto-advance or skip (Bible Section 5.1)
+  const displayRover = roverName.trim() || 'Rusty';
+
+  // Sync roverName with narrativeVoice
+  useEffect(() => {
+    narrativeVoice.setRoverName(displayRover);
+  }, [displayRover]);
+
+  // Crystal callouts: "One!" · "Two!" · "Three! Wow, look how high you went!"
+  useEffect(() => {
+    if (renderMode === 'modals-only') return;
+    if (crystalsCollected > prevCrystalsRef.current && crystalsCollected >= 1 && crystalsCollected <= 3) {
+      narrativeVoice.speakCrystalCaught(crystalsCollected);
+    }
+    prevCrystalsRef.current = crystalsCollected;
+  }, [crystalsCollected, renderMode]);
+
+  // Time-lapse Sols 2-20: 4 seconds each per Story Bible S1.8, with Next/Skip
   useEffect(() => {
     if (act1Phase !== 'postcards') return;
+    const currentCard = ACT1_POSTCARDS[postcardIdx];
+    if (currentCard) {
+      narrativeVoice.speakAs(
+        currentCard.speaker,
+        formatWithRoverName(currentCard.caption, displayRover),
+        `act1-postcard-${postcardIdx}`,
+        1000,
+        undefined,
+        true,
+      );
+    }
     const timer = window.setTimeout(() => {
       if (postcardIdx < ACT1_POSTCARDS.length - 1) {
         setPostcardIdx((prev) => prev + 1);
@@ -72,18 +107,24 @@ export function TutorialOverlay({
         soundEngine.playMissionStart();
         onAdvanceStep('complete');
       }
-    }, reducedMotion ? 1500 : 2200);
+    }, reducedMotion ? 2000 : 4000);
     return () => window.clearTimeout(timer);
-  }, [act1Phase, postcardIdx, onAdvanceStep, reducedMotion]);
+  }, [act1Phase, postcardIdx, onAdvanceStep, reducedMotion, displayRover]);
 
-  // Synthesized Rusty beep + Web Speech Voice + 600 ms calm gap when advancing between tutorial instruction banners
-  // Only the banner slot orchestrates speech to avoid duplicate mount cancellation
+  // Reset act1Phase to sunset-log when entering crew-map-intro
+  useEffect(() => {
+    if (tutorialStep === 'crew-map-intro') {
+      setAct1Phase('sunset-log');
+      setPostcardIdx(0);
+    }
+  }, [tutorialStep]);
+
+  // Synthesized Rusty beep + procedural chime + 600 ms calm gap when advancing between tutorial instruction banners
   useEffect(() => {
     if (renderMode === 'modals-only') return;
     if (tutorialStep === 'complete') return;
     soundEngine.playRoverBeep(tutorialStep === 'jump-crystals' ? 'happy' : 'ok');
 
-    // Speak the step instruction line directly without fragile delayed timers
     narrativeVoice.speakTutorialStep(tutorialStep);
 
     if (firstStepRef.current) {
@@ -113,15 +154,23 @@ export function TutorialOverlay({
   if (tutorialStep === 'complete') return null;
 
   const stepInfo = JUNIOR_TUTORIAL_STEPS[tutorialStep];
+  const formattedRustyLine = formatWithRoverName(stepInfo.rustyLine, displayRover);
+  const formattedActionPrompt = formatWithRoverName(stepInfo.actionPrompt, displayRover);
 
   const StepIcon =
-    tutorialStep === 'move'
-      ? Footprints
-      : tutorialStep === 'jump-crystals'
-        ? ArrowUpFromLine
-        : tutorialStep === 'inspect-rover' || tutorialStep === 'inspect-oxygen'
-          ? Search
-          : Sparkles;
+    tutorialStep === 'take-control'
+      ? MousePointerClick
+      : tutorialStep === 'look'
+        ? Eye
+        : tutorialStep === 'move'
+          ? Footprints
+          : tutorialStep === 'jump-crystals'
+            ? ArrowUpFromLine
+            : tutorialStep === 'chores'
+              ? Users
+              : tutorialStep === 'inspect-rover' || tutorialStep === 'inspect-oxygen'
+                ? Search
+                : Sparkles;
 
   const showBannerSlot = renderMode === 'all' || renderMode === 'banner-only';
   const showModalSlot = renderMode === 'all' || renderMode === 'modals-only';
@@ -129,6 +178,16 @@ export function TutorialOverlay({
     tutorialStep !== 'gravity-card' &&
     tutorialStep !== 'tutorial-quiz' &&
     tutorialStep !== 'crew-map-intro';
+
+  const choresDoneCount =
+    (choresVisited.greenhouse ? 1 : 0) +
+    (choresVisited.solar ? 1 : 0) +
+    (choresVisited.habitat ? 1 : 0);
+
+  const crystalCalloutText =
+    crystalsCollected >= 1 && crystalsCollected <= 3
+      ? ACT1_CRYSTAL_CALLOUTS[crystalsCollected - 1]
+      : null;
 
   return (
     <>
@@ -139,13 +198,13 @@ export function TutorialOverlay({
           initial={reducedMotion ? false : { opacity: 0, y: -8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
-          className="pointer-events-auto w-full max-w-[420px] rounded-xl border border-[#22C55E]/60 bg-[#071324]/92 px-3.5 py-2.5 text-[#F8F9FA] shadow-[0_0_24px_rgba(34,197,94,0.22)] font-[family-name:var(--font-game)]"
+          className="pointer-events-auto w-full max-w-[440px] rounded-xl border border-[#22C55E]/60 bg-[#071324]/92 px-3.5 py-2.5 text-[#F8F9FA] shadow-[0_0_24px_rgba(34,197,94,0.22)] font-[family-name:var(--font-game)]"
         >
           <div className="flex items-center justify-between gap-2">
             <span className="inline-flex items-center gap-1.5 text-[11px] font-extrabold text-[#22C55E]">
               <Bot className="h-3.5 w-3.5" aria-hidden="true" />
               <span>
-                Training · Step {stepInfo.stepNumber} of {stepInfo.totalSteps}
+                Sol 01 First Steps · Step {stepInfo.stepNumber} of {stepInfo.totalSteps}
               </span>
             </span>
             <div className="flex items-center gap-2">
@@ -155,7 +214,7 @@ export function TutorialOverlay({
                   soundEngine.playClick();
                   narrativeVoice.speakTutorialStep(tutorialStep);
                 }}
-                title="Listen to Rusty"
+                title={`Listen to ${displayRover}`}
                 className="inline-flex h-5 w-5 items-center justify-center rounded bg-[#22C55E]/20 text-[#22C55E] hover:bg-[#22C55E] hover:text-[#071324] transition-colors cursor-pointer"
               >
                 <Volume2 className="h-3 w-3" aria-hidden="true" />
@@ -173,155 +232,242 @@ export function TutorialOverlay({
             <div className="min-w-0 flex-1">
               <p className="text-xs font-extrabold text-[#F8F9FA]">{stepInfo.title}</p>
               <p className="mt-0.5 text-[11px] font-bold text-[#FFB703]">
-                {roverName}: &ldquo;{stepInfo.rustyLine}&rdquo;
+                {displayRover}: &ldquo;{formattedRustyLine}&rdquo;
               </p>
               <p className="mt-0.5 text-[11px] leading-snug text-[#F8F9FA]/88">
-                {stepInfo.actionPrompt}
+                {formattedActionPrompt}
               </p>
             </div>
           </div>
 
-          {tutorialStep === 'jump-crystals' && (
+          {tutorialStep === 'take-control' && (
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playClick();
+                  onAdvanceStep('look');
+                }}
+                className="inline-flex min-h-[32px] cursor-pointer items-center gap-1.5 rounded-lg bg-[#22C55E] px-3 py-1 text-[11px] font-extrabold text-[#071324] shadow-md hover:scale-[1.02] transition-transform"
+              >
+                <span>Take Control at Airlock</span>
+                <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
+            </div>
+          )}
+
+          {tutorialStep === 'look' && (
             <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-[#38BDF8]/40 bg-[#0D213B]/85 px-2.5 py-1.5">
-              <span className="flex items-center gap-1.5 text-[11px] font-extrabold text-[#38BDF8]">
-                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Gravity Crystals</span>
+              <span className="text-[11px] font-bold text-[#38BDF8]">
+                Turn 60 degrees with mouse or Look keys
               </span>
-              <div className="flex items-center gap-1.5">
-                {[0, 1, 2].map((idx) => (
-                  <span
-                    key={idx}
-                    className={`h-2.5 w-2.5 rounded-full border ${
-                      idx < crystalsCollected
-                        ? 'border-[#22C55E] bg-[#22C55E] shadow-[0_0_8px_#22C55E]'
-                        : 'border-white/30 bg-[#071324]'
-                    }`}
-                  />
-                ))}
-                <span className="ml-1 text-[11px] font-black tabular-nums text-[#F8F9FA]">
-                  {crystalsCollected}/3
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playClick();
+                  onAdvanceStep('move');
+                }}
+                className="inline-flex cursor-pointer items-center gap-1 rounded bg-[#38BDF8]/20 px-2 py-0.5 text-[10px] font-extrabold text-[#38BDF8] hover:bg-[#38BDF8] hover:text-[#071324] transition-colors"
+              >
+                <span>Done Looking →</span>
+              </button>
+            </div>
+          )}
+
+          {tutorialStep === 'jump-crystals' && (
+            <div className="mt-2 space-y-1.5 rounded-lg border border-[#38BDF8]/40 bg-[#0D213B]/85 px-2.5 py-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-[11px] font-extrabold text-[#38BDF8]">
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>Glowing Crystals</span>
                 </span>
+                <div className="flex items-center gap-1.5">
+                  {[0, 1, 2].map((idx) => (
+                    <span
+                      key={idx}
+                      className={`h-2.5 w-2.5 rounded-full border ${
+                        idx < crystalsCollected
+                          ? 'border-[#22C55E] bg-[#22C55E] shadow-[0_0_8px_#22C55E]'
+                          : 'border-white/30 bg-[#071324]'
+                      }`}
+                    />
+                  ))}
+                  <span className="ml-1 text-[11px] font-black tabular-nums text-[#F8F9FA]">
+                    {crystalsCollected}/3
+                  </span>
+                </div>
+              </div>
+              {crystalCalloutText && (
+                <p className="text-[11px] font-extrabold text-[#22C55E]">
+                  {displayRover}: &ldquo;{crystalCalloutText}&rdquo;
+                </p>
+              )}
+            </div>
+          )}
+
+          {tutorialStep === 'chores' && (
+            <div className="mt-2 space-y-1.5 rounded-lg border border-[#FFB703]/45 bg-[#0D213B]/90 p-2.5">
+              <div className="flex items-center justify-between text-[11px] font-extrabold text-[#FFB703]">
+                <span>First-Day Chores (3 Places)</span>
+                <span>{choresDoneCount}/3 Visited</span>
+              </div>
+              <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                {ACT1_CHORE_SPOTS.map((chore) => {
+                  const visited = choresVisited[chore.id];
+                  return (
+                    <button
+                      key={chore.id}
+                      type="button"
+                      onClick={() => {
+                        soundEngine.playClick();
+                        narrativeVoice.speakChoreSpot(chore.id);
+                        onVisitChore?.(chore.id);
+                      }}
+                      className={`flex cursor-pointer items-center justify-between gap-1.5 rounded-lg border px-2 py-1.5 text-left text-[10px] font-bold transition-all ${
+                        visited
+                          ? 'border-[#22C55E]/70 bg-[#22C55E]/20 text-[#22C55E]'
+                          : 'border-white/15 bg-[#071324]/80 text-[#F8F9FA] hover:border-[#FFB703]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <p className="truncate font-extrabold">{chore.label}</p>
+                        <p className="truncate text-[9px] text-[#F8F9FA]/70">
+                          {chore.secondSpeaker
+                            ? `${chore.speaker} & ${chore.secondSpeaker}`
+                            : chore.speaker}
+                        </p>
+                      </div>
+                      {visited ? (
+                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#22C55E]" />
+                      ) : (
+                        <span className="shrink-0 rounded bg-[#FFB703]/20 px-1 py-0.5 text-[9px] text-[#FFB703]">
+                          [E]
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {tutorialStep === 'inspect-oxygen' && (
+            <div className="mt-2 space-y-1.5 rounded-lg border border-[#FFB703]/45 bg-[#0D213B]/90 p-2.5">
+              <p className="text-[11px] font-bold text-[#F8F9FA]">
+                {displayRover}: &ldquo;{ACT1_TANK2_LINES.intro}&rdquo;
+              </p>
+              <p className="text-[11px] italic text-[#FFB703]">
+                {displayRover}: &ldquo;{ACT1_TANK2_LINES.afterTickHiss}&rdquo;
+              </p>
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    narrativeVoice.speakAs('rusty', ACT1_TANK2_LINES.afterTickHiss, 'tank2-tick', 500, undefined, true);
+                    onAdvanceStep('tutorial-quiz');
+                  }}
+                  className="inline-flex cursor-pointer items-center gap-1 rounded-lg bg-[#FFB703] px-2.5 py-1 text-[10px] font-extrabold text-[#071324] hover:scale-[1.02] transition-transform"
+                >
+                  <span>Check Tank 2 [E] →</span>
+                </button>
               </div>
             </div>
           )}
         </motion.div>
       )}
 
-      {/* Step 4: Mars Gravity Science Card */}
+      {/* S1.4: Mars Gravity Card (Kid text only; numbers in Grown-up note) -> advances to Chores (3 places) */}
       {showModalSlot && tutorialStep === 'gravity-card' && (
         <ScienceCardModal
           card={JUNIOR_SCIENCE_CARDS['tut-gravity']}
-          continueLabel="Check Oxygen Tank →"
+          continueLabel="First-Day Chores (3 Places) →"
           reducedMotion={reducedMotion}
           onContinue={() => {
             onUnlockCard('tut-gravity');
-            onAdvanceStep('inspect-oxygen');
+            onAdvanceStep('chores');
           }}
         />
       )}
 
-      {/* Step 5B: Tutorial Quiz -> Mars Air & A Mars Day Science Cards */}
-      {showModalSlot && tutorialStep === 'tutorial-quiz' && airCardStage === 'none' && (
+      {/* S1.6: Tank 2 Quiz -> Sunset Log + Sleep */}
+      {showModalSlot && tutorialStep === 'tutorial-quiz' && (
         <JuniorQuizCard
           quiz={JUNIOR_TUTORIAL_QUIZ}
-          roverName={roverName}
-          continueLabel="See Mars Air Fact"
+          roverName={displayRover}
+          continueLabel="Sunset: Commander's Log →"
           reducedMotion={reducedMotion}
-          onPassed={() => setAirCardStage('air')}
-        />
-      )}
-
-      {showModalSlot && tutorialStep === 'tutorial-quiz' && airCardStage === 'air' && (
-        <ScienceCardModal
-          card={JUNIOR_SCIENCE_CARDS['tut-air']}
-          continueLabel="Next: What is a Sol?"
-          reducedMotion={reducedMotion}
-          onContinue={() => {
+          onPassed={() => {
             onUnlockCard('tut-air');
-            setAirCardStage('sol');
-          }}
-          onSkip={() => {
-            setAirCardStage('none');
+            onUnlockCard('tut-sol');
             onCompleteTutorialQuiz();
           }}
         />
       )}
 
-      {showModalSlot && tutorialStep === 'tutorial-quiz' && airCardStage === 'sol' && (
-        <ScienceCardModal
-          card={JUNIOR_SCIENCE_CARDS['tut-sol']}
-          continueLabel="Meet Your Crew →"
-          reducedMotion={reducedMotion}
-          onContinue={() => {
-            setAirCardStage('none');
-            onCompleteTutorialQuiz();
-          }}
-          onSkip={() => {
-            setAirCardStage('none');
-            onCompleteTutorialQuiz();
-          }}
-        />
-      )}
-
-      {/* Step 6: Crew & Habitat Home Intro */}
-      {showModalSlot && tutorialStep === 'crew-map-intro' && act1Phase === 'normal' && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#040A15]/72 p-4 backdrop-blur-[2px]">
+      {/* S1.7: Sunset — Commander's Log and Sleep */}
+      {showModalSlot && tutorialStep === 'crew-map-intro' && act1Phase === 'sunset-log' && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#040A15]/78 p-4 backdrop-blur-[3px]">
           <motion.section
             role="dialog"
             aria-modal="true"
-            aria-labelledby="tut-home-title"
+            aria-labelledby="sunset-log-title"
             initial={reducedMotion ? false : { opacity: 0, y: 14, scale: 0.97 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ duration: 0.25 }}
-            className="w-full max-w-2xl overflow-hidden rounded-2xl border border-[#22C55E]/60 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_36px_rgba(34,197,94,0.24)] font-[family-name:var(--font-game)]"
+            className="w-full max-w-xl overflow-hidden rounded-2xl border border-[#38BDF8]/60 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_36px_rgba(56,189,248,0.25)] font-[family-name:var(--font-game)]"
           >
-            <div className="h-1 w-full bg-gradient-to-r from-[#22C55E] via-[#FFB703] to-[#38BDF8]" />
-
-            <div className="p-5 sm:p-6">
-              <div className="flex items-center gap-2 text-xs font-extrabold text-[#22C55E]">
-                <Bot className="h-4 w-4" aria-hidden="true" />
-                <span>{roverName}: &ldquo;This home keeps our crew safe.&rdquo;</span>
+            <div className="h-1 w-full bg-gradient-to-r from-[#38BDF8] via-[#FFB703] to-[#E85D04]" />
+            <div className="p-6">
+              <div className="flex items-center justify-between text-xs font-extrabold text-[#38BDF8]">
+                <span className="flex items-center gap-1.5 uppercase tracking-wider">
+                  <Moon className="h-4 w-4" aria-hidden="true" />
+                  <span id="sunset-log-title">Sunset — Commander&apos;s Log and Sleep</span>
+                </span>
+                <span className="text-[11px] text-[#F8F9FA]/60">Sol 1 · Blue Martian Sunset</span>
               </div>
 
-              <h3
-                id="tut-home-title"
-                className="mt-2 font-[family-name:var(--font-display)] text-xl font-extrabold text-[#F8F9FA] sm:text-2xl"
-              >
-                Your Mars Home &amp; Crew
-              </h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-[#F8F9FA]/90">
-                Outside Mars has thin, unbreathable air, so our sealed Habitat, Water Tanks,
-                Solar Farm, and Greenhouse protect all 4 crew members!
-              </p>
+              <div className="mt-3 flex items-center gap-2 rounded-xl border border-[#22C55E]/40 bg-[#0D213B]/80 px-3.5 py-2.5 text-xs font-bold text-[#22C55E]">
+                <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
+                <span>
+                  {displayRover}: &ldquo;{ACT1_SUNSET_LOG.rustyLine}&rdquo;
+                </span>
+              </div>
 
-              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {CREW_PROFILES.map((member) => (
                   <div
                     key={member.id}
-                    className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#1B3A5F]/55 px-3 py-2"
+                    className="flex items-center gap-2 rounded-lg border border-white/10 bg-[#1B3A5F]/45 px-2.5 py-1.5"
                   >
                     <div
-                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-xs font-extrabold text-[#0B1D36]"
+                      className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-[10px] font-extrabold text-[#0B1D36]"
                       style={{ backgroundColor: member.avatarColor }}
                     >
                       {member.initials}
                     </div>
                     <div className="min-w-0">
-                      <p className="truncate text-xs font-extrabold text-[#F8F9FA]">
-                        {member.name}
+                      <p className="truncate text-[11px] font-extrabold text-[#F8F9FA]">
+                        {member.name.split(' ').pop()}
                       </p>
-                      <p className="truncate text-[11px] font-bold text-[#FFB703]">{member.role}</p>
+                      <p className="truncate text-[9px] font-bold text-[#22C55E]">Safe Inside</p>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div className="mt-4 flex items-center gap-2 rounded-xl border border-[#22C55E]/45 bg-[#1B3A5F]/65 px-3.5 py-2.5 text-xs font-bold text-[#22C55E]">
-                <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span>
-                  {roverName}: &ldquo;Great job! You learned the controls and checked our systems. Let&apos;s watch the Sol 1 sunset!&rdquo;
-                </span>
+              <div className="mt-4 rounded-xl border border-white/10 bg-[#040A15]/80 p-4">
+                <p className="text-xs uppercase tracking-wider text-[#FFB703] font-bold">
+                  Commander&apos;s Log · Sol 1
+                </p>
+                <p className="mt-1.5 text-sm sm:text-base italic leading-relaxed text-[#F8F9FA]">
+                  &ldquo;{ACT1_SUNSET_LOG.logEntry}&rdquo;
+                </p>
               </div>
+
+              <p className="mt-3 text-xs leading-relaxed text-[#F8F9FA]/70">
+                The sky turns warm orange, then a soft blue around the setting Sun. Click Sleep to advance through Sols 2–20.
+              </p>
 
               <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
                 <button
@@ -340,64 +486,6 @@ export function TutorialOverlay({
                   type="button"
                   onClick={() => {
                     soundEngine.playClick();
-                    soundEngine.playSpeakerChime('rusty');
-                    setAct1Phase('sunset-log');
-                  }}
-                  className="inline-flex min-h-[46px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-5 py-2 text-xs font-extrabold text-[#0B1D36] shadow-xl transition-transform hover:scale-[1.02]"
-                >
-                  <Moon className="h-4 w-4" aria-hidden="true" />
-                  <span>Sol 1 Sunset Log</span>
-                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                </button>
-              </div>
-            </div>
-          </motion.section>
-        </div>
-      )}
-
-      {/* Step 7: Sol 1 Sunset Log Modal (Bible Section 5.1 / S1.7) */}
-      {showModalSlot && tutorialStep === 'crew-map-intro' && act1Phase === 'sunset-log' && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#040A15]/78 p-4 backdrop-blur-[3px]">
-          <motion.section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="sunset-log-title"
-            initial={reducedMotion ? false : { opacity: 0, y: 14, scale: 0.97 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            transition={{ duration: 0.25 }}
-            className="w-full max-w-lg overflow-hidden rounded-2xl border border-[#38BDF8]/60 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_36px_rgba(56,189,248,0.25)] font-[family-name:var(--font-game)]"
-          >
-            <div className="h-1 w-full bg-gradient-to-r from-[#38BDF8] via-[#FFB703] to-[#E85D04]" />
-            <div className="p-6">
-              <div className="flex items-center justify-between text-xs font-extrabold text-[#38BDF8]">
-                <span className="flex items-center gap-1.5 uppercase tracking-wider">
-                  <Moon className="h-4 w-4" aria-hidden="true" />
-                  <span id="sunset-log-title">Sol 01 · Sunset Log</span>
-                </span>
-                <span className="text-[11px] text-[#F8F9FA]/60">Ares Crater Outpost</span>
-              </div>
-
-              <div className="mt-3 flex items-center gap-2 rounded-xl border border-[#22C55E]/40 bg-[#0D213B]/80 px-3.5 py-2 text-xs font-bold text-[#22C55E]">
-                <Bot className="h-4 w-4 shrink-0" aria-hidden="true" />
-                <span>{roverName}: &ldquo;This is our home. Everyone is safe inside.&rdquo;</span>
-              </div>
-
-              <div className="mt-4 rounded-xl border border-white/10 bg-[#040A15]/80 p-4">
-                <p className="text-xs uppercase tracking-wider text-[#FFB703] font-bold">Commander&apos;s Evening Log</p>
-                <p className="mt-1.5 text-sm sm:text-base italic leading-relaxed text-[#F8F9FA]">
-                  &ldquo;Sol 1. We are home. The crew is great. Tank 2 made a funny little noise.&rdquo;
-                </p>
-              </div>
-
-              <p className="mt-3 text-xs leading-relaxed text-[#F8F9FA]/70">
-                The sky turns a calm Martian blue around the setting Sun. Time to rest before routine outpost maintenance.
-              </p>
-
-              <div className="mt-5 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => {
-                    soundEngine.playClick();
                     soundEngine.playSpeakerChime('log');
                     setAct1Phase('postcards');
                     setPostcardIdx(0);
@@ -405,7 +493,7 @@ export function TutorialOverlay({
                   className="inline-flex min-h-[46px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#38BDF8] to-[#1D4ED8] px-6 py-2.5 font-[family-name:var(--font-display)] text-xs font-extrabold tracking-wider text-white shadow-xl transition-transform hover:scale-[1.02]"
                 >
                   <Moon className="h-4 w-4" aria-hidden="true" />
-                  <span>SLEEP (TIME-LAPSE SOLS 2–20)</span>
+                  <span>{ACT1_SUNSET_LOG.sleepButtonLabel}</span>
                 </button>
               </div>
             </div>
@@ -413,7 +501,7 @@ export function TutorialOverlay({
         </div>
       )}
 
-      {/* Step 8: Sols 2-20 Time-Lapse Postcards (Bible Section 5.1 / S1.8) */}
+      {/* S1.8: Postcards Sols 2–20 (Bible S1.8: 3 cards, 4 seconds each, Next / Skip) */}
       {showModalSlot && tutorialStep === 'crew-map-intro' && act1Phase === 'postcards' && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#040A15]/85 p-4 backdrop-blur-[3px]">
           <motion.section
@@ -432,7 +520,7 @@ export function TutorialOverlay({
               <div className="flex items-center justify-between text-xs font-bold text-[#FFB703]">
                 <span className="flex items-center gap-1.5 uppercase tracking-wider" id="postcard-title">
                   <Sparkles className="h-4 w-4" aria-hidden="true" />
-                  <span>Sol {ACT1_POSTCARDS[postcardIdx].sol} Postcard</span>
+                  <span>{ACT1_POSTCARDS[postcardIdx].title}</span>
                 </span>
                 <span className="text-[11px] text-[#F8F9FA]/60">
                   {postcardIdx + 1} of {ACT1_POSTCARDS.length}
@@ -441,7 +529,7 @@ export function TutorialOverlay({
 
               <div className="mt-4 rounded-xl border border-white/10 bg-[#040A15]/85 p-5 text-center">
                 <p className="font-[family-name:var(--font-display)] text-lg sm:text-xl font-extrabold text-[#F8F9FA] leading-snug">
-                  &ldquo;{ACT1_POSTCARDS[postcardIdx].text}&rdquo;
+                  &ldquo;{formatWithRoverName(ACT1_POSTCARDS[postcardIdx].caption, displayRover)}&rdquo;
                 </p>
               </div>
 
@@ -466,7 +554,7 @@ export function TutorialOverlay({
                   }}
                   className="min-h-[40px] cursor-pointer rounded-xl border border-[#FFB703]/60 bg-[#1B3A5F]/80 px-4 text-xs font-bold text-[#FFB703] hover:border-[#FFB703] hover:bg-[#1B3A5F] transition-all"
                 >
-                  Skip Ahead to Mission 1 (Sol 21) →
+                  Skip →
                 </button>
 
                 <button
@@ -482,7 +570,7 @@ export function TutorialOverlay({
                   }}
                   className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-5 py-2 font-[family-name:var(--font-display)] text-xs font-extrabold text-[#0B1D36] shadow-xl hover:scale-[1.02]"
                 >
-                  <span>{postcardIdx < ACT1_POSTCARDS.length - 1 ? 'Next Sol' : 'Start Sol 21'}</span>
+                  <span>{postcardIdx < ACT1_POSTCARDS.length - 1 ? 'Next' : 'Start Mission 1 (Sol 21)'}</span>
                   <ArrowRight className="h-4 w-4" aria-hidden="true" />
                 </button>
               </div>

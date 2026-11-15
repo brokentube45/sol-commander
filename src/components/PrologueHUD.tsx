@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
-import { FastForward, Volume2, VolumeX } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { FastForward, Rocket } from 'lucide-react';
+import { BIBLE_S02_CAPTIONS, formatWithRoverName } from '../sim/storyBeats';
 import { soundEngine } from '../utils/soundEngine';
 
-export const PROLOGUE_DURATION_SEC = 60; // generous upper bound; actual video length drives completion
+export const PROLOGUE_DURATION_SEC = 28;
+
+export const INTRO_VIDEO_SRC = '/assets/aistudio/sol-commandor-intro_721a1330.mp4';
 
 interface PrologueHUDProps {
   paused: boolean;
@@ -14,220 +18,277 @@ interface PrologueHUDProps {
   soundEnabled: boolean;
   onToggleSound: () => void;
   reducedMotion: boolean;
+  roverName?: string;
   onElapsedTick?: (elapsedSec: number) => void;
 }
 
 export function PrologueHUD({
   paused,
   replayToken,
-  onTogglePause,
-  onReplay,
-  onSkip,
   onComplete,
   soundEnabled,
-  onToggleSound,
   reducedMotion,
+  roverName = 'Rusty',
   onElapsedTick,
 }: PrologueHUDProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoError, setVideoError] = useState(false);
-  const [duration, setDuration] = useState(0);
-  const [elapsed, setElapsed] = useState(0);
+  const [fallbackElapsedSec, setFallbackElapsedSec] = useState(0);
+  const [closingCard, setClosingCard] = useState(false);
   const hasCompletedRef = useRef(false);
+  const onElapsedTickRef = useRef(onElapsedTick);
+  onElapsedTickRef.current = onElapsedTick;
+  const soundEnabledRef = useRef(soundEnabled);
+  soundEnabledRef.current = soundEnabled;
 
-  // Reset on replay
+  const tryPlayVideo = useCallback((vid: HTMLVideoElement) => {
+    vid.muted = !soundEnabledRef.current;
+    const playPromise = vid.play();
+    if (playPromise !== undefined) {
+      playPromise.catch(() => {
+        // Fallback to muted playback if browser blocks unmuted autoplay
+        vid.muted = true;
+        vid.play().catch(() => {});
+      });
+    }
+  }, []);
+
+  const triggerMissionBeginsBanner = useCallback(() => {
+    if (closingCard || hasCompletedRef.current) return;
+    const vid = videoRef.current;
+    if (vid) {
+      vid.pause();
+    }
+    soundEngine.playMissionStart();
+    setClosingCard(true);
+  }, [closingCard]);
+
+  const finishPrologue = useCallback(() => {
+    if (hasCompletedRef.current) return;
+    hasCompletedRef.current = true;
+    onComplete();
+  }, [onComplete]);
+
+  // Auto-advance to Briefing after the top/bottom black shutters close into a full black screen and display the mission title
+  useEffect(() => {
+    if (!closingCard) return;
+    const tid = window.setTimeout(
+      () => {
+        finishPrologue();
+      },
+      reducedMotion ? 2800 : 5200,
+    );
+    return () => window.clearTimeout(tid);
+  }, [closingCard, finishPrologue, reducedMotion]);
+
+  // Reset and play on mount or replayToken change
   useEffect(() => {
     hasCompletedRef.current = false;
     setVideoError(false);
-    setElapsed(0);
+    setFallbackElapsedSec(0);
+    setClosingCard(false);
     const vid = videoRef.current;
     if (vid) {
       vid.currentTime = 0;
-      vid.play().catch(() => setVideoError(true));
+      tryPlayVideo(vid);
     }
-    onElapsedTick?.(0);
-  }, [replayToken, onElapsedTick]);
+    onElapsedTickRef.current?.(0);
+  }, [replayToken, tryPlayVideo]);
 
-  // Pause / play sync
+  // Sync mute state dynamically if soundEnabled changes
   useEffect(() => {
     const vid = videoRef.current;
     if (!vid) return;
+    vid.muted = !soundEnabled;
+  }, [soundEnabled]);
+
+  // Pause / resume sync
+  useEffect(() => {
+    const vid = videoRef.current;
+    if (!vid || closingCard || videoError) return;
     if (paused) {
       vid.pause();
     } else {
-      vid.play().catch(() => setVideoError(true));
+      tryPlayVideo(vid);
     }
-  }, [paused]);
+  }, [paused, closingCard, videoError, tryPlayVideo]);
 
-  // Keyboard: Space/K = pause, Enter/Escape = skip
+  // Fallback 28 s in-engine cinematic timer if the MP4 fails to load
+  useEffect(() => {
+    if (!videoError || closingCard || paused) return;
+    const interval = window.setInterval(() => {
+      setFallbackElapsedSec((prev) => {
+        const next = Math.min(PROLOGUE_DURATION_SEC, prev + 0.1);
+        onElapsedTickRef.current?.(next);
+        if (next >= PROLOGUE_DURATION_SEC) {
+          window.clearInterval(interval);
+          triggerMissionBeginsBanner();
+        }
+        return next;
+      });
+    }, 100);
+    return () => window.clearInterval(interval);
+  }, [videoError, closingCard, paused, triggerMissionBeginsBanner]);
+
+  // Keyboard: Escape or Enter triggers the closing mission banner (or finishes immediately if already in banner)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' || e.code === 'KeyK') {
+      if (e.code === 'Escape' || e.code === 'Enter') {
         e.preventDefault();
-        onTogglePause();
-      } else if (e.code === 'Enter' || e.code === 'Escape') {
-        e.preventDefault();
-        onSkip();
+        if (closingCard) {
+          finishPrologue();
+        } else {
+          triggerMissionBeginsBanner();
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onTogglePause, onSkip]);
+  }, [closingCard, finishPrologue, triggerMissionBeginsBanner]);
 
   const handleVideoEnded = () => {
-    if (hasCompletedRef.current) return;
-    hasCompletedRef.current = true;
-    onComplete();
+    triggerMissionBeginsBanner();
   };
 
   const handleTimeUpdate = () => {
     const vid = videoRef.current;
     if (!vid) return;
-    setElapsed(vid.currentTime);
-    onElapsedTick?.(vid.currentTime);
+    onElapsedTickRef.current?.(vid.currentTime);
   };
 
   const handleLoadedMetadata = () => {
     const vid = videoRef.current;
     if (!vid) return;
-    setDuration(vid.duration);
-    vid.play().catch(() => setVideoError(true));
+    if (!paused && !closingCard) {
+      tryPlayVideo(vid);
+    }
   };
 
   const handleError = () => {
+    // Fall back to the in-engine 28 s Three.js camera sweep with Bible S0.2 captions
     setVideoError(true);
+    setFallbackElapsedSec(0);
+    onElapsedTickRef.current?.(0);
   };
 
-  const progressPercent = duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 0;
-
-  function formatTime(sec: number) {
-    const s = Math.max(0, Math.floor(sec));
-    const m = Math.floor(s / 60);
-    return `${m}:${String(s % 60).padStart(2, '0')}`;
-  }
-
-  // Fallback: if video fails, auto-advance after short delay
-  useEffect(() => {
-    if (!videoError) return;
-    soundEngine.playSpeakerChime('rusty');
-    const tid = window.setTimeout(() => {
-      if (!hasCompletedRef.current) {
-        hasCompletedRef.current = true;
-        onComplete();
-      }
-    }, reducedMotion ? 3000 : 10000);
-    return () => window.clearTimeout(tid);
-  }, [videoError, onComplete, reducedMotion]);
+  const currentFallbackShot =
+    BIBLE_S02_CAPTIONS.find(
+      (shot) => fallbackElapsedSec >= shot.startSec && fallbackElapsedSec < shot.endSec,
+    ) ?? BIBLE_S02_CAPTIONS[BIBLE_S02_CAPTIONS.length - 1];
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-30 flex flex-col font-[family-name:var(--font-game)] select-none">
-
-      {/* Top bar */}
-      <div className="pointer-events-auto flex h-14 w-full shrink-0 items-center justify-between border-b border-white/10 bg-[#040A15]/95 px-5 shadow-md">
-        <div className="flex items-center gap-2.5">
-          <span className="relative flex h-3 w-3">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#E85D04] opacity-70" />
-            <span className="relative inline-flex h-3 w-3 rounded-full bg-[#E85D04]" />
-          </span>
-          <span className="text-xs font-black uppercase tracking-widest text-[#FFB703]">
-            SOL COMMANDER · INTRO
-          </span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onToggleSound}
-            className="flex h-8 w-8 items-center justify-center rounded-lg border border-white/20 bg-[#1B3A5F]/60 text-[#F8F9FA] hover:border-[#FFB703] transition-colors cursor-pointer"
-            title={soundEnabled ? 'Mute' : 'Unmute'}
-          >
-            {soundEnabled ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4 text-red-400" />}
-          </button>
-
-          <button
-            type="button"
-            onClick={onSkip}
-            className="inline-flex min-h-[32px] cursor-pointer items-center gap-1.5 rounded-lg border border-white/20 bg-[#1B3A5F]/70 px-3.5 text-xs font-bold text-[#F8F9FA] hover:border-[#FFB703] transition-colors"
-          >
-            <span>Skip [Esc]</span>
-            <FastForward className="h-3.5 w-3.5 text-[#FFB703]" />
-          </button>
-        </div>
-      </div>
-
-      {/* Video area */}
-      <div className="relative flex-1 overflow-hidden bg-black">
-        {!videoError ? (
-          <video
-            ref={videoRef}
-            src="/sol-commandor-intro.mp4"
-            className="h-full w-full object-contain"
-            playsInline
-            muted={!soundEnabled}
-            onEnded={handleVideoEnded}
-            onTimeUpdate={handleTimeUpdate}
-            onLoadedMetadata={handleLoadedMetadata}
-            onError={handleError}
-          />
-        ) : (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-4 text-center px-8">
-            <span className="text-5xl">🚀</span>
-            <p className="font-[family-name:var(--font-display)] text-2xl font-black text-[#FFB703]">
-              SOL COMMANDER
-            </p>
-            <p className="text-sm text-[#F8F9FA]/70">88 days on Mars. Your crew needs you, Commander.</p>
-            <button
-              type="button"
-              onClick={onSkip}
-              className="pointer-events-auto mt-4 inline-flex min-h-[48px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#E85D04] to-[#FFB703] px-8 font-[family-name:var(--font-display)] text-sm font-black text-[#0B1D36] shadow-xl"
-            >
-              Continue →
-            </button>
-          </div>
-        )}
-      </div>
-
-      {/* Bottom controls (only when video loads) */}
+    <div
+      className={`fixed inset-0 z-30 h-screen w-screen overflow-hidden font-[family-name:var(--font-game)] select-none ${
+        videoError ? 'pointer-events-none bg-transparent' : 'bg-black'
+      }`}
+    >
       {!videoError && (
-        <div className="pointer-events-auto flex h-16 w-full shrink-0 flex-col justify-between border-t border-white/10 bg-[#040A15]/95 px-5 py-2.5 shadow-2xl">
-          <div className="w-full overflow-hidden rounded-full bg-white/10 h-1.5">
-            <div
-              className="h-full bg-gradient-to-r from-[#22C55E] via-[#FFB703] to-[#E85D04] transition-all duration-200"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
+        <video
+          ref={videoRef}
+          src={INTRO_VIDEO_SRC}
+          className="absolute inset-0 h-full w-full object-cover"
+          autoPlay
+          playsInline
+          preload="auto"
+          muted={!soundEnabled}
+          onEnded={handleVideoEnded}
+          onTimeUpdate={handleTimeUpdate}
+          onLoadedMetadata={handleLoadedMetadata}
+          onError={handleError}
+        />
+      )}
 
-          <div className="flex items-center justify-between text-xs font-bold text-[#F8F9FA]">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={onTogglePause}
-                className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#FFB703] text-[#0B1D36] hover:scale-105 transition-transform cursor-pointer text-xs font-black"
-                title={paused ? 'Resume [Space]' : 'Pause [Space]'}
-              >
-                {paused ? '▶' : '⏸'}
-              </button>
-
-              <button
-                type="button"
-                onClick={onReplay}
-                className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/20 bg-[#1B3A5F]/70 text-[#F8F9FA] hover:border-[#FFB703] transition-colors cursor-pointer text-xs"
-                title="Restart"
-              >
-                ↺
-              </button>
-
-              <span className="tabular-nums text-[#F8F9FA]/60 text-xs">
-                {formatTime(elapsed)}{duration > 0 ? ` / ${formatTime(duration)}` : ''}
-              </span>
-            </div>
-
-            <span className="text-[11px] text-[#F8F9FA]/40 hidden sm:inline">
-              Press Esc to skip
-            </span>
+      {/* In-engine 28 s Cinematic Fallback Captions (Bible S0.2) if video fails to load */}
+      {videoError && !closingCard && currentFallbackShot && (
+        <div className="pointer-events-none fixed inset-x-0 bottom-8 z-40 flex flex-col items-center px-6">
+          <div className="rounded-2xl border border-[#FFB703]/45 bg-[#040A15]/82 px-6 py-3 text-center shadow-2xl backdrop-blur-md">
+            <p className="font-[family-name:var(--font-indicator)] text-[10px] font-extrabold uppercase tracking-[0.26em] text-[#FFB703]">
+              SHOT {currentFallbackShot.shot} OF 7 · {Math.floor(fallbackElapsedSec)}s / 28s
+            </p>
+            <p className="mt-1 font-[family-name:var(--font-display)] text-lg font-extrabold tracking-wide text-[#F8F9FA] sm:text-2xl">
+              {formatWithRoverName(currentFallbackShot.caption, roverName)}
+            </p>
           </div>
         </div>
       )}
+
+      {/* Single Game-Cutscene Skip Button (visible while video or fallback plays) */}
+      {!closingCard && (
+        <button
+          type="button"
+          onClick={triggerMissionBeginsBanner}
+          aria-label="Skip Intro"
+          className="pointer-events-auto fixed bottom-6 right-6 z-40 inline-flex min-h-[42px] cursor-pointer items-center gap-2 rounded-lg border border-white/25 bg-[#040A15]/75 px-5 py-2 text-xs font-black uppercase tracking-widest text-[#F8F9FA] shadow-lg backdrop-blur-md transition-all hover:border-[#FFB703] hover:bg-[#0B1D36]/90 hover:text-[#FFB703]"
+        >
+          <span>Skip</span>
+          <FastForward className="h-4 w-4 text-[#FFB703]" />
+        </button>
+      )}
+
+      {/* Post-Video Top & Bottom Black Shutter Screen -> Seamless Full Black Screen + Mission Name */}
+      <AnimatePresence>
+        {closingCard && (
+          <motion.div
+            initial={{ opacity: 1 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={finishPrologue}
+            className="pointer-events-auto fixed inset-0 z-50 flex items-center justify-center overflow-hidden cursor-pointer"
+          >
+            {/* Full-screen black fade layer so there is never a seam in the middle */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ duration: reducedMotion ? 0.25 : 1.15, ease: 'easeInOut' }}
+              className="absolute inset-0 bg-black"
+            />
+
+            {/* Top Black Shutter sliding smoothly down (51% height overlaps center with zero line) */}
+            <motion.div
+              initial={reducedMotion ? { y: '0%' } : { y: '-100%' }}
+              animate={{ y: '0%' }}
+              transition={{ duration: reducedMotion ? 0.25 : 1.25, ease: [0.22, 1, 0.36, 1] }}
+              className="absolute inset-x-0 top-0 h-[51%] bg-black"
+            />
+
+            {/* Bottom Black Shutter sliding smoothly up (51% height overlaps center with zero line) */}
+            <motion.div
+              initial={reducedMotion ? { y: '0%' } : { y: '100%' }}
+              animate={{ y: '0%' }}
+              transition={{ duration: reducedMotion ? 0.25 : 1.25, ease: [0.22, 1, 0.36, 1] }}
+              className="absolute inset-x-0 bottom-0 h-[51%] bg-black"
+            />
+
+            {/* Center Mission Title Reveal */}
+            <motion.div
+              initial={reducedMotion ? { opacity: 1 } : { opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              transition={{
+                duration: reducedMotion ? 0.25 : 0.9,
+                delay: reducedMotion ? 0.1 : 0.95,
+                ease: [0.16, 1, 0.3, 1],
+              }}
+              className="relative z-10 flex flex-col items-center px-6 text-center"
+            >
+              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#FFB703]/50 bg-gradient-to-br from-[#FFB703]/20 to-[#E85D04]/20 text-[#FFB703] shadow-[0_0_30px_rgba(255,183,3,0.3)]">
+                <Rocket className="h-6 w-6" aria-hidden="true" />
+              </div>
+
+              <p className="font-[family-name:var(--font-indicator)] text-xs font-extrabold uppercase tracking-[0.32em] text-[#FFB703] sm:text-sm">
+                YOUR MISSION BEGINS NOW
+              </p>
+
+              <h1 className="mt-2 font-[family-name:var(--font-display)] text-2xl font-black uppercase tracking-wider text-[#F8F9FA] drop-shadow-[0_0_24px_rgba(232,93,4,0.45)] sm:text-4xl md:text-5xl">
+                SOL COMMANDER: 88 DAYS ON MARS
+              </h1>
+
+              <p className="mt-3 text-xs font-bold tracking-widest uppercase text-[#38BDF8] sm:text-sm">
+                Act 1 · Settling In at Ares Crater Outpost
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

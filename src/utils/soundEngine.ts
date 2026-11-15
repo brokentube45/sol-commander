@@ -1040,9 +1040,11 @@ class SoundEngine {
   }
 
   /** Synthesized Rusty companion beeps (no TTS / no voice-over) */
-  public playRoverBeep(mood: 'ok' | 'lowPower' | 'critical' | 'happy' = 'ok'): void {
+  public playRoverBeep(
+    mood: 'ok' | 'lowPower' | 'critical' | 'happy' | 'curious' | 'alert' = 'ok',
+  ): void {
     if (!this.enabled) return;
-    if (mood === 'critical') {
+    if (mood === 'critical' || mood === 'alert') {
       this.playTone(740, 0.07, 'triangle', 0.07, 0);
       this.playTone(587.33, 0.09, 'triangle', 0.07, 0.08);
       return;
@@ -1058,8 +1060,21 @@ class SoundEngine {
       this.playTone(1046.5, 0.1, 'sine', 0.07, 0.14);
       return;
     }
+    if (mood === 'curious') {
+      this.playTone(587.33, 0.06, 'sine', 0.065, 0);
+      this.playTone(783.99, 0.08, 'sine', 0.065, 0.07);
+      return;
+    }
     this.playTone(698.46, 0.06, 'triangle', 0.065, 0);
     this.playTone(880, 0.08, 'sine', 0.065, 0.07);
+  }
+
+  public playSuccess(): void {
+    this.playQuizCorrect();
+  }
+
+  public playAirlockCycle(): void {
+    this.playAirlockHiss();
   }
 
   /** Soft green-glow chime when a Junior Explorer quiz answer is correct */

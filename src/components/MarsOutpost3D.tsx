@@ -9,10 +9,9 @@ import {
   OutpostLandmarkId,
   PROLOGUE_DURATION_SEC,
   PowerAllocation,
-  TutorialStepId,
 } from '../data/missionData';
 import { CrewMemberId, MARS_FACTS, PHYSICS_CONSTANTS } from '../sim/constants';
-import { GRAVITY_CRYSTAL_SPOTS } from '../sim/juniorData';
+import { GRAVITY_CRYSTAL_SPOTS, TutorialStepId } from '../sim/juniorData';
 import {
   CrewAgentState,
   CrewInspectCardData,
@@ -44,6 +43,10 @@ import { GameplayPoseTelemetry } from './WristMapModal';
 import { MissionZoneId } from '../sim/missionsData';
 import { RoverMood } from '../sim/roverData';
 import { CrewMemberState, WeatherEventKind } from '../sim/simEngine';
+import {
+  ActiveObjective,
+  computePathGuideState,
+} from '../sim/activeObjective';
 import {
   MarsEnvironmentSnapshot,
   MarsJumpTelemetry,
@@ -106,6 +109,9 @@ export interface SimVisualState {
   sol?: number;
   dustTau?: number;
   activeWxWindMs?: number;
+  guidanceStage?: 0 | 1 | 2 | 3;
+  activeObjective?: ActiveObjective;
+  guideEnabled?: boolean;
   crew?: CrewMemberState[];
   weatherEvent: {
     active: boolean;
@@ -779,6 +785,41 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
     });
     const reportedCrystalIds = new Set<string>();
 
+    // Kid-Friendly Ground Chevron Path Guide (InstancedMesh of 28 flowing chevrons)
+    const MAX_CHEVRONS = 28;
+    const chevronShape = new THREE.Shape();
+    chevronShape.moveTo(0, 0.28);
+    chevronShape.lineTo(0.26, -0.14);
+    chevronShape.lineTo(0.15, -0.22);
+    chevronShape.lineTo(0, 0.06);
+    chevronShape.lineTo(-0.15, -0.22);
+    chevronShape.lineTo(-0.26, -0.14);
+    chevronShape.closePath();
+    const chevronGeo = new THREE.ShapeGeometry(chevronShape);
+    chevronGeo.rotateX(Math.PI / 2);
+    const chevronMat = new THREE.MeshBasicMaterial({
+      color: '#FFB703',
+      transparent: true,
+      opacity: 0.88,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    extraGeos.push(chevronGeo);
+    extraMats.push(chevronMat);
+    const chevronInstancedMesh = new THREE.InstancedMesh(chevronGeo, chevronMat, MAX_CHEVRONS);
+    chevronInstancedMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    chevronInstancedMesh.renderOrder = 10;
+    chevronInstancedMesh.frustumCulled = false;
+    chevronInstancedMesh.visible = false;
+    chevronInstancedMesh.count = 0;
+    scene.add(chevronInstancedMesh);
+    const _chevronMatrix = new THREE.Matrix4();
+    const _chevronPos = new THREE.Vector3();
+    const _chevronEuler = new THREE.Euler();
+    const _chevronQuat = new THREE.Quaternion();
+    const _chevronScale = new THREE.Vector3();
+
+
     const spawnBallisticDust = (
       x: number,
       y: number,
@@ -864,9 +905,6 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
     // Initialize authoritative Rapier WASM physics world ONLY for Gameplay layout
     let physicsWorld: MarsPhysicsWorld | null = null;
     let disposed = false;
-    let introGlideActive = false;
-    let introGlideTimer = 0;
-    const INTRO_GLIDE_DURATION_S = 1.35;
 
     if (layoutMode === 'gameplay') {
       void MarsPhysicsWorld.create({
@@ -884,10 +922,6 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
         physicsWorld = pw;
         setLoadingGameplayOutpost(false);
         setCurtainOpaque(false);
-        if (!reducedMotionRef.current) {
-          introGlideActive = true;
-          introGlideTimer = 0;
-        }
         onEngineReadyRef.current?.();
       });
     } else {
@@ -1354,9 +1388,16 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
       );
 
       totalLookDelta += Math.abs(yawDelta) + Math.abs(pitchDelta);
-      if (!lookTutorialReported && tutorialStepRef.current === 2 && totalLookDelta >= 0.14) {
+      if (
+        tutorialStepRef.current === 'look' &&
+        totalLookDelta >= Math.PI / 3 &&
+        !lookTutorialReported
+      ) {
         lookTutorialReported = true;
         onLookDoneRef.current();
+      } else if (tutorialStepRef.current !== 'look') {
+        lookTutorialReported = false;
+        totalLookDelta = 0;
       }
     };
 
@@ -1454,6 +1495,10 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           pausedRef.current
         )
           return;
+
+        if (tutorialStepRef.current === 'take-control') {
+          onLookDoneRef.current();
+        }
 
         // If already pointer-locked, a click interacts via centered reticle (0, 0)
         if (pointerLocked) {
@@ -1584,8 +1629,6 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
     const _lookB = new THREE.Vector3();
     const _tpCam = new THREE.Vector3();
     const _tpLook = new THREE.Vector3();
-    const _introCamStart = new THREE.Vector3(0.0, 10.6, 22.5);
-    const _introLookStart = new THREE.Vector3(0.0, 2.0, 1.5);
     const _clearFogColor = new THREE.Color('#d8784a');
     const _stormFogColor = new THREE.Color('#a8522b');
     const _tintDustDevil = new THREE.Vector3(1.24, 0.78, 0.50);
@@ -1797,10 +1840,13 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
       const frostTarget = phase === 'gameplay' && sim?.greenhouseFrost ? 0.64 : 0.0;
       outpost.ghFrostMat.opacity = THREE.MathUtils.damp(outpost.ghFrostMat.opacity, frostTarget, 3.5, delta);
 
-      // Tank 2 O2 vapour leak stream (M1)
-      const leakActive = phase === 'gameplay' && Boolean(sim?.tank2LeakActive);
-      outpost.tank2LeakPoints.visible = leakActive;
-      if (leakActive && !isStatic) {
+      // Tank 2 O2 vapour leak stream (strictly gated on S1.6 / M1 activeObjective.isTank2)
+      const isTank2ActiveNow =
+        phase === 'gameplay' &&
+        Boolean(sim?.tank2LeakActive) &&
+        Boolean(sim?.activeObjective?.isTank2);
+      outpost.tank2LeakPoints.visible = isTank2ActiveNow;
+      if (isTank2ActiveNow && !isStatic) {
         outpost.tank2ValveWheel.rotation.z = Math.sin(elapsed * 8) * 0.05;
         const lAttr = outpost.tank2LeakPoints.geometry.attributes.position as THREE.BufferAttribute;
         for (let i = 0; i < lAttr.count; i++) {
@@ -1845,16 +1891,65 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
         }
       }
 
-      // Active Mission Zone World Beacon
-      if (phase === 'gameplay' && sim) {
-        const zp = outpost.zonePositions[sim.activeZoneId];
+      // Single Source of Truth: ONE 3D Diamond Marker + ONE Ground Ring + Ground Chevron Path Guide
+      const activeObj = phase === 'gameplay' ? sim?.activeObjective : undefined;
+      if (activeObj && activeObj.showMarkerAndRing) {
+        const objY = gAt(activeObj.x, activeObj.z);
         outpost.zoneBeaconGroup.visible = true;
-        outpost.zoneBeaconGroup.position.copy(zp);
-        outpost.zoneBeaconDiamond.position.y = 2.35 + Math.sin(elapsed * 3.0) * 0.14;
-        outpost.zoneBeaconDiamond.rotation.y += delta * 1.8;
-        outpost.zoneBeaconRing.scale.setScalar(1.0 + Math.sin(elapsed * 4.0) * 0.12);
+        outpost.zoneBeaconGroup.position.set(activeObj.x, objY, activeObj.z);
+        outpost.zoneBeaconMat.color.set(activeObj.colorHex);
+        outpost.zoneBeaconMat.emissive.set(activeObj.colorHex);
+        const ringMat = outpost.zoneBeaconRing.material as THREE.MeshBasicMaterial;
+        if (ringMat && ringMat.color) {
+          ringMat.color.set(activeObj.colorHex);
+        }
+        outpost.zoneBeaconDiamond.position.y =
+          2.35 + (isStatic ? 0 : Math.sin(elapsed * 3.0) * 0.14);
+        if (!isStatic) {
+          outpost.zoneBeaconDiamond.rotation.y += delta * 1.8;
+        }
+        outpost.zoneBeaconRing.scale.setScalar(
+          1.0 + (isStatic ? 0 : Math.sin(elapsed * 4.0) * 0.12),
+        );
       } else {
         outpost.zoneBeaconGroup.visible = false;
+      }
+
+      // Ground Chevron Path Guide (available from start when Guide: On, hidden within 3 m)
+      if (phase === 'gameplay' && activeObj) {
+        const guideState = computePathGuideState({
+          playerX: playerPos.x,
+          playerZ: playerPos.y,
+          objective: activeObj,
+          guideEnabled: sim?.guideEnabled ?? true,
+          layout: activeLayout,
+          elapsedSec: elapsed,
+          reducedMotion: isStatic,
+        });
+        if (guideState.visible && guideState.chevrons.length > 0) {
+          chevronInstancedMesh.visible = true;
+          chevronMat.color.set(activeObj.colorHex);
+          const count = Math.min(MAX_CHEVRONS, guideState.chevrons.length);
+          chevronInstancedMesh.count = count;
+          for (let i = 0; i < count; i++) {
+            const ch = guideState.chevrons[i];
+            const cy = gAt(ch.x, ch.z) + 0.09;
+            _chevronPos.set(ch.x, cy, ch.z);
+            _chevronEuler.set(0, ch.yaw, 0);
+            _chevronQuat.setFromEuler(_chevronEuler);
+            const scaleVal = (0.72 + 0.42 * ch.opacity) * ch.pulse;
+            _chevronScale.set(scaleVal, 1, scaleVal);
+            _chevronMatrix.compose(_chevronPos, _chevronQuat, _chevronScale);
+            chevronInstancedMesh.setMatrixAt(i, _chevronMatrix);
+          }
+          chevronInstancedMesh.instanceMatrix.needsUpdate = true;
+        } else {
+          chevronInstancedMesh.visible = false;
+          chevronInstancedMesh.count = 0;
+        }
+      } else {
+        chevronInstancedMesh.visible = false;
+        chevronInstancedMesh.count = 0;
       }
 
       // Localized Mars Weather Vortex (Dust Devil / Squall) + Habitat Airlock Shelter Ring
@@ -1892,15 +1987,15 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
         outpost.habShelterDiamond.rotation.y += delta * 2.8;
       }
 
-      // Power Console Beacon pulse + Perimeter Solar Bollards
-      const isTutorial4 = phase === 'gameplay' && tutorialStepRef.current === 4;
+      // Ensure duplicate powerBeacon ring/diamond stay hidden; console screen glows only when Tank 2 is active
       const beaconPulse = 0.5 + 0.5 * Math.sin(elapsed * 4.2);
-      outpost.powerBeaconRingMat.opacity = isTutorial4 ? 0.55 + beaconPulse * 0.35 : 0.22;
-      outpost.powerBeaconRing.scale.setScalar(isTutorial4 ? 1.0 + beaconPulse * 0.22 : 0.95);
-      outpost.powerBeaconDiamond.visible = phase === 'gameplay' && !sim;
-      outpost.powerBeaconDiamond.position.y = 1.82 + Math.sin(elapsed * 2.8) * 0.12;
-      outpost.powerBeaconDiamond.rotation.y += delta * 1.6;
-      outpost.matConsoleScreen.emissiveIntensity = isTutorial4 ? 1.8 + beaconPulse * 0.6 : 1.35;
+      outpost.powerBeaconRing.visible = false;
+      outpost.powerBeaconDiamond.visible = false;
+      outpost.powerBeaconRingMat.opacity = 0;
+      const isTank2ObjectiveNow = phase === 'gameplay' && Boolean(activeObj?.isTank2);
+      outpost.matConsoleScreen.emissiveIntensity = isTank2ObjectiveNow
+        ? 1.8 + beaconPulse * 0.6
+        : 0.45;
       if (outpost.bollardLampMat) {
         outpost.bollardLampMat.emissiveIntensity =
           wxActive || sim?.radiationAlert ? 2.3 + Math.sin(elapsed * 5.0) * 0.4 : 1.15;
@@ -2319,7 +2414,11 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
         if (!isFrozenInCommandMode && uiInput && Math.abs(uiInput.lookX) > 0.0001) {
           camYaw += uiInput.lookX * delta;
           totalLookDelta += Math.abs(uiInput.lookX * delta);
-          if (!lookTutorialReported && tutorialStepRef.current === 2 && totalLookDelta >= 0.14) {
+          if (
+            !lookTutorialReported &&
+            tutorialStepRef.current === 'look' &&
+            totalLookDelta >= Math.PI / 3
+          ) {
             lookTutorialReported = true;
             onLookDoneRef.current();
           }
@@ -2343,10 +2442,28 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           const roverDt = (delta * (debugModeRef.current ? debugSpeedMult : 1)) / roverSubSteps;
           const makeWayReqNow = roverMakeWayRequested;
           roverMakeWayRequested = false;
+
+          // 120s Guidance Ladder: Rusty rolls a few meters toward the active objective (single source of truth)
+          let roverFollowTargetX = playerPos.x;
+          let roverFollowTargetZ = playerPos.y;
+          if ((simState.guidanceStage ?? 0) >= 2 && !isFrozenInCommandMode) {
+            const obj = simState.activeObjective;
+            if (obj) {
+              const dxObj = obj.x - playerPos.x;
+              const dzObj = obj.z - playerPos.y;
+              const dObj = Math.hypot(dxObj, dzObj);
+              if (dObj > 2.0) {
+                const leadM = Math.min(4.5, dObj * 0.4);
+                roverFollowTargetX = playerPos.x + (dxObj / dObj) * leadM;
+                roverFollowTargetZ = playerPos.y + (dzObj / dObj) * leadM;
+              }
+            }
+          }
+
           for (let sIdx = 0; sIdx < roverSubSteps; sIdx++) {
             roverController = stepRoverController(roverController, roverDt, {
-              playerX: playerPos.x,
-              playerZ: playerPos.y,
+              playerX: roverFollowTargetX,
+              playerZ: roverFollowTargetZ,
               playerYaw,
               damaged: simState.roverDamaged,
               holdPosition: isFrozenInCommandMode,
@@ -2435,9 +2552,15 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           }
 
           const actualDist = Math.hypot(snap.x - prevX, snap.z - prevZ);
-          if (tutorialStepRef.current === 1) {
+          if (tutorialStepRef.current === 'move') {
             totalDistanceMoved += actualDist;
-            if (!moveTutorialReported && totalDistanceMoved >= 3.8) {
+            const yellowX = outpost.astroBasePos.x + Math.sin(initPlayerYaw) * 7.0;
+            const yellowZ = outpost.astroBasePos.z + Math.cos(initPlayerYaw) * 7.0;
+            const distToYellowLight = Math.hypot(snap.x - yellowX, snap.z - yellowZ);
+            if (
+              !moveTutorialReported &&
+              (totalDistanceMoved >= 7.0 || distToYellowLight <= 1.5)
+            ) {
               moveTutorialReported = true;
               onMoveDoneRef.current();
             }
@@ -2717,8 +2840,9 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           delta,
         );
 
-        // Camera Mode: Command Mode Focus vs First-Person (1P) vs Third-Person (3P) + Intro Airlock Glide
-        const isFirstPerson = simState?.cameraMode === '1p' && !isFrozenInCommandMode;
+        // Camera Mode: First-Person (1P default) vs Third-Person (3P via V).
+        // Zero camera takeover during gameplay (no fly-over after crystals or when modals open).
+        const isFirstPerson = (simState?.cameraMode ?? '1p') === '1p';
         outpost.astroGroup.visible = !isFirstPerson;
         if (fpRenderPass) fpRenderPass.enabled = isFirstPerson;
 
@@ -2758,33 +2882,7 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           outpost.fpRightArm.position.z = reachZ;
         }
 
-        if (introGlideActive && (moveFwd !== 0 || moveStrafe !== 0 || isFirstPerson || isFrozenInCommandMode)) {
-          introGlideActive = false;
-        }
-
-        if (introGlideActive) {
-          introGlideTimer += delta;
-          const u = easeInOutCubic(introGlideTimer / INTRO_GLIDE_DURATION_S);
-          computeThirdPersonRig(playerPos.x, smoothFootY, playerPos.y, camYaw, camPitch, _tpCam, _tpLook);
-          currentCamPos.lerpVectors(_introCamStart, _tpCam, u);
-          currentLookAt.lerpVectors(_introLookStart, _tpLook, u);
-          camPosSpringVel.set(0, 0, 0);
-          camLookSpringVel.set(0, 0, 0);
-          if (introGlideTimer >= INTRO_GLIDE_DURATION_S) {
-            introGlideActive = false;
-          }
-        } else if (isFrozenInCommandMode && simState && !pausedRef.current && !simState.mapOpen) {
-          const zp = outpost.zonePositions[simState.activeZoneId];
-          _targetCam.set(zp.x - 2.6, zp.y + 2.35, zp.z + 3.85);
-          _targetLook.set(zp.x, zp.y + 0.95, zp.z);
-          if (isStatic) {
-            currentCamPos.copy(_targetCam);
-            currentLookAt.copy(_targetLook);
-          } else {
-            smoothDampVec3(currentCamPos, _targetCam, camPosSpringVel, 0.16, delta);
-            smoothDampVec3(currentLookAt, _targetLook, camLookSpringVel, 0.16, delta);
-          }
-        } else if (isFirstPerson) {
+        if (isFirstPerson) {
           const eyeY =
             smoothFootY + PHYSICS_CONSTANTS.FIRST_PERSON_EYE_HEIGHT_M + headBobY - landingDipY;
           const cosP = Math.cos(camPitch);

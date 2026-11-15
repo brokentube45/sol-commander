@@ -3,6 +3,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { CREW_PROFILES, CrewMemberId, PHYSICS_CONSTANTS } from '../sim/constants';
 import { MissionDefinition, MissionZoneId } from '../sim/missionsData';
 import { GAMEPLAY_LAYOUT } from '../sim/outpostLayout';
+import {
+  ActiveObjective,
+  buildWalkableRouteWaypoints,
+} from '../sim/activeObjective';
 
 export interface TelemetryCrewDot {
   id: CrewMemberId;
@@ -27,9 +31,11 @@ interface WristMapModalProps {
   onClose: () => void;
   telemetry: GameplayPoseTelemetry;
   activeMission: MissionDefinition;
+  activeObjective?: ActiveObjective;
   weatherAlertActive: boolean;
   quickMode: boolean;
   roverName: string;
+  showGuidancePath?: boolean;
   reducedMotion: boolean;
 }
 
@@ -73,18 +79,43 @@ export function WristMapModal({
   onClose,
   telemetry,
   activeMission,
+  activeObjective,
   weatherAlertActive,
   quickMode,
   roverName,
+  showGuidancePath = false,
   reducedMotion,
 }: WristMapModalProps) {
-  const activeGoal = weatherAlertActive
-    ? GAMEPLAY_LAYOUT.destinationWaypoints.airlock
-    : {
-        label: activeMission.zoneLabel,
-        x: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].x,
-        z: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].z,
-      };
+  const activeGoal = activeObjective
+    ? {
+        label: activeObjective.label,
+        x: activeObjective.x,
+        z: activeObjective.z,
+        colorHex: activeObjective.colorHex,
+      }
+    : weatherAlertActive
+      ? {
+          ...GAMEPLAY_LAYOUT.destinationWaypoints.airlock,
+          colorHex: '#22C55E',
+        }
+      : {
+          label: activeMission.zoneLabel,
+          x: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].x,
+          z: GAMEPLAY_LAYOUT.zoneCoords[activeMission.zoneId].z,
+          colorHex: '#FFB703',
+        };
+
+  const routePointsAttr = showGuidancePath
+    ? buildWalkableRouteWaypoints(
+        telemetry.x,
+        telemetry.z,
+        activeGoal.x,
+        activeGoal.z,
+        GAMEPLAY_LAYOUT,
+      )
+        .map((pt) => `${pt.x.toFixed(2)},${pt.z.toFixed(2)}`)
+        .join(' ')
+    : '';
 
   const goalDistM = Math.round(
     Math.hypot(activeGoal.x - telemetry.x, activeGoal.z - telemetry.z),
@@ -293,6 +324,19 @@ export function WristMapModal({
                     );
                   })}
 
+                  {/* Walkable Path Guide on Map */}
+                  {showGuidancePath && routePointsAttr && (
+                    <polyline
+                      points={routePointsAttr}
+                      fill="none"
+                      stroke={activeGoal.colorHex}
+                      strokeWidth={0.55}
+                      strokeDasharray="1.1 1.1"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  )}
+
                   {/* Pulsing Active Objective Target Ring */}
                   <g transform={`translate(${activeGoal.x}, ${activeGoal.z})`}>
                     <circle
@@ -300,7 +344,7 @@ export function WristMapModal({
                       cy={0}
                       r={2.5}
                       fill="none"
-                      stroke={weatherAlertActive ? '#22C55E' : '#FFB703'}
+                      stroke={activeGoal.colorHex}
                       strokeWidth={0.35}
                       strokeDasharray="0.9 0.5"
                     />
@@ -308,7 +352,7 @@ export function WristMapModal({
                       cx={0}
                       cy={0}
                       r={0.85}
-                      fill={weatherAlertActive ? '#22C55E' : '#FFB703'}
+                      fill={activeGoal.colorHex}
                       opacity={0.9}
                     />
                   </g>

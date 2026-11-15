@@ -1,5 +1,12 @@
 import { CrewMemberId } from '../sim/constants';
-import { TutorialStepId } from '../sim/juniorData';
+import {
+  ACT1_CHORE_SPOTS,
+  ACT1_CRYSTAL_CALLOUTS,
+  formatWithRoverName,
+  JUNIOR_MISSIONS,
+  JUNIOR_TUTORIAL_STEPS,
+  TutorialStepId,
+} from '../sim/storyBeats';
 import { MissionId } from '../sim/roverData';
 import { normalizeForSpeech } from '../sim/speechNormalizer';
 import { soundEngine } from './soundEngine';
@@ -16,28 +23,28 @@ interface CharacterVoiceProfile {
 
 const CHARACTERS: Record<string, CharacterVoiceProfile> = {
   rusty: {
-    name: 'Rover Rusty',
-    role: 'Companion Guide',
+    name: '{roverName}',
+    role: 'Rover Friend',
     speakerId: 'rusty',
   },
   rafi: {
     name: 'Rafi',
-    role: 'Life Support Botanist',
+    role: 'Botanist',
     speakerId: 'rafi',
   },
   amara: {
-    name: 'Dr. Amara',
-    role: 'Flight Surgeon',
+    name: 'Amara',
+    role: 'Doctor',
     speakerId: 'amara',
   },
   kenji: {
     name: 'Kenji',
-    role: 'Chief Engineer',
+    role: 'Engineer',
     speakerId: 'kenji',
   },
   lucia: {
     name: 'Lucía',
-    role: 'Lead Geologist',
+    role: 'Geologist',
     speakerId: 'lucia',
   },
   capcom: {
@@ -61,21 +68,42 @@ export function cleanTextForSpeech(text: string): string {
   return normalizeForSpeech(text);
 }
 
+interface QueuedVoiceItem {
+  characterKey: string;
+  text: string;
+  dedupKey: string;
+  onEnd?: () => void;
+}
+
 /**
  * Narrative Voice Manager
- * Orchestrates dialogue cues, speaker ladder, and procedural sound chimes.
- * (Zero Web Speech / TTS per Space Apps submission rules: uses subtitles + procedural audio)
+ * Reads all lines from `src/sim/storyBeats.ts` (Single Source of Truth),
+ * substitutes `{roverName}`, and enforces a strict one-voice-at-a-time queue
+ * with procedural Web Audio chimes + subtitles by default.
  */
 class NarrativeVoiceManager {
   private lastSpokenKey = '';
   private lastSpokenAt = 0;
+  private roverName = 'Rusty';
+  private activeTimer: number | null = null;
+  private isSpeakingNow = false;
+  private waitingQueue: QueuedVoiceItem[] = [];
+
+  public setRoverName(name: string): void {
+    this.roverName = name.trim() || 'Rusty';
+  }
+
+  public getRoverName(): string {
+    return this.roverName;
+  }
 
   /**
-   * Play character chime and trigger dialogue callback
+   * Play character chime and trigger dialogue callback one voice at a time.
+   * Per Bible Section 2 Rule 1: One voice at a time; queued lines wait their turn.
    */
   public speakAs(
     characterKey: keyof typeof CHARACTERS | string,
-    text: string,
+    rawText: string,
     dedupKey?: string,
     minIntervalMs = 2000,
     onEnd?: () => void,
@@ -84,6 +112,7 @@ class NarrativeVoiceManager {
     if (typeof window === 'undefined') return;
     if (soundEngine.isRoverHushed() || !soundEngine.isRoverVoiceEnabled()) return;
 
+    const text = formatWithRoverName(rawText, this.roverName);
     const now = Date.now();
     const key = dedupKey ?? text.slice(0, 32);
     if (!force && this.lastSpokenKey === key && now - this.lastSpokenAt < minIntervalMs) {
@@ -93,233 +122,125 @@ class NarrativeVoiceManager {
     this.lastSpokenKey = key;
     this.lastSpokenAt = now;
 
-    const char = CHARACTERS[characterKey] ?? CHARACTERS.rusty;
+    if (this.isSpeakingNow && !force) {
+      // Bible Rule 1: Max one waiting unless chained via onEnd
+      this.waitingQueue = [{ characterKey: String(characterKey), text, dedupKey: key, onEnd }];
+      return;
+    }
 
-    // Play character's unique procedural audio chime
+    this.playImmediate(String(characterKey), text, onEnd);
+  }
+
+  private playImmediate(characterKey: string, text: string, onEnd?: () => void): void {
+    if (this.activeTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.activeTimer);
+      this.activeTimer = null;
+    }
+
+    this.isSpeakingNow = true;
+    const char = CHARACTERS[characterKey] ?? CHARACTERS.rusty;
     soundEngine.playSpeakerChime(char.speakerId);
 
-    // Provide natural timing for subtitles / prompt progression
-    if (onEnd) {
-      const readingDurationMs = Math.min(3500, Math.max(900, text.length * 40));
-      window.setTimeout(() => {
-        onEnd();
+    const readingDurationMs = Math.min(3200, Math.max(850, text.length * 36));
+    if (typeof window !== 'undefined') {
+      this.activeTimer = window.setTimeout(() => {
+        this.activeTimer = null;
+        this.isSpeakingNow = false;
+        onEnd?.();
+        if (!this.isSpeakingNow && this.waitingQueue.length > 0) {
+          const next = this.waitingQueue.shift()!;
+          this.playImmediate(next.characterKey, next.text, next.onEnd);
+        }
       }, readingDurationMs);
+    } else {
+      this.isSpeakingNow = false;
+      onEnd?.();
     }
   }
 
-  // --- 1. Tutorial Steps (Act 1 Look, Move, Jump, Chores) ---
+  // --- 1. Tutorial Steps (Act 1 Look, Move, Jump, Gravity Card, Chores, Tank 2) ---
 
   public speakTutorialStep(step: TutorialStepId): void {
-    switch (step) {
-      case 'move':
-        this.speakAs(
-          'rusty',
-          'Welcome to Mars, Commander! Walk around to take your first steps on the red planet!',
-          'tut-move',
-          4000,
-        );
-        break;
-      case 'inspect-rover':
-        this.speakAs(
-          'rusty',
-          'That is me, Rover Rusty! Walk close and press E to explore our outpost systems.',
-          'tut-rover',
-        );
-        break;
-      case 'jump-crystals':
-        this.speakAs(
-          'rusty',
-          'Try a jump! Press Space. Catch three glowing crystals.',
-          'tut-jump',
-        );
-        break;
-      case 'gravity-card':
-        this.speakAs(
-          'rusty',
-          'Mars pulls you down less than Earth does. You can jump higher here!',
-          'tut-grav-card',
-        );
-        break;
-      case 'inspect-oxygen':
-        this.speakAs(
-          'rusty',
-          'This is Tank 2. It holds our air.',
-          'tut-oxygen-tank',
-        );
-        break;
-      case 'tutorial-quiz':
-        this.speakAs(
-          'rusty',
-          'Quick question. Can we breathe the air on Mars? Option A: Yes, like Earth, or Option B: No, we need oxygen!',
-          'tut-quiz',
-        );
-        break;
-      case 'crew-map-intro':
-        this.speakAs(
-          'rusty',
-          'This is our home. Everyone is safe inside.',
-          'tut-crew-map',
-        );
-        break;
-      default:
-        break;
-    }
+    if (step === 'complete') return;
+    const stepDef = JUNIOR_TUTORIAL_STEPS[step];
+    if (!stepDef) return;
+    this.speakAs('rusty', stepDef.rustyLine, `tut-${step}`, 3000, undefined, true);
   }
 
-  // --- 2. Mission Incidents (Speaker Ladder: Hab -> Specialist -> Rusty) ---
+  public speakCrystalCaught(count: number): void {
+    const idx = Math.max(0, Math.min(2, count - 1));
+    const line = ACT1_CRYSTAL_CALLOUTS[idx];
+    this.speakAs('rusty', line, `crystal-${count}`, 500, undefined, true);
+  }
+
+  public speakChoreSpot(spot: 'greenhouse' | 'solar' | 'habitat'): void {
+    const def = ACT1_CHORE_SPOTS.find((s) => s.id === spot);
+    if (!def) return;
+    const speakerKey = def.speaker.toLowerCase().includes('rafi')
+      ? 'rafi'
+      : def.speaker.toLowerCase().includes('kenji')
+        ? 'kenji'
+        : 'amara';
+
+    this.speakAs(
+      speakerKey,
+      def.line,
+      `chore-${spot}-1`,
+      1200,
+      def.secondLine
+        ? () => {
+            this.speakAs('lucia', def.secondLine!, `chore-${spot}-2`, 1000, undefined, true);
+          }
+        : undefined,
+      true,
+    );
+  }
+
+  // --- 2. Mission Incidents (Quiet Signal Speaker Ladder: Hab -> Specialist by radio -> {roverName}) ---
 
   public speakMissionIncident(missionId: MissionId): void {
-    switch (missionId) {
-      case 'm1':
-        // M1: Whisper in Tank 2 (Sol 21)
-        this.speakAs('hab', 'Notice. Oxygen Tank 2 pressure is a little low.', 'incident-m1-hab', 1000, () => {
-          this.speakAs(
-            'rafi',
-            'Commander, Rafi here. Tank 2 is dropping slowly. Can you meet me at the oxygen bay?',
-            'incident-m1-rafi',
-            1000,
-            () => {
-              this.speakAs('rusty', 'I will come with you. Beep!', 'incident-m1-rusty');
-            },
-          );
-        });
-        break;
-      case 'm2':
-        // M2: Red Sky (Sol 34)
-        this.speakAs('hab', 'Notice. Solar power is lower than normal.', 'incident-m2-hab', 1000, () => {
-          this.speakAs(
-            'kenji',
-            'Commander, Kenji. The sky is full of dust. The panels make less power. Meet me at the solar field.',
-            'incident-m2-kenji',
-            1000,
-            () => {
-              this.speakAs('rusty', 'The Sun looks small and orange today.', 'incident-m2-rusty');
-            },
-          );
-        });
-        break;
-      case 'm3':
-        // M3: Water You Can't Drink Yet (Sol 52)
-        this.speakAs('hab', 'Notice. Water cleaning is slow.', 'incident-m3-hab', 1000, () => {
-          this.speakAs(
-            'amara',
-            'Commander, Amara. The water recycler is slow. We need clean water to stay healthy. Meet me at the water bay.',
-            'incident-m3-amara',
-            1000,
-            () => {
-              this.speakAs('rusty', 'Click! Let us check the filters.', 'incident-m3-rusty');
-            },
-          );
-        });
-        break;
-      case 'm4':
-        // M4: Cold Greenhouse (Sol 67)
-        this.speakAs('hab', 'Notice. Greenhouse heater is off.', 'incident-m4-hab', 1000, () => {
-          this.speakAs(
-            'rafi',
-            'Commander, Rafi. My tomato plants look sleepy. The greenhouse is cold. Please come.',
-            'incident-m4-rafi',
-            1000,
-            () => {
-              this.speakAs('rusty', 'Plants need light, water and warmth.', 'incident-m4-rusty');
-            },
-          );
-        });
-        break;
-      case 'm5':
-        // M5: Storm Over the Ice (Sol 88)
-        this.speakAs('hab', 'Watch. The space weather team reports a solar storm.', 'incident-m5-hab', 1000, () => {
-          this.speakAs(
-            'amara',
-            'Commander, Amara. Strong space radiation can hurt people. We need the shelter. Please meet me there.',
-            'incident-m5-amara',
-            1000,
-            () => {
-              this.speakAs('rusty', 'Water walls help block space radiation.', 'incident-m5-rusty');
-            },
-          );
-        });
-        break;
-    }
+    const mission = JUNIOR_MISSIONS[missionId];
+    if (!mission) return;
+    const [first, second, third] = mission.quietSignal;
+    if (!first) return;
+
+    this.speakAs(
+      first.speaker,
+      first.text,
+      `incident-${missionId}-1`,
+      1000,
+      second
+        ? () => {
+            this.speakAs(
+              second.speaker,
+              second.text,
+              `incident-${missionId}-2`,
+              1000,
+              third
+                ? () => {
+                    this.speakAs(third.speaker, third.text, `incident-${missionId}-3`, 1000, undefined, true);
+                  }
+                : undefined,
+              true,
+            );
+          }
+        : undefined,
+      true,
+    );
   }
 
-  // --- 3. Mission Decisions & Resolutions ---
+  // --- 3. Mission Decisions & Resolutions (from storyBeats.ts) ---
 
   public speakMissionDecisions(missionId: MissionId, opt1Title: string, opt2Title: string): void {
-    const prompt = `Commander, what is your plan? Choice 1: ${opt1Title}. Or Choice 2: ${opt2Title}.`;
+    const prompt = `Commander, what is your plan? Option A: ${opt1Title} Or Option B: ${opt2Title}`;
     this.speakAs('rusty', prompt, `decisions-${missionId}`);
   }
 
-  public speakDecisionResolution(missionId: MissionId, choice?: 'a' | 'b'): void {
-    switch (missionId) {
-      case 'm1':
-        if (choice === 'b') {
-          this.speakAs(
-            'rafi',
-            'We are safe. But the tank is still losing air. We will fix it soon.',
-            'resolved-m1',
-          );
-        } else {
-          this.speakAs(
-            'rafi',
-            'The whisper stopped. Good job, Commander.',
-            'resolved-m1',
-          );
-        }
-        break;
-      case 'm2':
-        if (choice === 'b') {
-          this.speakAs(
-            'kenji',
-            'Everything is on, but the battery is dropping fast.',
-            'resolved-m2',
-          );
-        } else {
-          this.speakAs(
-            'kenji',
-            'Smart plan. Power for life support comes first.',
-            'resolved-m2',
-          );
-        }
-        break;
-      case 'm3':
-        if (choice === 'b') {
-          this.speakAs(
-            'amara',
-            'We have water today. But the backup tank is empty now.',
-            'resolved-m3',
-          );
-        } else {
-          this.speakAs(
-            'amara',
-            'The recycler is humming. Clean water is flowing.',
-            'resolved-m3',
-          );
-        }
-        break;
-      case 'm4':
-        if (choice === 'b') {
-          this.speakAs(
-            'rafi',
-            'We have food today. But I will miss my tomatoes.',
-            'resolved-m4',
-          );
-        } else {
-          this.speakAs(
-            'rafi',
-            'Look! The leaves are standing up again.',
-            'resolved-m4',
-          );
-        }
-        break;
-      case 'm5':
-        this.speakAs(
-          'rusty',
-          'We did it, Commander! The crew is safe in the shielded shelter.',
-          'resolved-m5',
-        );
-        break;
-    }
+  public speakDecisionResolution(missionId: MissionId, choice: 'a' | 'b' = 'a'): void {
+    const mission = JUNIOR_MISSIONS[missionId];
+    if (!mission) return;
+    const resultLine = choice === 'b' ? mission.resultLines.optionB : mission.resultLines.optionA;
+    this.speakAs(resultLine.speaker, resultLine.text, `resolved-${missionId}-${choice}`, 1000, undefined, true);
   }
 
   // --- 4. Quizzes ---
@@ -327,19 +248,19 @@ class NarrativeVoiceManager {
   public speakQuizQuestion(question: string, optALabel: string, optBLabel: string): void {
     this.speakAs(
       'rusty',
-      `${question} Option A: ${optALabel}. Or Option B: ${optBLabel}.`,
+      `${question} A: ${optALabel}. Or B: ${optBLabel}.`,
       `quiz-q-${question.slice(0, 16)}`,
     );
   }
 
   public speakQuizFeedback(isCorrect: boolean, feedbackText: string): void {
-    this.speakAs('rusty', feedbackText, `quiz-feedback-${isCorrect}`);
+    this.speakAs('rusty', feedbackText, `quiz-feedback-${isCorrect}`, 500, undefined, true);
   }
 
   // --- 5. Science Discovery Cards ---
 
   public speakScienceCard(title: string, oneSentenceFact: string): void {
-    this.speakAs('rusty', `${title}! ${oneSentenceFact}`, `card-${title}`);
+    this.speakAs('rusty', `${title}. ${oneSentenceFact}`, `card-${title}`);
   }
 
   // --- 6. Crew Member In-Person Greetings ---
@@ -347,36 +268,21 @@ class NarrativeVoiceManager {
   public speakCrewMember(crewId: CrewMemberId): void {
     switch (crewId) {
       case 'amara':
-        this.speakAs(
-          'amara',
-          'Welcome, Commander. Drink some water. Mars air is very dry.',
-          'crew-amara',
-          10000,
-        );
+        this.speakAs('amara', ACT1_CHORE_SPOTS[2].line, 'crew-amara', 8000);
         break;
       case 'kenji':
-        this.speakAs(
-          'kenji',
-          'These panels turn sunlight into power. Mars is dim, so every panel counts. Keep them clean and they keep us cozy.',
-          'crew-kenji',
-          10000,
-        );
+        this.speakAs('kenji', ACT1_CHORE_SPOTS[1].line, 'crew-kenji', 8000);
         break;
       case 'lucia':
         this.speakAs(
           'lucia',
-          'Look at this rock! It has stripes. Water may have been here long ago.',
+          ACT1_CHORE_SPOTS[2].secondLine ?? 'Look at this rock! It has stripes. Water may have been here long ago.',
           'crew-lucia',
-          10000,
+          8000,
         );
         break;
       case 'rafi':
-        this.speakAs(
-          'rafi',
-          'Welcome to my garden! These tomato seeds are my babies. They need light, water and warmth. I hope the nights stay kind.',
-          'crew-rafi',
-          10000,
-        );
+        this.speakAs('rafi', ACT1_CHORE_SPOTS[0].line, 'crew-rafi', 8000);
         break;
     }
   }
@@ -386,68 +292,33 @@ class NarrativeVoiceManager {
   public speakLandmark(stationId: string): void {
     switch (stationId) {
       case 'habitat':
-        this.speakAs(
-          'rusty',
-          'Habitat Airlock. Stepping inside repressurizes your spacesuit.',
-          'station-habitat',
-          14000,
-        );
+        this.speakAs('rusty', 'This is our home. Everyone is safe inside.', 'station-habitat', 14000);
         break;
       case 'greenhouse':
         this.speakAs(
           'rusty',
-          'Welcome to the Greenhouse! Plants are growing in the warm dome.',
+          'Plants need light, water and warmth. A greenhouse protects them from the cold.',
           'station-greenhouse',
           14000,
         );
         break;
       case 'solar':
-        this.speakAs(
-          'rusty',
-          'Solar field arrays. Panels turn sunlight into clean power.',
-          'station-solar',
-          14000,
-        );
+        this.speakAs('rusty', 'Solar panels turn sunlight into power.', 'station-solar', 14000);
         break;
       case 'tank2':
-        this.speakAs(
-          'rusty',
-          'Oxygen Tank 2. It holds our breathable air supply.',
-          'station-tank2',
-          14000,
-        );
+        this.speakAs('rusty', 'This is Tank two. It holds our air.', 'station-tank2', 14000);
         break;
       case 'ice-drill':
-        this.speakAs(
-          'rusty',
-          'Ice drill site. Radar scans for frozen water under the soil.',
-          'station-ice-drill',
-          14000,
-        );
+        this.speakAs('rusty', 'Faster beeps mean more ice. Listen closely.', 'station-ice-drill', 14000);
         break;
       case 'recycler':
-        this.speakAs(
-          'rusty',
-          'Water facility. Cleans and recycles water for the crew.',
-          'station-recycler',
-          14000,
-        );
+        this.speakAs('rusty', 'Recycling lets us use water again.', 'station-recycler', 14000);
         break;
       case 'shelter':
-        this.speakAs(
-          'rusty',
-          'Storm shelter. Water walls help block space radiation.',
-          'station-shelter',
-          14000,
-        );
+        this.speakAs('rusty', 'Water walls help block space radiation.', 'station-shelter', 14000);
         break;
       case 'landing-pad':
-        this.speakAs(
-          'rusty',
-          'Lander landing pad. Where our supply lander touches down.',
-          'station-landing-pad',
-          14000,
-        );
+        this.speakAs('rusty', 'Lander pad. Where our supply ship touched down.', 'station-landing-pad', 14000);
         break;
     }
   }
@@ -457,7 +328,7 @@ class NarrativeVoiceManager {
   public speakWeatherAlert(title: string, windSpeedMs: number): void {
     this.speakAs(
       'hab',
-      `Notice. ${title} with wind speed of ${Math.round(windSpeedMs)} meters per second. Return to shelter if needed.`,
+      `Notice. ${title} with wind speed of ${Math.round(windSpeedMs)} meters per second.`,
       'weather-emergency',
       12000,
     );
@@ -466,26 +337,28 @@ class NarrativeVoiceManager {
   public speakLowResourceWarning(resource: 'oxygen' | 'battery' | 'water' | 'food'): void {
     const text =
       resource === 'oxygen'
-        ? 'Notice. Suit oxygen is low. Return to the airlock to refill.'
+        ? 'Notice. Oxygen Tank 2 pressure is a little low.'
         : resource === 'battery'
-          ? 'Notice. Outpost battery is low. Conserve power.'
+          ? 'Notice. Solar power is lower than normal.'
           : resource === 'water'
-            ? 'Notice. Clean water reserve is low. Check the recycler.'
-            : 'Notice. Food storage is low. Check greenhouse crops.';
+            ? 'Notice. Water cleaning is slow.'
+            : 'Notice. Greenhouse heater is off.';
     this.speakAs('hab', text, `low-res-${resource}`, 20000);
   }
 
   // --- 9. Mission Victory & Badge Celebration ---
 
   public speakBadgeUnlocked(badgeTitle: string): void {
-    this.speakAs(
-      'rusty',
-      `Great teamwork, Commander! You completed the mission and earned the ${badgeTitle} badge!`,
-      `badge-${badgeTitle}`,
-    );
+    this.speakAs('rusty', `Badge earned: ${badgeTitle}!`, `badge-${badgeTitle}`);
   }
 
   public stop(): void {
+    if (this.activeTimer !== null && typeof window !== 'undefined') {
+      window.clearTimeout(this.activeTimer);
+      this.activeTimer = null;
+    }
+    this.isSpeakingNow = false;
+    this.waitingQueue = [];
     soundEngine.stopSpeaking();
   }
 }

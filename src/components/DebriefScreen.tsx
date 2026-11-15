@@ -18,6 +18,8 @@ import {
   Star,
   Sun,
   Wind,
+  Compass,
+  Radio,
 } from 'lucide-react';
 import { CREW_PROFILES, SCORE_WEIGHTS } from '../sim/constants';
 import {
@@ -38,6 +40,7 @@ interface DebriefScreenProps {
   onPlayNewSeed: () => void;
   onOpenDataCredits: () => void;
   onReturnTitle: () => void;
+  onEnterFreeRoam?: () => void;
   onCompleteDebriefQuiz?: () => void;
   reducedMotion?: boolean;
 }
@@ -92,6 +95,7 @@ export function DebriefScreen({
   onPlayNewSeed,
   onOpenDataCredits,
   onReturnTitle,
+  onEnterFreeRoam,
   onCompleteDebriefQuiz,
   reducedMotion = false,
 }: DebriefScreenProps) {
@@ -190,6 +194,20 @@ export function DebriefScreen({
                 {badgeCount} / 5
               </p>
             </div>
+          </div>
+
+          {/* Message from Earth (Story Bible S3.1) */}
+          <div className="rounded-xl border border-[#38BDF8]/45 bg-[#0D213B]/85 px-4 py-3 text-xs sm:text-sm">
+            <div className="flex items-center justify-between text-[11px] font-extrabold text-[#38BDF8]">
+              <span className="flex items-center gap-1.5 uppercase tracking-wider">
+                <Radio className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+                <span>Message from Earth Team</span>
+              </span>
+              <span className="text-[#F8F9FA]/65">Sent 12 minutes ago</span>
+            </div>
+            <p className="mt-1 font-bold leading-relaxed text-[#F8F9FA]">
+              &ldquo;Great job, Commander. Your crew is safe. You looked, listened and thought before you chose. That is what astronauts do.&rdquo;
+            </p>
           </div>
 
           {/* 4 Crew + Rover Friendly Safety Status */}
@@ -441,6 +459,19 @@ export function DebriefScreen({
             </div>
 
             <div className="flex flex-wrap gap-2">
+              {onEnterFreeRoam && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playClick();
+                    onEnterFreeRoam();
+                  }}
+                  className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#22C55E] to-[#38BDF8] px-5 text-xs font-extrabold text-[#071324] shadow-lg hover:scale-[1.02] transition-transform"
+                >
+                  <Compass className="h-4 w-4" aria-hidden="true" />
+                  <span>Free Roam (Explore Base)</span>
+                </button>
+              )}
               <button
                 type="button"
                 onClick={onReplaySameSeed}

@@ -31,19 +31,25 @@ import {
   Snowflake,
   FastForward,
   Volume2,
+  Lock,
+  Users,
+  Bell,
 } from 'lucide-react';
 import { CREW_PROFILES, ProvenanceTag } from '../sim/constants';
 import { MissionDefinition, OptionId } from '../sim/missionsData';
 import { ARCHIVED_MEDA_SOLS } from '../sim/nasaData';
 import {
   BADGE_DISCLAIMER,
+  formatWithRoverName,
   JUNIOR_MISSIONS,
   JUNIOR_SCIENCE_CARDS,
   JuniorDecisionOption,
-} from '../sim/juniorData';
+  M5_SHELTER_SEQUENCE,
+  STORY_POSTCARDS,
+} from '../sim/storyBeats';
 import { MissionId } from '../sim/roverData';
 import { CampaignState } from '../sim/simEngine';
-import { MissionMiniActivities } from './MissionMiniActivities';
+import { MissionMiniActivity } from './MissionMiniActivities';
 import { JuniorQuizCard } from './JuniorQuizCard';
 import { ScienceCardModal } from './ScienceCardModal';
 import { soundEngine } from '../utils/soundEngine';
@@ -68,7 +74,7 @@ interface CommandModeModalProps {
   reducedMotion?: boolean;
 }
 
-type MissionStepTab = 'look' | 'activity' | 'quiz' | 'compare';
+type MissionStepTab = 'look' | 'activity' | 'quiz' | 'compare' | 'action';
 
 function ProvenanceTagText({ tag }: { tag: ProvenanceTag }) {
   if (tag === 'REAL') {
@@ -141,22 +147,187 @@ export function CommandModeModal({
   const [mcSecondsLeft, setMcSecondsLeft] = useState<number | null>(null);
   const [medaIndex, setMedaIndex] = useState(0);
   const [moreChoicesOpen, setMoreChoicesOpen] = useState(false);
+  const [pendingOptionId, setPendingOptionId] = useState<OptionId | null>(null);
+  const [sentRoverInStorm, setSentRoverInStorm] = useState(false);
+
+  // M1.6 Action state (Hold E to turn red wheel on Valve 2)
+  const [m1ValveProgress, setM1ValveProgress] = useState(0);
+  const [m1HoldingValve, setM1HoldingValve] = useState(false);
+
+  // M5 Shelter Bell timer (~180 s, calm pulse, no strobe, pauses during every card: quiz, compare, review)
+  const [m5BellSeconds, setM5BellSeconds] = useState<number>(
+    M5_SHELTER_SEQUENCE.shelterBellSeconds,
+  );
+  // M5.6–M5.8 Action -> Wait -> All Clear state
+  const [m5CrewInsideCount, setM5CrewInsideCount] = useState(1);
+  const [m5HatchProgress, setM5HatchProgress] = useState(0);
+  const [m5HoldingHatch, setM5HoldingHatch] = useState(false);
+  const [m5DoseStage, setM5DoseStage] = useState<'idle' | 'rising' | 'falling' | 'all-clear'>('idle');
+
   const badgeChimePlayedRef = useRef<string | null>(null);
 
+  const displayRover = state.roverName.trim() || 'Rusty';
   const juniorMission = JUNIOR_MISSIONS[mission.id];
   const scienceCard = JUNIOR_SCIENCE_CARDS[juniorMission.scienceCardId];
   const activityDone = Boolean(state.missionMiniActivityDone[mission.id]);
   const quizDone = Boolean(state.missionQuizDone[mission.id]);
 
+  // Sync roverName in narrativeVoice
+  useEffect(() => {
+    narrativeVoice.setRoverName(displayRover);
+  }, [displayRover]);
+
   useEffect(() => {
     if (open) {
       setActiveTab(initialTab);
       setMoreChoicesOpen(false);
+      setPendingOptionId(null);
+      setSentRoverInStorm(false);
+      setM1ValveProgress(0);
+      setM1HoldingValve(false);
+      setM5CrewInsideCount(1);
+      setM5HatchProgress(0);
+      setM5HoldingHatch(false);
+      setM5DoseStage('idle');
       if (initialTab === 'look' && state.phase === 'active-mission') {
         onMarkInspected();
       }
     }
   }, [open, initialTab, mission.id]);
+
+  // Reset M5 Shelter Bell timer when M5 starts
+  useEffect(() => {
+    if (mission.id === 'm5') {
+      setM5BellSeconds(M5_SHELTER_SEQUENCE.shelterBellSeconds);
+    }
+  }, [mission.id]);
+
+  // M5 Shelter Bell ~180 s countdown (pauses during Quiz, Decision, and Science Card/Review per Bible M5.2/M5.4/M5.5)
+  const m5TimerPaused =
+    mission.id !== 'm5' ||
+    state.phase !== 'active-mission' ||
+    activeTab === 'quiz' ||
+    activeTab === 'compare';
+
+  useEffect(() => {
+    if (m5TimerPaused) return;
+    const interval = window.setInterval(() => {
+      setM5BellSeconds((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [m5TimerPaused]);
+
+  // Hold E or hold button to close Valve 2 in M1.6 Action
+  useEffect(() => {
+    if (activeTab !== 'action' || mission.id !== 'm1' || pendingOptionId !== 'A') return;
+    if (!m1HoldingValve || m1ValveProgress >= 100) return;
+    const tid = window.setInterval(() => {
+      setM1ValveProgress((prev) => {
+        const next = Math.min(100, prev + 20);
+        if (next >= 100) {
+          soundEngine.playSuccess();
+          narrativeVoice.speakDecisionResolution('m1', 'a');
+        } else {
+          soundEngine.playClick();
+        }
+        return next;
+      });
+    }, 150);
+    return () => window.clearInterval(tid);
+  }, [activeTab, mission.id, pendingOptionId, m1HoldingValve, m1ValveProgress]);
+
+  // Hold E or hold button to seal the hatch in M5.6 Action
+  useEffect(() => {
+    if (activeTab !== 'action' || mission.id !== 'm5' || m5CrewInsideCount < 4) return;
+    if (!m5HoldingHatch || m5HatchProgress >= 100) return;
+    const tid = window.setInterval(() => {
+      setM5HatchProgress((prev) => {
+        const next = Math.min(100, prev + 25);
+        if (next >= 100) {
+          soundEngine.playAirlockCycle();
+          soundEngine.playSuccess();
+          setM5DoseStage('rising');
+        } else {
+          soundEngine.playClick();
+        }
+        return next;
+      });
+    }, 160);
+    return () => window.clearInterval(tid);
+  }, [activeTab, mission.id, m5CrewInsideCount, m5HoldingHatch, m5HatchProgress]);
+
+  // M5.7 The Wait (dose bar rises then falls, no numbers) -> M5.8 All Clear
+  useEffect(() => {
+    if (m5DoseStage === 'rising') {
+      narrativeVoice.speakAs(
+        'amara',
+        M5_SHELTER_SEQUENCE.waitAmaraLine.text,
+        'm5-wait-amara',
+        500,
+        undefined,
+        true,
+      );
+      const t1 = window.setTimeout(() => {
+        setM5DoseStage('falling');
+      }, 1400);
+      return () => window.clearTimeout(t1);
+    }
+    if (m5DoseStage === 'falling') {
+      const t2 = window.setTimeout(() => {
+        setM5DoseStage('all-clear');
+        soundEngine.playBadgeUnlock();
+        narrativeVoice.speakAs(
+          'hab',
+          M5_SHELTER_SEQUENCE.allClearHabLine.text,
+          'm5-all-clear-hab',
+          500,
+          () => {
+            narrativeVoice.speakAs(
+              'rusty',
+              M5_SHELTER_SEQUENCE.allClearRustyLine.text,
+              'm5-all-clear-rusty',
+              500,
+              undefined,
+              true,
+            );
+          },
+          true,
+        );
+      }, 1400);
+      return () => window.clearTimeout(t2);
+    }
+  }, [m5DoseStage]);
+
+  // Keyboard KeyE support for M1 Valve 2 wheel and M5 Hatch seal
+  useEffect(() => {
+    if (!open || activeTab !== 'action') return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code === 'KeyE') {
+        if (mission.id === 'm1' && pendingOptionId === 'A') {
+          setM1HoldingValve(true);
+        } else if (mission.id === 'm5') {
+          if (m5CrewInsideCount < 4) {
+            setM5CrewInsideCount((c) => Math.min(4, c + 1));
+            soundEngine.playRoverBeep('ok');
+          } else {
+            setM5HoldingHatch(true);
+          }
+        }
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'KeyE') {
+        setM1HoldingValve(false);
+        setM5HoldingHatch(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [open, activeTab, mission.id, pendingOptionId, m5CrewInsideCount]);
 
   // Play celebratory chime when mission review opens for the first time on a mission
   useEffect(() => {
@@ -180,7 +351,7 @@ export function CommandModeModal({
         juniorMission.decisions[1].title,
       );
     }
-  }, [open, activeTab, mission.id]);
+  }, [open, activeTab, mission.id, juniorMission.decisions]);
 
   // Scaled Earth-Mars speed-of-light delay countdown (1 real second = 1 simulated minute)
   useEffect(() => {
@@ -213,6 +384,68 @@ export function CommandModeModal({
     soundEngine.playClick();
     setActiveTab(tab);
     if (tab === 'look') onMarkInspected();
+  };
+
+  const handleChooseDecision = (optId: OptionId, fromStormRoverChoice = false) => {
+    soundEngine.playDecisionMade('safe');
+    setPendingOptionId(optId);
+    setSentRoverInStorm(fromStormRoverChoice);
+    if (fromStormRoverChoice && juniorMission.rustyOffer) {
+      narrativeVoice.speakAs(
+        'rusty',
+        juniorMission.rustyOffer.chosenBraveLine,
+        'm2-rover-brave',
+        500,
+        () => {
+          narrativeVoice.speakAs(
+            'rusty',
+            juniorMission.rustyOffer!.stuckLine,
+            'm2-rover-stuck',
+            500,
+            undefined,
+            true,
+          );
+        },
+        true,
+      );
+    } else if (mission.id === 'm2' && juniorMission.rustyOffer) {
+      narrativeVoice.speakAs(
+        'rusty',
+        juniorMission.rustyOffer.waitedSafeLine,
+        'm2-rover-waited-safe',
+        500,
+        undefined,
+        true,
+      );
+    }
+    if (mission.id === 'm5') {
+      // Trigger Lucía and {roverName} return call in M5.6 Action
+      narrativeVoice.speakAs(
+        'lucia',
+        M5_SHELTER_SEQUENCE.luciaReturnLine.text,
+        'm5-lucia-return',
+        500,
+        () => {
+          narrativeVoice.speakAs(
+            'rusty',
+            M5_SHELTER_SEQUENCE.rustyReturnLine.text,
+            'm5-rusty-return',
+            500,
+            undefined,
+            true,
+          );
+        },
+        true,
+      );
+    }
+    setActiveTab('action');
+  };
+
+  const handleCommitActionToResult = () => {
+    const chosenId = pendingOptionId ?? juniorMission.decisions[0].engineOptionId;
+    const isPrimaryA = chosenId === juniorMission.decisions[0].engineOptionId;
+    narrativeVoice.speakDecisionResolution(mission.id, isPrimaryA ? 'a' : 'b');
+    onSelectOption(chosenId);
   };
 
   const handleAskMc = () => {
@@ -256,6 +489,16 @@ export function CommandModeModal({
   };
 
   const stationStatus = juniorStatusSummary[mission.id];
+  const postcardGroupKey = juniorMission.postcardsRange
+    ? `sol-${juniorMission.postcardsRange[0]}-${juniorMission.postcardsRange[1]}`
+    : null;
+  const interludePostcards = postcardGroupKey ? (STORY_POSTCARDS[postcardGroupKey] ?? []) : [];
+
+  const chosenWasOptionA =
+    state.lastOutcome?.optionId === juniorMission.decisions[0].engineOptionId;
+  const bibleResultLine = chosenWasOptionA
+    ? juniorMission.resultLines.optionA
+    : juniorMission.resultLines.optionB;
 
   return (
     <AnimatePresence>
@@ -296,12 +539,28 @@ export function CommandModeModal({
                 className="mt-0.5 truncate font-[family-name:var(--font-display)] text-lg font-extrabold tracking-tight text-[#F8F9FA] sm:text-xl"
               >
                 {isRoutine
-                  ? `Next Days on Mars · Sol ${state.lastRoutineSummary!.fromSol} → Sol ${state.lastRoutineSummary!.toSol}`
+                  ? `Postcards · Sol ${state.lastRoutineSummary!.fromSol} → Sol ${state.lastRoutineSummary!.toSol}`
                   : mission.title}
               </h2>
             </div>
 
             <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {/* M5 Shelter Bell Timer (~180 s, calm pulse, no strobe, pauses on every card) */}
+              {mission.id === 'm5' && state.phase === 'active-mission' && (
+                <div className="inline-flex items-center gap-2 rounded-xl border border-[#FFB703]/45 bg-[#0D213B] px-3 py-1.5 text-xs font-extrabold text-[#FFB703]">
+                  <Bell className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
+                  <span>
+                    Shelter Bell: {Math.floor(m5BellSeconds / 60)}:
+                    {String(m5BellSeconds % 60).padStart(2, '0')}
+                  </span>
+                  {m5TimerPaused && (
+                    <span className="rounded bg-[#22C55E]/20 px-1.5 py-0.5 text-[10px] text-[#22C55E]">
+                      PAUSED
+                    </span>
+                  )}
+                </div>
+              )}
+
               {state.phase === 'active-mission' && (
                 <div className="flex flex-wrap items-center gap-1 rounded-xl border border-white/10 bg-[#0D213B] p-1">
                   <button
@@ -352,8 +611,22 @@ export function CommandModeModal({
                     }`}
                   >
                     <Scale className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>4. Decide</span>
+                    <span>4. Decision</span>
                   </button>
+                  {pendingOptionId && (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenTab('action')}
+                      className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs font-extrabold transition-colors cursor-pointer ${
+                        activeTab === 'action'
+                          ? 'bg-[#22C55E] text-[#071324]'
+                          : 'text-[#F8F9FA]/85 hover:text-[#22C55E]'
+                      }`}
+                    >
+                      <Wrench className="h-3.5 w-3.5" aria-hidden="true" />
+                      <span>5. Action</span>
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -373,16 +646,60 @@ export function CommandModeModal({
           {/* Body */}
           <div className="flex-1 overflow-y-auto px-4 py-3.5 sm:px-5 sm:py-4">
             {/* ================================================================
-                VIEW 1: ACTIVE MISSION (1. LOOK | 2. ACTIVITY | 3. QUIZ | 4. DECIDE)
+                VIEW 1: ACTIVE MISSION (Quiet Signal + Look -> Activity -> Quiz -> Decision -> Action)
                 ================================================================ */}
             {state.phase === 'active-mission' && (
               <>
                 {activeTab === 'look' && (
                   <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
                     <div className="space-y-3 lg:col-span-7">
-                      <p className="text-base font-bold leading-relaxed text-[#F8F9FA]">
-                        {juniorMission.storyKid}
-                      </p>
+                      {/* Phase 1: Quiet Signal Speaker Ladder (Hab Computer -> Specialist by Radio -> {roverName}) */}
+                      <div className="rounded-xl border border-[#FFB703]/40 bg-[#0D213B]/90 p-3.5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[11px] font-extrabold uppercase tracking-wider text-[#FFB703]">
+                            Quiet Signal · Speaker Ladder (1 Voice at a Time)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              soundEngine.playClick();
+                              narrativeVoice.speakMissionIncident(mission.id);
+                            }}
+                            className="inline-flex cursor-pointer items-center gap-1 rounded bg-[#FFB703]/20 px-2 py-0.5 text-[10px] font-bold text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324]"
+                          >
+                            <Volume2 className="h-3 w-3" aria-hidden="true" />
+                            <span>Replay Ladder</span>
+                          </button>
+                        </div>
+                        {juniorMission.quietSignal.map((lineItem, idx) => (
+                          <p key={idx} className="text-xs leading-snug text-[#F8F9FA]/95">
+                            <strong
+                              className={
+                                lineItem.speaker === 'hab'
+                                  ? 'text-[#FFB703]'
+                                  : lineItem.speaker === 'rusty'
+                                    ? 'text-[#22C55E]'
+                                    : 'text-[#38BDF8]'
+                              }
+                            >
+                              {formatWithRoverName(lineItem.speakerName, displayRover)}
+                              {lineItem.channel === 'radio' ? ' (radio)' : ''}:{' '}
+                            </strong>
+                            &ldquo;{formatWithRoverName(lineItem.text, displayRover)}&rdquo;
+                          </p>
+                        ))}
+                      </div>
+
+                      {/* Phase 2: Look */}
+                      <div className="rounded-xl border border-[#38BDF8]/40 bg-[#071324]/85 p-3.5">
+                        <p className="text-[11px] font-extrabold uppercase tracking-wider text-[#38BDF8]">
+                          Look · Station Observation
+                        </p>
+                        <p className="mt-1 text-sm font-bold text-[#F8F9FA]">
+                          {formatWithRoverName(juniorMission.lookLine.speakerName, displayRover)}:{' '}
+                          &ldquo;{formatWithRoverName(juniorMission.lookLine.text, displayRover)}&rdquo;
+                        </p>
+                      </div>
 
                       {/* Simple Station Status + Learning Goal */}
                       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
@@ -422,8 +739,8 @@ export function CommandModeModal({
                             <FlaskConical className="h-3.5 w-3.5" aria-hidden="true" />
                             <span>
                               {state.grownUpScienceOpen
-                                ? 'Hide Grown-up Science'
-                                : 'Grown-up Science Details'}
+                                ? 'Hide Grown-up Note'
+                                : 'Grown-up Note (Numbers & Sources)'}
                             </span>
                             {state.grownUpScienceOpen ? (
                               <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
@@ -453,7 +770,7 @@ export function CommandModeModal({
                                 ))}
                               </div>
                               <p className="leading-relaxed text-[#F8F9FA]/90">
-                                <strong className="text-[#38BDF8]">Detailed Note: </strong>
+                                <strong className="text-[#38BDF8]">Grown-up Note: </strong>
                                 {mission.scienceReason}
                               </p>
                             </div>
@@ -537,18 +854,18 @@ export function CommandModeModal({
                       )}
 
                       {mission.id === 'm5' && (
-                        <div className="rounded-xl border border-[#E85D04]/60 bg-[#0D213B]/80 p-3 text-xs">
+                        <div className="rounded-xl border border-[#FFB703]/45 bg-[#0D213B]/80 p-3 text-xs">
                           <div className="flex items-center justify-between gap-2">
                             <span className="flex items-center gap-1.5 font-bold text-[#FFB703]">
                               <Sun className="h-4 w-4" aria-hidden="true" />
-                              Space-Weather Warning
+                              Space-Weather Watch (Calm Pulse)
                             </span>
                             <span className="text-[10px] font-extrabold text-[#22C55E]">
                               {state.donki.status} · {state.donki.dateLabel}
                             </span>
                           </div>
                           <p className="mt-1 font-extrabold text-[#F8F9FA]">
-                            Fast energy particles heading toward Mars — model forecast.
+                            Watch. The space weather team reports a solar storm. Water walls help block space radiation.
                           </p>
                         </div>
                       )}
@@ -562,28 +879,19 @@ export function CommandModeModal({
                           <span>2. Start {juniorMission.miniActivity.title}</span>
                           <ArrowRight className="h-4 w-4" aria-hidden="true" />
                         </button>
-
-                        <button
-                          type="button"
-                          onClick={() => handleOpenTab('compare')}
-                          className="inline-flex min-h-[34px] w-full items-center justify-center gap-1 rounded-lg border border-white/15 bg-[#0D213B] px-3 text-xs font-bold text-[#F8F9FA]/80 hover:border-[#FFB703] hover:text-[#FFB703] cursor-pointer"
-                        >
-                          <span>Skip straight to Decide</span>
-                          <FastForward className="h-3.5 w-3.5" aria-hidden="true" />
-                        </button>
                       </div>
                     </div>
                   </div>
                 )}
 
                 {activeTab === 'activity' && (
-                  <MissionMiniActivities
+                  <MissionMiniActivity
                     missionId={mission.id}
-                    roverName={state.roverName}
-                    alreadyCompleted={activityDone}
-                    onComplete={() => onCompleteMiniActivity?.(mission.id)}
-                    onSkip={() => handleOpenTab('quiz')}
-                    reducedMotion={reducedMotion}
+                    roverName={displayRover}
+                    onComplete={() => {
+                      onCompleteMiniActivity?.(mission.id);
+                      handleOpenTab('quiz');
+                    }}
                   />
                 )}
 
@@ -592,24 +900,14 @@ export function CommandModeModal({
                     <JuniorQuizCard
                       inline
                       quiz={juniorMission.quiz}
-                      roverName={state.roverName}
-                      continueLabel="4. Choose Our Plan"
+                      roverName={displayRover}
+                      continueLabel="4. Continue to Decision →"
                       reducedMotion={reducedMotion}
                       onPassed={() => {
                         onCompleteQuiz?.(mission.id);
                         handleOpenTab('compare');
                       }}
                     />
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        onClick={() => handleOpenTab('compare')}
-                        className="inline-flex items-center gap-1 text-xs font-bold text-[#F8F9FA]/65 hover:text-[#FFB703] cursor-pointer"
-                      >
-                        <span>Skip Quiz to Decide</span>
-                        <FastForward className="h-3.5 w-3.5" aria-hidden="true" />
-                      </button>
-                    </div>
                   </div>
                 )}
 
@@ -619,7 +917,7 @@ export function CommandModeModal({
                       <div className="flex items-center gap-2.5">
                         <div>
                           <p className="text-base font-extrabold text-[#FFB703] sm:text-lg">
-                            Choose a safe plan, Commander!
+                            Decision · Choose a Plan, Commander!
                           </p>
                           <p className="text-xs text-[#F8F9FA]/80">
                             Both choices have pros and trade-offs — there is no free choice on Mars.
@@ -648,7 +946,21 @@ export function CommandModeModal({
                       </span>
                     </div>
 
-                    {/* 2 Big Junior Explorer Choice Cards */}
+                    {/* Mission 2 Emotional Beat — {roverName}'s Offer (Bible M2.5) */}
+                    {mission.id === 'm2' && juniorMission.rustyOffer && (
+                      <div className="rounded-xl border border-[#FFB703]/45 bg-[#0D213B]/90 p-3.5 text-xs space-y-1.5">
+                        <p className="font-extrabold text-[#FFB703]">
+                          <Bot className="inline h-3.5 w-3.5 mr-1 text-[#22C55E]" aria-hidden="true" />
+                          {displayRover}: &ldquo;{juniorMission.rustyOffer.rustyLine}&rdquo;
+                        </p>
+                        <p className="font-bold text-[#38BDF8]">
+                          {juniorMission.rustyOffer.specialistName}: &ldquo;
+                          {juniorMission.rustyOffer.specialistLine}&rdquo;
+                        </p>
+                      </div>
+                    )}
+
+                    {/* 2 Primary Bible Decision Cards */}
                     <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
                       {juniorMission.decisions.map((jOpt) => {
                         const engineOpt = mission.options.find(
@@ -663,11 +975,7 @@ export function CommandModeModal({
                             type="button"
                             disabled={notEnoughSlots}
                             onMouseEnter={() => soundEngine.playHoverSound()}
-                            onClick={() => {
-                              soundEngine.playDecisionMade('safe');
-                              narrativeVoice.speakDecisionResolution(mission.id);
-                              onSelectOption(jOpt.engineOptionId);
-                            }}
+                            onClick={() => handleChooseDecision(jOpt.engineOptionId, false)}
                             className="group flex flex-col justify-between rounded-2xl border-2 border-[#FFB703]/45 bg-[#0D213B]/85 p-4 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-[#FFB703] hover:bg-[#132C4E] hover:shadow-[0_0_26px_rgba(255,183,3,0.24)] disabled:opacity-45 cursor-pointer active:scale-[0.99]"
                           >
                             <div>
@@ -696,13 +1004,10 @@ export function CommandModeModal({
 
                             <div className="mt-4 flex items-center justify-between border-t border-white/10 pt-2.5 text-xs font-extrabold text-[#22C55E]">
                               <span className="text-[#38BDF8]">
-                                {slotsCost > 0 ? `Uses ${slotsCost} Crew Helper` : 'Instant Team Action'}
+                                {slotsCost > 0 ? `Uses ${slotsCost} Crew Helper` : 'Team Action'}
                               </span>
                               <span className="inline-flex items-center gap-1 text-[#FFB703]">
-                                {notEnoughSlots ? `Need ${slotsCost} Helpers` : 'Pick This Plan'}
-                                {!notEnoughSlots && (
-                                  <ArrowRight className="h-4 w-4" aria-hidden="true" />
-                                )}
+                                {notEnoughSlots ? `Need ${slotsCost} Helpers` : 'Pick This Plan →'}
                               </span>
                             </div>
                           </button>
@@ -710,7 +1015,7 @@ export function CommandModeModal({
                       })}
                     </div>
 
-                    {/* Optional "More Choices" drawer preserving original A-D engine options */}
+                    {/* "More choices" drawer (includes Bible M2.6 "Send {roverName} to clean now") */}
                     <div className="border-t border-white/10 pt-3">
                       <button
                         type="button"
@@ -720,7 +1025,7 @@ export function CommandModeModal({
                         }}
                         className="inline-flex items-center gap-1.5 text-xs font-bold text-[#F8F9FA]/75 hover:text-[#FFB703] cursor-pointer"
                       >
-                        <span>More choices (Advanced Engine Plans)</span>
+                        <span>More choices</span>
                         {moreChoicesOpen ? (
                           <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
                         ) : (
@@ -730,54 +1035,353 @@ export function CommandModeModal({
 
                       {moreChoicesOpen && (
                         <div className="mt-2.5 grid grid-cols-1 gap-2.5 md:grid-cols-2">
-                          {juniorMission.moreOptions.map((optId) => {
-                            const opt = mission.options.find((o) => o.id === optId);
-                            if (!opt) return null;
-                            const notEnoughSlots = opt.crewSlotsCost > state.crewSlotsRemaining;
-                            const affectedProfiles = CREW_PROFILES.filter((c) =>
-                              opt.affectedCrew.includes(c.id),
-                            );
-                            return (
-                              <button
-                                key={opt.id}
-                                type="button"
-                                disabled={notEnoughSlots}
-                                onMouseEnter={() => soundEngine.playHoverSound()}
-                                onClick={() => {
-                                  soundEngine.playDecisionMade('safe');
-                                  narrativeVoice.speakDecisionResolution(mission.id);
-                                  onSelectOption(opt.id);
-                                }}
-                                className="flex flex-col justify-between rounded-xl border border-white/15 bg-[#0D213B]/65 p-3 text-left hover:border-[#38BDF8] hover:bg-[#132C4E] disabled:opacity-45 cursor-pointer transition-colors active:scale-[0.99]"
-                              >
-                                <div>
-                                  <p className="text-xs font-extrabold text-[#F8F9FA]">
-                                    <span className="text-[#38BDF8] mr-1">{opt.id}.</span>
-                                    {opt.label}
-                                  </p>
-                                  <p className="mt-0.5 text-xs text-[#F8F9FA]/80">
-                                    {opt.actionSummary}
-                                  </p>
-                                </div>
-                                <div className="mt-2 flex items-center justify-between text-[11px] font-bold text-[#FFB703]">
-                                  <span>{opt.costSummary.join(' · ')}</span>
-                                  <div className="flex items-center gap-1">
-                                    {affectedProfiles.map((p) => (
-                                      <span
-                                        key={p.id}
-                                        className="inline-flex h-4 w-4 items-center justify-center rounded text-[9px] font-black text-[#071324]"
-                                        style={{ backgroundColor: p.avatarColor }}
-                                      >
-                                        {p.initials}
-                                      </span>
-                                    ))}
+                          {/* Explicit Bible M2.6 More Choice: "Send {roverName} to clean now" */}
+                          {mission.id === 'm2' && juniorMission.rustyOffer && (
+                            <button
+                              type="button"
+                              onMouseEnter={() => soundEngine.playHoverSound()}
+                              onClick={() => handleChooseDecision('C', true)}
+                              className="flex flex-col justify-between rounded-xl border border-[#FFB703]/55 bg-[#1F1711]/90 p-3.5 text-left hover:border-[#FFB703] cursor-pointer transition-colors"
+                            >
+                              <div>
+                                <p className="text-xs font-extrabold text-[#FFB703]">
+                                  {formatWithRoverName(
+                                    juniorMission.rustyOffer.moreChoiceLabel,
+                                    displayRover,
+                                  )}
+                                </p>
+                                <p className="mt-1 text-xs text-[#F8F9FA]/90">
+                                  {displayRover}: &ldquo;{juniorMission.rustyOffer.chosenBraveLine}&rdquo;
+                                </p>
+                                <p className="mt-1 text-[11px] text-[#FFB703]/90">
+                                  Risk in wild wind: &ldquo;{juniorMission.rustyOffer.stuckLine}&rdquo;
+                                </p>
+                              </div>
+                            </button>
+                          )}
+
+                          {juniorMission.moreOptions
+                            .filter((optId) => !(mission.id === 'm2' && optId === 'C'))
+                            .map((optId) => {
+                              const opt = mission.options.find((o) => o.id === optId);
+                              if (!opt) return null;
+                              const notEnoughSlots = opt.crewSlotsCost > state.crewSlotsRemaining;
+                              const affectedProfiles = CREW_PROFILES.filter((c) =>
+                                opt.affectedCrew.includes(c.id),
+                              );
+                              return (
+                                <button
+                                  key={opt.id}
+                                  type="button"
+                                  disabled={notEnoughSlots}
+                                  onMouseEnter={() => soundEngine.playHoverSound()}
+                                  onClick={() => handleChooseDecision(opt.id, false)}
+                                  className="flex flex-col justify-between rounded-xl border border-white/15 bg-[#0D213B]/65 p-3 text-left hover:border-[#38BDF8] hover:bg-[#132C4E] disabled:opacity-45 cursor-pointer transition-colors active:scale-[0.99]"
+                                >
+                                  <div>
+                                    <p className="text-xs font-extrabold text-[#F8F9FA]">
+                                      <span className="text-[#38BDF8] mr-1">{opt.id}.</span>
+                                      {opt.label}
+                                    </p>
+                                    <p className="mt-0.5 text-xs text-[#F8F9FA]/80">
+                                      {opt.actionSummary}
+                                    </p>
                                   </div>
-                                </div>
-                              </button>
-                            );
-                          })}
+                                  <div className="mt-2 flex items-center justify-between text-[11px] font-bold text-[#FFB703]">
+                                    <span>{opt.costSummary.join(' · ')}</span>
+                                    <div className="flex items-center gap-1">
+                                      {affectedProfiles.map((p) => (
+                                        <span
+                                          key={p.id}
+                                          className="inline-flex h-4 w-4 items-center justify-center rounded text-[9px] font-black text-[#071324]"
+                                          style={{ backgroundColor: p.avatarColor }}
+                                        >
+                                          {p.initials}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </button>
+                              );
+                            })}
                         </div>
                       )}
+                    </div>
+                  </div>
+                )}
+
+                {/* ================================================================
+                    PHASE 6: ACTION (M1.6 Valve 2 / Backup Room, M2.6 Rover Outcome, M5.6–M5.8 Shelter Counter, Hatch Seal, Dose Bar & All Clear)
+                    ================================================================ */}
+                {activeTab === 'action' && (
+                  <div className="space-y-4 rounded-2xl border border-[#22C55E]/50 bg-[#0D213B]/90 p-5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-extrabold uppercase tracking-wider text-[#22C55E]">
+                        Phase 6 · Mission Action
+                      </span>
+                      <span className="text-xs font-bold text-[#FFB703]">
+                        Plan Selected: Option {pendingOptionId ?? 'A'}
+                      </span>
+                    </div>
+
+                    {/* M1.6 Action: Option A (Hold E to turn red wheel on Valve 2) vs Option B (Crew walk to backup room) */}
+                    {mission.id === 'm1' && (
+                      <div className="space-y-3 rounded-xl border border-white/15 bg-[#071324]/85 p-4">
+                        {pendingOptionId === 'A' ? (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <p className="text-sm font-extrabold text-[#F8F9FA]">
+                                M1.6 Action · Turn the Big Red Wheel on Valve 2
+                              </p>
+                              <span
+                                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-extrabold ${
+                                  m1ValveProgress >= 100
+                                    ? 'bg-[#22C55E]/20 text-[#22C55E]'
+                                    : 'bg-[#FFB703]/20 text-[#FFB703]'
+                                }`}
+                              >
+                                <span
+                                  className={`h-2.5 w-2.5 rounded-full ${
+                                    m1ValveProgress >= 100
+                                      ? 'bg-[#22C55E]'
+                                      : 'animate-ping bg-[#FFB703]'
+                                  }`}
+                                />
+                                {m1ValveProgress >= 100
+                                  ? 'Green Light · Hiss Stopped!'
+                                  : 'Amber Light · Whisper Hiss'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-[#F8F9FA]/85">
+                              {juniorMission.actionSpec.optionAPrompt}
+                            </p>
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                              <button
+                                type="button"
+                                disabled={m1ValveProgress >= 100}
+                                onMouseDown={() => setM1HoldingValve(true)}
+                                onMouseUp={() => setM1HoldingValve(false)}
+                                onMouseLeave={() => setM1HoldingValve(false)}
+                                onTouchStart={() => setM1HoldingValve(true)}
+                                onTouchEnd={() => setM1HoldingValve(false)}
+                                onClick={() =>
+                                  setM1ValveProgress((p) => {
+                                    const next = Math.min(100, p + 50);
+                                    if (next >= 100) soundEngine.playSuccess();
+                                    return next;
+                                  })
+                                }
+                                className={`min-h-[42px] cursor-pointer rounded-xl px-5 py-2 text-xs font-extrabold transition-all ${
+                                  m1ValveProgress >= 100
+                                    ? 'border border-[#22C55E] bg-[#22C55E]/20 text-[#22C55E]'
+                                    : 'bg-gradient-to-r from-[#E85D04] to-[#FFB703] text-[#071324]'
+                                }`}
+                              >
+                                {m1ValveProgress >= 100
+                                  ? 'Valve 2 Closed ✓'
+                                  : `Hold [E] — Turn Red Wheel (${m1ValveProgress}%)`}
+                              </button>
+                              <div className="h-3 flex-1 overflow-hidden rounded-full bg-[#1B3A5F]">
+                                <div
+                                  className="h-full bg-gradient-to-r from-[#FFB703] to-[#22C55E] transition-all"
+                                  style={{ width: `${m1ValveProgress}%` }}
+                                />
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-sm font-extrabold text-[#FFB703]">
+                              M1.6 Action · Crew Walk to the Backup Room
+                            </p>
+                            <p className="text-xs text-[#F8F9FA]/85">
+                              {juniorMission.actionSpec.optionBPrompt}
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {/* M2.6 Action: {roverName} outcome lines */}
+                    {mission.id === 'm2' && juniorMission.rustyOffer && (
+                      <div className="space-y-2 rounded-xl border border-[#FFB703]/45 bg-[#071324]/85 p-4 text-xs">
+                        {sentRoverInStorm ? (
+                          <>
+                            <p className="font-extrabold text-[#FFB703]">
+                              {displayRover}: &ldquo;{juniorMission.rustyOffer.chosenBraveLine}&rdquo;
+                            </p>
+                            <p className="font-bold text-[#E85D04]">
+                              {displayRover}: &ldquo;{juniorMission.rustyOffer.stuckLine}&rdquo;
+                            </p>
+                          </>
+                        ) : (
+                          <p className="font-extrabold text-[#22C55E]">
+                            {displayRover}: &ldquo;{juniorMission.rustyOffer.waitedSafeLine}&rdquo;
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* M3 & M4 Action */}
+                    {(mission.id === 'm3' || mission.id === 'm4') && (
+                      <div className="rounded-xl border border-white/15 bg-[#071324]/85 p-4 text-xs">
+                        <p className="text-sm font-extrabold text-[#F8F9FA]">
+                          {pendingOptionId === juniorMission.decisions[0].engineOptionId
+                            ? juniorMission.actionSpec.optionAPrompt
+                            : juniorMission.actionSpec.optionBPrompt}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* M5.6 Action -> M5.7 The Wait -> M5.8 All Clear */}
+                    {mission.id === 'm5' && (
+                      <div className="space-y-3 rounded-xl border border-[#38BDF8]/45 bg-[#071324]/90 p-4">
+                        {/* If Option B chosen, show Amara's If-B line immediately */}
+                        {pendingOptionId === 'D' && (
+                          <div className="rounded-xl border border-[#FFB703]/50 bg-[#1F1711]/90 p-3 text-xs font-bold text-[#FFB703]">
+                            Amara: &ldquo;{juniorMission.resultLines.optionB.text}&rdquo;
+                          </div>
+                        )}
+
+                        {/* Lucía and {roverName} return from the ice site */}
+                        <div className="space-y-1 rounded-xl border border-[#38BDF8]/35 bg-[#0C4A6E]/30 p-3 text-xs">
+                          <p className="font-extrabold text-[#38BDF8]">
+                            Lucía (radio): &ldquo;{M5_SHELTER_SEQUENCE.luciaReturnLine.text}&rdquo;
+                          </p>
+                          <p className="font-bold text-[#22C55E]">
+                            {displayRover}: &ldquo;{M5_SHELTER_SEQUENCE.rustyReturnLine.text}&rdquo;
+                          </p>
+                        </div>
+
+                        {/* Live Crew Counter 1 of 4 ... 4 of 4 */}
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/15 bg-[#0D213B] p-3">
+                          <div className="flex items-center gap-2 text-xs font-extrabold text-[#F8F9FA]">
+                            <Users className="h-4 w-4 text-[#38BDF8]" aria-hidden="true" />
+                            <span>Crew Inside Shelter: {m5CrewInsideCount} of 4</span>
+                          </div>
+                          <button
+                            type="button"
+                            disabled={m5CrewInsideCount >= 4}
+                            onClick={() => {
+                              soundEngine.playRoverBeep('ok');
+                              setM5CrewInsideCount((c) => Math.min(4, c + 1));
+                            }}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-extrabold cursor-pointer ${
+                              m5CrewInsideCount >= 4
+                                ? 'bg-[#22C55E]/20 text-[#22C55E]'
+                                : 'bg-[#38BDF8] text-[#071324]'
+                            }`}
+                          >
+                            {m5CrewInsideCount >= 4
+                              ? '4 of 4 Crew Inside ✓'
+                              : `Welcome Crew Inside (${m5CrewInsideCount}/4)`}
+                          </button>
+                        </div>
+
+                        {/* Hold E to seal the hatch */}
+                        <div
+                          className={`rounded-xl border border-white/15 bg-[#0D213B] p-3 ${
+                            m5CrewInsideCount < 4 ? 'opacity-50 pointer-events-none' : ''
+                          }`}
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="flex items-center gap-1.5 text-xs font-extrabold text-[#F8F9FA]">
+                              <Lock className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
+                              <span>Hold [E] to Seal the Shelter Hatch</span>
+                            </span>
+                            <button
+                              type="button"
+                              disabled={m5HatchProgress >= 100}
+                              onMouseDown={() => setM5HoldingHatch(true)}
+                              onMouseUp={() => setM5HoldingHatch(false)}
+                              onMouseLeave={() => setM5HoldingHatch(false)}
+                              onTouchStart={() => setM5HoldingHatch(true)}
+                              onTouchEnd={() => setM5HoldingHatch(false)}
+                              onClick={() =>
+                                setM5HatchProgress((prev) => {
+                                  const next = Math.min(100, prev + 50);
+                                  if (next >= 100) {
+                                    soundEngine.playAirlockCycle();
+                                    soundEngine.playSuccess();
+                                    setM5DoseStage('rising');
+                                  }
+                                  return next;
+                                })
+                              }
+                              className={`rounded-lg px-4 py-1.5 text-xs font-extrabold cursor-pointer ${
+                                m5HatchProgress >= 100
+                                  ? 'bg-[#22C55E]/20 text-[#22C55E]'
+                                  : 'bg-[#FFB703] text-[#071324]'
+                              }`}
+                            >
+                              {m5HatchProgress >= 100 ? 'Hatch Sealed ✓' : 'Hold [E] to Seal Hatch'}
+                            </button>
+                          </div>
+                          <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-[#1B3A5F]">
+                            <div
+                              className="h-full bg-gradient-to-r from-[#FFB703] to-[#22C55E] transition-all"
+                              style={{ width: `${m5HatchProgress}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* M5.7 The Wait (Dose bar with NO numbers rising then falling) & M5.8 All Clear */}
+                        {m5HatchProgress >= 100 && (
+                          <div className="space-y-2.5 rounded-xl border border-[#22C55E]/45 bg-[#0D213B] p-3.5 text-xs">
+                            <p className="font-extrabold text-[#38BDF8]">
+                              Amara: &ldquo;{M5_SHELTER_SEQUENCE.waitAmaraLine.text}&rdquo;
+                            </p>
+                            <div>
+                              <div className="flex items-center justify-between text-[11px] font-bold text-[#F8F9FA]/85">
+                                <span>Outside Storm Radiation Dose Bar</span>
+                                <span className="text-[#22C55E]">
+                                  {m5DoseStage === 'rising'
+                                    ? 'Storm Passing Overhead...'
+                                    : 'Returning to Calm'}
+                                </span>
+                              </div>
+                              {/* Dose bar with NO numbers per Bible M5.7 */}
+                              <div className="mt-1.5 h-3 w-full overflow-hidden rounded-full bg-[#1B3A5F]">
+                                <div
+                                  className={`h-full transition-all duration-700 ${
+                                    m5DoseStage === 'rising'
+                                      ? 'w-2/3 bg-gradient-to-r from-[#38BDF8] to-[#FFB703]'
+                                      : 'w-1/6 bg-[#22C55E]'
+                                  }`}
+                                />
+                              </div>
+                            </div>
+
+                            {m5DoseStage === 'all-clear' && (
+                              <div className="space-y-1 rounded-lg border border-[#22C55E]/50 bg-[#071324]/90 p-2.5">
+                                <p className="font-extrabold text-[#FFB703]">
+                                  Hab Computer: &ldquo;{M5_SHELTER_SEQUENCE.allClearHabLine.text}&rdquo;
+                                </p>
+                                <p className="font-extrabold text-[#22C55E]">
+                                  {displayRover}: &ldquo;{M5_SHELTER_SEQUENCE.allClearRustyLine.text}&rdquo;
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    <div className="flex justify-end pt-1">
+                      <button
+                        type="button"
+                        disabled={
+                          (mission.id === 'm1' &&
+                            pendingOptionId === 'A' &&
+                            m1ValveProgress < 100) ||
+                          (mission.id === 'm5' && m5HatchProgress < 100)
+                        }
+                        onClick={handleCommitActionToResult}
+                        className="inline-flex min-h-[44px] cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-[#22C55E] to-[#16A34A] px-6 py-2 text-xs font-extrabold text-[#071324] shadow-xl disabled:opacity-45 hover:scale-[1.02] transition-transform"
+                      >
+                        <span>See Result, Science Card &amp; Badge →</span>
+                        <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                      </button>
                     </div>
                   </div>
                 )}
@@ -785,7 +1389,7 @@ export function CommandModeModal({
             )}
 
             {/* ================================================================
-                VIEW 2: MISSION OUTCOME + SCIENCE CARD + BADGE
+                VIEW 2: RESULT (Phase 7) + SCIENCE CARD & BADGE (Phase 8) + HOOK (Phase 9)
                 ================================================================ */}
             {isReview && (
               <div className="space-y-4">
@@ -796,14 +1400,11 @@ export function CommandModeModal({
                       : 'border-[#FFB703]/60 bg-[#1F1711]/85'
                   }`}
                 >
-                  <div className="flex items-center gap-2 text-sm font-extrabold text-[#22C55E]">
-                    <Bot className="h-5 w-5" aria-hidden="true" />
-                    <span>
-                      {state.lastOutcome!.passedObjective
-                        ? `${state.roverName}: "Great plan, Commander! We helped our crew!"`
-                        : `${state.roverName}: "Whew—that was tricky! Here is what happened:"`}
-                    </span>
-                  </div>
+                  {/* Exact Bible Result Line */}
+                  <p className="text-base font-extrabold text-[#22C55E]">
+                    {formatWithRoverName(bibleResultLine.speakerName, displayRover)}: &ldquo;
+                    {formatWithRoverName(bibleResultLine.text, displayRover)}&rdquo;
+                  </p>
                   <p className="mt-2 text-sm leading-relaxed text-[#F8F9FA]">
                     {state.lastOutcome!.immediateText}
                   </p>
@@ -814,15 +1415,55 @@ export function CommandModeModal({
                   )}
                 </div>
 
+                {/* M5 Crew Shelter Counter 4 of 4 & All Clear (Bible M5.6–M5.8) */}
+                {mission.id === 'm5' && (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#38BDF8]/55 bg-[#0D213B]/90 p-3.5">
+                    <div className="flex items-center gap-2.5 text-xs font-extrabold text-[#38BDF8]">
+                      <ShieldCheck className="h-5 w-5 text-[#22C55E]" aria-hidden="true" />
+                      <span>Water-Wall Storm Shelter · Crew Inside: 4 of 4 Safe</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {CREW_PROFILES.map((member) => (
+                        <span
+                          key={member.id}
+                          className="inline-flex items-center gap-1 rounded-lg bg-[#22C55E]/20 px-2 py-1 text-[10px] font-extrabold text-[#22C55E]"
+                        >
+                          <CheckCircle2 className="h-3 w-3" />
+                          {member.name.split(' ').pop()}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Phase 9: Story Bible Mission Hook */}
+                {juniorMission.hook && (
+                  <div className="rounded-xl border border-[#38BDF8]/40 bg-[#071324]/90 px-4 py-3 text-xs space-y-1">
+                    <p className="font-extrabold text-[#FFB703]">
+                      {formatWithRoverName(juniorMission.hook.speakerName, displayRover)} (
+                      {juniorMission.hook.speakerRole}):{' '}
+                      <span className="font-semibold italic text-[#F8F9FA]">
+                        &ldquo;{formatWithRoverName(juniorMission.hook.text, displayRover)}&rdquo;
+                      </span>
+                    </p>
+                    {juniorMission.hook.followUpRusty && (
+                      <p className="font-bold text-[#22C55E]">
+                        {displayRover}: &ldquo;
+                        {formatWithRoverName(juniorMission.hook.followUpRusty, displayRover)}&rdquo;
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Bonus M2 Post-Storm Solar Panel Cleaning */}
                 {mission.id === 'm2' && !state.panelsCleanedBonus && !state.campaignFailedReason && (
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#22C55E]/55 bg-[#0E2923]/88 p-3.5">
                     <div className="text-xs">
                       <p className="font-extrabold text-[#22C55E]">
-                        Bonus: Sky Is Clearing After the Storm!
+                        Sky Is Clearing After the Storm!
                       </p>
                       <p className="mt-0.5 text-[#F8F9FA]/90">
-                        Now is the safe time to brush settled dust off solar panels for +25% power!
+                        {displayRover}: &ldquo;Thank you for keeping me safe. I will polish the panels after the storm.&rdquo;
                       </p>
                     </div>
                     <button
@@ -830,13 +1471,13 @@ export function CommandModeModal({
                       onClick={onCleanPanelsBonus}
                       className="min-h-[38px] rounded-xl bg-[#22C55E] px-4 text-xs font-extrabold text-[#071324] hover:brightness-110 cursor-pointer whitespace-nowrap"
                     >
-                      Clean Panels Now (+25%)
+                      Polish Panels Now (+25%)
                     </button>
                   </div>
                 )}
 
+                {/* Phase 8: Science Card and Badge */}
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-12">
-                  {/* Inline Science Card with Continue & Skip */}
                   <div className="lg:col-span-7">
                     {scienceCard && (
                       <ScienceCardModal
@@ -845,7 +1486,7 @@ export function CommandModeModal({
                         continueLabel={
                           state.campaignFailedReason || state.missionIndex >= 4
                             ? 'See Final Debrief →'
-                            : 'Next Days on Mars →'
+                            : 'Next Sol Postcards →'
                         }
                         reducedMotion={reducedMotion}
                         onContinue={handleFinishScienceAndAdvance}
@@ -891,49 +1532,45 @@ export function CommandModeModal({
             )}
 
             {/* ================================================================
-                VIEW 3: ROUTINE SOLS SUMMARY
+                VIEW 3: ROUTINE SOLS POSTCARDS SUMMARY
                 ================================================================ */}
             {isRoutine && (
               <div className="space-y-4">
                 <p className="text-sm text-[#F8F9FA]/90">
                   Over the next <strong>{state.lastRoutineSummary!.solsElapsed} Mars sols</strong>,
-                  your 4 crew members used air, water, food, and power:
+                  your 4 crew members lived and worked at the outpost:
                 </p>
 
-                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-5">
-                  {[
-                    {
-                      label: 'O₂ Air',
-                      val: `${state.lastRoutineSummary!.o2Delta > 0 ? '+' : ''}${state.lastRoutineSummary!.o2Delta} kg`,
-                    },
-                    {
-                      label: 'Water',
-                      val: `${state.lastRoutineSummary!.waterDelta > 0 ? '+' : ''}${state.lastRoutineSummary!.waterDelta} kg`,
-                    },
-                    {
-                      label: 'Food',
-                      val: `${state.lastRoutineSummary!.foodDelta > 0 ? '+' : ''}${state.lastRoutineSummary!.foodDelta} kg`,
-                    },
-                    {
-                      label: 'Power',
-                      val: `${state.lastRoutineSummary!.batteryDelta > 0 ? '+' : ''}${state.lastRoutineSummary!.batteryDelta} kWh`,
-                    },
-                    {
-                      label: 'Shelter Shield',
-                      val: state.grownUpScienceOpen
-                        ? `+${state.lastRoutineSummary!.radiationDelta} mSv [SIM]`
-                        : 'Crew Protected',
-                    },
-                  ].map((stat) => (
-                    <div
-                      key={stat.label}
-                      className="rounded-xl border border-white/12 bg-[#0D213B]/75 p-3 text-center"
-                    >
-                      <p className="text-[11px] font-bold text-[#FFB703]">{stat.label}</p>
-                      <p className="mt-0.5 text-sm font-extrabold tabular-nums">{stat.val}</p>
+                {/* Interlude Sol Postcards from storyBeats.ts */}
+                {interludePostcards.length > 0 && (
+                  <div className="rounded-xl border border-[#FFB703]/45 bg-[#071324]/90 p-3.5 space-y-2.5">
+                    <div className="flex items-center justify-between text-xs font-extrabold text-[#FFB703]">
+                      <span className="flex items-center gap-1.5 uppercase tracking-wider">
+                        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>
+                          Postcards · Sols {juniorMission.postcardsRange?.[0]}–
+                          {juniorMission.postcardsRange?.[1]}
+                        </span>
+                      </span>
+                      <span className="text-[11px] text-[#38BDF8]">Mission Diary</span>
                     </div>
-                  ))}
-                </div>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                      {interludePostcards.map((pc) => (
+                        <div
+                          key={pc.title}
+                          className="rounded-xl border border-white/10 bg-[#0D213B]/80 p-3"
+                        >
+                          <p className="text-[11px] font-black uppercase tracking-wider text-[#FFB703]">
+                            {pc.title}
+                          </p>
+                          <p className="mt-1 text-xs font-semibold leading-snug text-[#F8F9FA]">
+                            &ldquo;{formatWithRoverName(pc.caption, displayRover)}&rdquo;
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 <div className="rounded-xl border border-white/12 bg-[#0D213B]/60 p-3 text-xs space-y-1.5">
                   {state.lastRoutineSummary!.notes.map((n) => (
@@ -947,14 +1584,26 @@ export function CommandModeModal({
                   ))}
                 </div>
 
-                <div className="flex justify-end">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playClick();
+                      onClose();
+                    }}
+                    className="inline-flex min-h-[42px] items-center gap-2 rounded-xl border border-[#38BDF8]/50 bg-[#0D213B] px-4 text-xs font-extrabold text-[#38BDF8] hover:border-[#38BDF8] hover:bg-[#132C4E] cursor-pointer"
+                  >
+                    <Eye className="h-4 w-4" aria-hidden="true" />
+                    <span>Explore Base First</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={onProceedNextCriticalSol}
                     className="inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-5 text-sm font-extrabold text-[#071324] shadow-lg hover:brightness-110 cursor-pointer"
                   >
                     <Sparkles className="h-4 w-4" aria-hidden="true" />
-                    <span>Go to Sol {state.lastRoutineSummary!.toSol}</span>
+                    <span>Continue to Sol {state.lastRoutineSummary!.toSol} →</span>
                     <ArrowRight className="h-4 w-4" aria-hidden="true" />
                   </button>
                 </div>
