@@ -68,6 +68,8 @@ import {
   ActiveObjective,
   computeScreenEdgeGuide,
 } from '../sim/activeObjective';
+import { useTouchDevice } from '../utils/useTouchDevice';
+import { MobileTouchControls } from './MobileTouchControls';
 
 interface GameplayHUDProps {
   simState: CampaignState;
@@ -461,6 +463,7 @@ export function GameplayHUD({
 }: GameplayHUDProps) {
   const [labOpen, setLabOpen] = useState(false);
   const [touchPadOpen, setTouchPadOpen] = useState(false);
+  const isTouch = useTouchDevice();
 
   const inspectedInfo = inspectedStation ? OUTPOST_LANDMARKS[inspectedStation] : null;
   const nearbyInfo = nearbyStation ? OUTPOST_LANDMARKS[nearbyStation] : null;
@@ -1393,10 +1396,11 @@ export function GameplayHUD({
           </AnimatePresence>
         </div>
 
-        {/* ZONE 6 (BOTTOM-RIGHT): View/Jump/Pad Quick Controls + H-Toggleable Control Hints */}
-        <div className="pointer-events-auto flex flex-col items-end gap-2 md:col-start-3 md:row-start-3 md:justify-self-end md:self-end">
-          <AnimatePresence>
-            {touchPadOpen && (
+        {/* ZONE 6 (BOTTOM-RIGHT): View/Jump/Pad Quick Controls + H-Toggleable Control Hints (PC only) */}
+        {!isTouch && (
+          <div className="pointer-events-auto flex flex-col items-end gap-2 md:col-start-3 md:row-start-3 md:justify-self-end md:self-end">
+            <AnimatePresence>
+              {touchPadOpen && (
               <motion.div
                 initial={reducedMotion ? false : { opacity: 0, y: 12, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -1598,6 +1602,44 @@ export function GameplayHUD({
             )
           )}
         </div>
+      )}
+
+      {/* Native Mobile Dual-Thumb Touch Controls (only active on mobile/tablet touch screens) */}
+      {isTouch && (
+        <MobileTouchControls
+          moveInputRef={moveInputRef}
+          cameraMode={cameraMode}
+          onToggleCamera={onToggleCameraMode}
+          canInteract={Boolean(
+            (simState.activeWeatherEvent && nearbyStation === 'habitat') ||
+              nearbyCrewProfile ||
+              nearbyZone ||
+              nearbyInfo,
+          )}
+          interactLabel={
+            simState.activeWeatherEvent && nearbyStation === 'habitat'
+              ? 'Enter Shelter'
+              : nearbyCrewProfile
+                ? `Talk with ${nearbyCrewProfile.name}`
+                : nearbyZone
+                  ? `Interact with ${zoneTitleMap[nearbyZone]}`
+                  : nearbyInfo
+                    ? `Inspect ${nearbyInfo.name}`
+                    : undefined
+          }
+          onInteract={() => {
+            if (simState.activeWeatherEvent && nearbyStation === 'habitat') {
+              onShelterClick?.();
+            } else if (nearbyCrewProfile && onInteractCrew) {
+              onInteractCrew(nearbyCrewProfile.id);
+            } else if (nearbyZone) {
+              onInteractZone(nearbyZone);
+            } else if (nearbyInfo) {
+              onInteractStation(nearbyInfo.id);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -2,8 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>SOL COMMANDER — Junior Astronaut Program</title>
+    <meta name="theme-color" content="#071324" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <meta
       name="description"
       content="SOL COMMANDER: Last Habitat is an independent educational 3D Mars simulation for ages 7–12 created for the NASA Space Apps Challenge 2026 with AI assistance. Not affiliated with or endorsed by NASA."
@@ -28,5 +33,12 @@
   <body class="bg-[#0B1D36] text-[#F8F9FA] antialiased selection:bg-[#FFB703] selection:text-[#0B1D36]">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
+    </script>
   </body>
 </html>

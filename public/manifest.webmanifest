@@ -1,0 +1,20 @@
+{
+  "name": "Sol Commander: 88 Days on Mars",
+  "short_name": "Sol Commander",
+  "description": "Educational 3D Mars exploration and decision game for young astronauts",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#071324",
+  "theme_color": "#071324",
+  "icons": [
+    {
+      "src": "/assets/sol-commander-icon.png",
+      "sizes": "192x192 512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["games", "education"]
+}

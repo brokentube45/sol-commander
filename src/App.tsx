@@ -17,6 +17,7 @@ import { CommandersLogModal, DataCreditsModal } from './components/LogCreditsMod
 import { DebriefScreen } from './components/DebriefScreen';
 import { PauseMenuModal } from './components/PauseMenuModal';
 import { TutorialOverlay } from './components/TutorialOverlay';
+import { OrientationGuard } from './components/OrientationGuard';
 import { GameplayPoseTelemetry, WristMapModal } from './components/WristMapModal';
 import { QuickActionMenuModal, getAudioZoneMeta } from './components/QuickActionMenuModal';
 import {
@@ -1833,6 +1834,9 @@ export default function App() {
 
       {/* Fullscreen 2D celebratory particles (above scene/HUD/scrims, below z-40 modal cards) */}
       <CelebrationLayer reducedMotion={reducedMotion} />
+
+      {/* Gentle Landscape Orientation alert for mobile players */}
+      <OrientationGuard />
 
       {debugMode && <DebugPanel gamePhase={gamePhase} onStartGameplayDirect={handleStartExploration} />}
     </main>

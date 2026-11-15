@@ -77,6 +77,9 @@ export interface GameplayInputState {
   right: boolean;
   sprint?: boolean;
   lookX: number;
+  lookY?: number;
+  analogX?: number;
+  analogY?: number;
   jumpRequested?: boolean;
 }
 
@@ -2487,16 +2490,30 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
 
         const moveFwd = isFrozenInCommandMode
           ? 0
-          : (keysDown.has('KeyW') || keysDown.has('ArrowUp') || uiInput?.forward ? 1 : 0) -
-            (keysDown.has('KeyS') || keysDown.has('ArrowDown') || uiInput?.back ? 1 : 0);
+          : uiInput?.analogY !== undefined && Math.abs(uiInput.analogY) > 0.05
+            ? uiInput.analogY
+            : (keysDown.has('KeyW') || keysDown.has('ArrowUp') || uiInput?.forward ? 1 : 0) -
+              (keysDown.has('KeyS') || keysDown.has('ArrowDown') || uiInput?.back ? 1 : 0);
         const moveStrafe = isFrozenInCommandMode
           ? 0
-          : (keysDown.has('KeyD') || keysDown.has('ArrowRight') || uiInput?.right ? 1 : 0) -
-            (keysDown.has('KeyA') || keysDown.has('ArrowLeft') || uiInput?.left ? 1 : 0);
+          : uiInput?.analogX !== undefined && Math.abs(uiInput.analogX) > 0.05
+            ? uiInput.analogX
+            : (keysDown.has('KeyD') || keysDown.has('ArrowRight') || uiInput?.right ? 1 : 0) -
+              (keysDown.has('KeyA') || keysDown.has('ArrowLeft') || uiInput?.left ? 1 : 0);
 
-        if (!isFrozenInCommandMode && uiInput && Math.abs(uiInput.lookX) > 0.0001) {
-          camYaw += uiInput.lookX * delta;
-          totalLookDelta += Math.abs(uiInput.lookX * delta);
+        if (!isFrozenInCommandMode && uiInput) {
+          if (Math.abs(uiInput.lookX) > 0.0001) {
+            camYaw += uiInput.lookX * delta;
+            totalLookDelta += Math.abs(uiInput.lookX * delta);
+          }
+          if (uiInput.lookY !== undefined && Math.abs(uiInput.lookY) > 0.0001) {
+            camPitch = THREE.MathUtils.clamp(
+              camPitch + uiInput.lookY * delta,
+              -PHYSICS_CONSTANTS.CAMERA_PITCH_MAX_RAD,
+              PHYSICS_CONSTANTS.CAMERA_PITCH_MAX_RAD,
+            );
+            totalLookDelta += Math.abs(uiInput.lookY * delta);
+          }
           if (
             !lookTutorialReported &&
             tutorialStepRef.current === 'look' &&

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Rocket,
@@ -9,6 +10,7 @@ import {
   Compass,
   Sparkles,
   X,
+  Smartphone,
 } from 'lucide-react';
 import { OUTPOST_LANDMARKS, OutpostLandmarkId } from '../data/missionData';
 
@@ -48,6 +50,27 @@ export function TitleScreenHUD({
   reducedMotion,
 }: TitleScreenHUDProps) {
   const activeInfo = selectedLandmark ? OUTPOST_LANDMARKS[selectedLandmark] : null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handler = (e: any) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!installPrompt) return;
+    installPrompt.prompt();
+    const { outcome } = await installPrompt.userChoice;
+    if (outcome === 'accepted') {
+      setInstallPrompt(null);
+    }
+  };
 
   return (
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-4 sm:p-6 lg:p-8">
@@ -84,8 +107,20 @@ export function TitleScreenHUD({
           </div>
         </motion.div>
 
-        {/* Top-Right Sound Control */}
+        {/* Top-Right Sound & PWA Install Controls */}
         <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
+          {installPrompt && (
+            <button
+              type="button"
+              onClick={handleInstallClick}
+              className="inline-flex min-h-[48px] items-center gap-2 rounded-xl border border-[#22C55E] bg-[#22C55E]/20 px-3.5 py-2 text-xs font-black text-[#22C55E] hover:bg-[#22C55E] hover:text-[#071324] transition-colors cursor-pointer shadow-lg animate-pulse"
+              title="Install Sol Commander App on your device"
+            >
+              <Smartphone className="h-4 w-4" />
+              <span>Install App</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={onToggleSound}
