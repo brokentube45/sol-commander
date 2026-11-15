@@ -6,15 +6,11 @@ import {
   HelpCircle,
   Volume2,
   VolumeX,
-  SlidersHorizontal,
-  Eye,
-  EyeOff,
   Compass,
   Sparkles,
   X,
 } from 'lucide-react';
 import { OUTPOST_LANDMARKS, OutpostLandmarkId } from '../data/missionData';
-import { GraphicsQuality } from './MarsOutpost3D';
 
 interface TitleScreenHUDProps {
   selectedLandmark: OutpostLandmarkId | null;
@@ -25,10 +21,6 @@ interface TitleScreenHUDProps {
   onOpenAbout: () => void;
   soundEnabled: boolean;
   onToggleSound: () => void;
-  quality: GraphicsQuality;
-  onToggleQuality: () => void;
-  hudHidden: boolean;
-  onToggleHud: () => void;
   reducedMotion: boolean;
 }
 
@@ -51,10 +43,6 @@ export function TitleScreenHUD({
   onOpenAbout,
   soundEnabled,
   onToggleSound,
-  quality,
-  onToggleQuality,
-  hudHidden,
-  onToggleHud,
   reducedMotion,
 }: TitleScreenHUDProps) {
   const activeInfo = selectedLandmark ? OUTPOST_LANDMARKS[selectedLandmark] : null;
@@ -62,58 +50,39 @@ export function TitleScreenHUD({
   return (
     <div className="pointer-events-none fixed inset-0 z-20 flex flex-col justify-between p-4 sm:p-6 lg:p-8">
       {/* Measured atmospheric left scrim for readable title typography without blocking the 3D outpost */}
-      {!hudHidden && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none fixed inset-y-0 left-0 -z-10 w-full bg-gradient-to-r from-[#0B1D36]/88 via-[#0B1D36]/42 to-transparent md:w-[58%]"
-        />
-      )}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-y-0 left-0 -z-10 w-full bg-gradient-to-r from-[#0B1D36]/88 via-[#0B1D36]/42 to-transparent md:w-[58%]"
+      />
       <div
         aria-hidden="true"
         className="pointer-events-none fixed inset-x-0 bottom-0 -z-10 h-32 bg-gradient-to-t from-[#0B1D36]/85 via-[#0B1D36]/35 to-transparent"
       />
 
-      {/* TOP ROW: Title Lockup (Left) + Compact Game System Toggles (Right) */}
+      {/* TOP ROW: Title Lockup (Left) + Sound Toggle (Right) */}
       <div className="flex items-start justify-between gap-4">
-        {!hudHidden ? (
-          <motion.div
-            initial={reducedMotion ? false : { opacity: 0, x: -16 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-            className="pointer-events-auto flex items-center gap-3.5"
-          >
-            <span
-              aria-hidden="true"
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#FFB703] to-[#E85D04] text-[#0B1D36] shadow-lg shadow-[#E85D04]/30"
-            >
-              <svg viewBox="0 0 32 32" className="h-7 w-7" fill="none">
-                <circle cx="16" cy="16" r="6" fill="currentColor" />
-                <ellipse
-                  cx="16"
-                  cy="16"
-                  rx="13"
-                  ry="5"
-                  transform="rotate(-24 16 16)"
-                  stroke="currentColor"
-                  strokeWidth="2.2"
-                />
-                <circle cx="26.5" cy="11.5" r="2.2" fill="#F8F9FA" />
-              </svg>
+        <motion.div
+          initial={reducedMotion ? false : { opacity: 0, x: -16 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+          className="pointer-events-auto flex items-center gap-3.5"
+        >
+          <img
+            src="/assets/sol-commander-icon.png"
+            alt="Sol Commander emblem"
+            className="h-12 w-12 shrink-0 rounded-full object-cover ring-2 ring-[#FFB703]/75 shadow-lg shadow-[#E85D04]/35"
+          />
+          <div className="flex flex-col leading-tight">
+            <span className="font-[family-name:var(--font-display)] text-xl font-extrabold tracking-wider text-[#F8F9FA] sm:text-2xl">
+              SOL COMMANDER
             </span>
-            <div className="flex flex-col leading-tight">
-              <span className="font-[family-name:var(--font-display)] text-xl font-extrabold tracking-wider text-[#F8F9FA] sm:text-2xl">
-                SOL COMMANDER
-              </span>
-              <span className="font-[family-name:var(--font-indicator)] text-xs font-bold tracking-[0.2em] text-[#FFB703]">
-                JUNIOR ASTRONAUT PROGRAM
-              </span>
-            </div>
-          </motion.div>
-        ) : (
-          <div />
-        )}
+            <span className="font-[family-name:var(--font-indicator)] text-xs font-bold tracking-[0.2em] text-[#FFB703]">
+              JUNIOR ASTRONAUT PROGRAM
+            </span>
+          </div>
+        </motion.div>
 
-        {/* Top-Right System Controls (Sound, Graphics Quality, Cinema View) */}
+        {/* Top-Right Sound Control */}
         <div className="pointer-events-auto flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
@@ -133,39 +102,11 @@ export function TitleScreenHUD({
             )}
             <span className="hidden sm:inline">{soundEnabled ? 'Sound On' : 'Sound Off'}</span>
           </button>
-
-          <button
-            type="button"
-            onClick={onToggleQuality}
-            aria-label={`Switch graphics quality, currently ${quality}`}
-            className="inline-flex min-h-[48px] items-center gap-2 rounded-xl border border-white/15 bg-[#0B1D36]/85 px-3.5 py-2 text-xs font-bold tracking-wider text-[#F8F9FA]/90 transition-colors hover:border-[#FFB703]/60 hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
-          >
-            <SlidersHorizontal className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
-            <span className="hidden sm:inline">
-              Graphics: {quality === 'high' ? 'High' : 'Low'}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={onToggleHud}
-            aria-pressed={hudHidden}
-            aria-label={hudHidden ? 'Show title menu' : 'Hide UI to inspect Mars outpost'}
-            className="inline-flex min-h-[48px] items-center gap-2 rounded-xl border border-white/15 bg-[#0B1D36]/85 px-3.5 py-2 text-xs font-bold tracking-wider text-[#F8F9FA]/90 transition-colors hover:border-[#FFB703]/60 hover:bg-[#1B3A5F] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
-          >
-            {hudHidden ? (
-              <Eye className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
-            ) : (
-              <EyeOff className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
-            )}
-            <span className="hidden md:inline">{hudHidden ? 'Show Menu' : 'Cinema View'}</span>
-          </button>
         </div>
       </div>
 
       {/* MIDDLE ROW: Game Title Headline + Main Game Menu Stack (Left) & Station Inspector (Top-Right Sky) */}
-      {!hudHidden && (
-        <div className="my-auto flex flex-col justify-between gap-6 lg:flex-row lg:items-start">
+      <div className="my-auto flex flex-col justify-between gap-6 lg:flex-row lg:items-start">
           <motion.div
             initial={reducedMotion ? false : { opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
@@ -269,31 +210,15 @@ export function TitleScreenHUD({
               </motion.aside>
             )}
           </AnimatePresence>
-        </div>
-      )}
+      </div>
 
-      {/* BOTTOM ROW: Subtle Mission Indicators + Camera Station Selector + Discreet Program Notice */}
+      {/* BOTTOM ROW: Discreet Program Notice + Camera Station Selector */}
       <div className="flex flex-col-reverse items-start justify-between gap-3 lg:flex-row lg:items-end">
-        {!hudHidden ? (
-          <div className="pointer-events-auto flex flex-col gap-1">
-            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-[family-name:var(--font-indicator)] text-sm font-bold tracking-[0.16em] text-[#F8F9FA]/90">
-              <span>
-                <span className="text-[#FFB703]">SOL</span> 01
-              </span>
-              <span aria-hidden="true" className="text-white/30">·</span>
-              <span>
-                CREW STATUS: <span className="text-[#22C55E]">READY</span>
-              </span>
-              <span aria-hidden="true" className="text-white/30">·</span>
-              <span>LOCATION: MARS OUTPOST</span>
-            </div>
-            <p className="text-[11px] font-semibold tracking-wide text-[#F8F9FA]/55">
-              NASA SPACE APPS CHALLENGE 2026 · Independent educational project · NASA does not endorse this project.
-            </p>
-          </div>
-        ) : (
-          <div />
-        )}
+        <div className="pointer-events-auto flex flex-col gap-1">
+          <p className="text-[11px] font-semibold tracking-wide text-[#F8F9FA]/55">
+            NASA SPACE APPS CHALLENGE 2026 · Independent educational project · NASA does not endorse this project.
+          </p>
+        </div>
 
         {/* Camera Inspection Selector */}
         <div

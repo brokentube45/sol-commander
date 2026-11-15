@@ -1005,10 +1005,12 @@ export function advanceRoutineSols(state: CampaignState): CampaignState {
   let waterDelta = Number((waterDailyNet * solsElapsed).toFixed(1));
   let foodDelta = Number((foodDailyNet * solsElapsed).toFixed(1));
   // Compressed harvest bonus every ~20 sols if greenhouse active
+  let greenhouseGrowthMult = state.greenhouseGrowthMult;
   if (!state.greenhouseDisabled && solsElapsed >= 15) {
-    const harvest = Math.round(SIM_CONSTANTS.GREENHOUSE_HARVEST_KG * state.greenhouseGrowthMult);
+    const harvest = Math.round(SIM_CONSTANTS.GREENHOUSE_HARVEST_KG * greenhouseGrowthMult);
     foodDelta = Number((foodDelta + harvest).toFixed(1));
     notes.push(`Bio-Dome harvested +${harvest} kg of fresh crops during routine operations.`);
+    greenhouseGrowthMult = 1.0; // M2 B reduction ("until next harvest") clears after harvest
   }
 
   const batteryDelta = Math.round(powerDailyNet * Math.min(solsElapsed, 3));
@@ -1056,6 +1058,7 @@ export function advanceRoutineSols(state: CampaignState): CampaignState {
     dustFactor,
     panelsDusty,
     greenhouseFrost: nextMission.id === 'm4', // M4 opens with greenhouse frost!
+    greenhouseGrowthMult,
     phase: 'routine-summary',
     lastRoutineSummary: summary,
     activeWeatherEvent: null,

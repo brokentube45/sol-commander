@@ -7,6 +7,14 @@ import {
 } from '../debug/diagnostics';
 import { SelfTestReport } from '../debug/outpostAudit';
 import { GamePhase } from '../data/missionData';
+import {
+  celebrate,
+  celebrationEngine,
+  CelebrationMissionId,
+  CelebrationTelemetry,
+  stopCelebration,
+} from '../utils/celebration';
+import { soundEngine } from '../utils/soundEngine';
 
 interface DebugPanelProps {
   gamePhase: GamePhase;
@@ -34,8 +42,12 @@ export function DebugPanel({ gamePhase, onStartGameplayDirect }: DebugPanelProps
   const [report, setReport] = useState<SelfTestReport | null>(null);
   const [runningTest, setRunningTest] = useState(false);
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [celebTelemetry, setCelebTelemetry] = useState<CelebrationTelemetry>(() =>
+    celebrationEngine.getTelemetry(),
+  );
 
   const syncFromWindow = useCallback(() => {
+    setCelebTelemetry(celebrationEngine.getTelemetry());
     const api = window.__MARS_DEBUG__;
     if (!api) return;
     setOverlays({ ...api.overlays });
@@ -399,6 +411,56 @@ export function DebugPanel({ gamePhase, onStartGameplayDirect }: DebugPanelProps
               ))}
           </div>
         )}
+      </div>
+
+      {/* Celebration Particle Triggers & FPS Telemetry (?debug=1 only) */}
+      <div className="mt-2.5 border-t border-slate-800 pt-2">
+        <div className="mb-1 flex items-center justify-between text-[10px]">
+          <span className="font-bold text-amber-300">CELEBRATION (?debug=1)</span>
+          <span className="text-slate-300 tabular-nums">
+            P={celebTelemetry.activeCount} · {celebTelemetry.running ? 'RUN' : 'IDLE'} ·{' '}
+            {celebTelemetry.fpsBefore}/{celebTelemetry.fpsDuring || '—'} FPS
+          </span>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          {([1, 2, 3, 4, 5] as CelebrationMissionId[]).map((mId) => (
+            <button
+              key={mId}
+              type="button"
+              data-celebration-trigger="true"
+              onClick={() => {
+                soundEngine.playBadgeUnlock();
+                celebrate({ kind: 'mission', missionId: mId });
+                syncFromWindow();
+              }}
+              className="rounded border border-cyan-500/50 bg-cyan-950/60 px-1.5 py-0.5 text-[10px] font-bold text-cyan-200 hover:bg-cyan-900/70"
+            >
+              M{mId}
+            </button>
+          ))}
+          <button
+            type="button"
+            data-celebration-trigger="true"
+            onClick={() => {
+              soundEngine.playBadgeUnlock();
+              celebrate({ kind: 'final' });
+              syncFromWindow();
+            }}
+            className="rounded border border-amber-400/70 bg-amber-950/70 px-1.5 py-0.5 text-[10px] font-bold text-amber-200 hover:bg-amber-900/70"
+          >
+            Final
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              stopCelebration();
+              syncFromWindow();
+            }}
+            className="rounded border border-slate-600 bg-slate-900 px-1.5 py-0.5 text-[10px] text-slate-300 hover:border-slate-400"
+          >
+            Skip
+          </button>
+        </div>
       </div>
     </aside>
   );

@@ -40,4 +40,7 @@ All runtime visuals, textures, 3D geometries, and audio in this project are eith
 ## 6. Video Asset (`public/assets/aistudio/`)
 - `sol-commandor-intro_721a1330.mp4` (`/assets/aistudio/sol-commandor-intro_721a1330.mp4`): Attached project intro cutscene video (MP4, H.264, logged without claiming authorship) played full-bleed on mission launch (`PrologueHUD.tsx`) with a Skip button and an automatic fallback to the 28-second real-time in-engine Three.js camera sequence with `SOL_COMMANDER_STORY_BIBLE.md` S0.2 captions if the video fails to load. Zero agency logos or copyright marks.
 
+## 7. Brand Icon & Wordmark Logo (`public/assets/`) — AI-Generated Assets
+- `public/assets/sol-commander-icon.png` (copied from `public/assets/aistudio/icon_6a53ffb6.png`): Circular Mars dome emblem used in the Title HUD, Favicon (`index.html`), Prologue reveal, Modals, and Debrief screen. **Disclosure: AI-generated branding image** provided by the project creator.
+- `public/assets/sol-commander-logo.png` (copied from `public/assets/aistudio/Logo__2__86797f17.png`): Full `SOL COMMANDER` wordmark logo displayed in the About modal. **Disclosure: AI-generated branding image** provided by the project creator.
 

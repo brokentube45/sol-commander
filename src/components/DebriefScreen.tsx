@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   Award,
@@ -14,7 +14,6 @@ import {
   Shuffle,
   Smile,
   Snowflake,
-  Sparkles,
   Star,
   Sun,
   Wind,
@@ -32,6 +31,7 @@ import {
 import { MissionId } from '../sim/roverData';
 import { CampaignState, computeCampaignEvaluation } from '../sim/simEngine';
 import { soundEngine } from '../utils/soundEngine';
+import { celebrate } from '../utils/celebration';
 import { JuniorQuizCard } from './JuniorQuizCard';
 
 interface DebriefScreenProps {
@@ -100,11 +100,25 @@ export function DebriefScreen({
   reducedMotion = false,
 }: DebriefScreenProps) {
   const [grownUpOpen, setGrownUpOpen] = useState(false);
+  const debriefBadgeRef = useRef<HTMLImageElement | null>(null);
   const evalRes = computeCampaignEvaluation(state);
 
   useEffect(() => {
     soundEngine.playBadgeUnlock();
-  }, []);
+    const rafId = window.requestAnimationFrame(() => {
+      const rect = debriefBadgeRef.current?.getBoundingClientRect();
+      const origin =
+        rect && rect.width > 0
+          ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+          : undefined;
+      celebrate({
+        kind: 'final',
+        origin,
+        reducedMotion,
+      });
+    });
+    return () => window.cancelAnimationFrame(rafId);
+  }, [reducedMotion]);
 
   const badgeCount = state.unlockedBadges.length;
 
@@ -129,16 +143,18 @@ export function DebriefScreen({
   ];
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center overflow-y-auto bg-[#061020]/84 p-4 sm:p-6">
-      <motion.section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="debrief-title"
-        initial={reducedMotion ? false : { opacity: 0, scale: 0.97, y: 12 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-        className="relative my-auto w-full max-w-4xl overflow-hidden rounded-2xl border border-[#FFB703]/55 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_42px_rgba(255,183,3,0.22)] font-[family-name:var(--font-game)]"
-      >
+    <>
+      <div aria-hidden="true" className="fixed inset-0 z-30 bg-[#061020]/84" />
+      <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center overflow-y-auto p-4 sm:p-6">
+        <motion.section
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="debrief-title"
+          initial={reducedMotion ? false : { opacity: 0, scale: 0.97, y: 12 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
+          className="pointer-events-auto relative my-auto w-full max-w-4xl overflow-hidden rounded-2xl border border-[#FFB703]/55 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_42px_rgba(255,183,3,0.22)] font-[family-name:var(--font-game)]"
+        >
         <div className="h-1.5 w-full bg-gradient-to-r from-[#22C55E] via-[#FFB703] to-[#E85D04]" />
 
         {/* Celebratory floating stars (respects reducedMotion) */}
@@ -179,7 +195,12 @@ export function DebriefScreen({
                 id="debrief-title"
                 className="mt-1 flex items-center gap-2.5 font-[family-name:var(--font-display)] text-2xl font-extrabold tracking-tight text-[#F8F9FA] sm:text-3xl"
               >
-                <Sparkles className="h-7 w-7 shrink-0 text-[#FFB703]" aria-hidden="true" />
+                <img
+                  ref={debriefBadgeRef}
+                  src="/assets/sol-commander-icon.png"
+                  alt="Sol Commander emblem"
+                  className="h-9 w-9 shrink-0 rounded-full object-cover ring-2 ring-[#FFB703]/75 shadow-md"
+                />
                 <span>Great work, Commander!</span>
               </h1>
               <p className="mt-1.5 max-w-2xl text-sm leading-relaxed text-[#F8F9FA]/90">
@@ -493,5 +514,6 @@ export function DebriefScreen({
         </div>
       </motion.section>
     </div>
+    </>
   );
 }

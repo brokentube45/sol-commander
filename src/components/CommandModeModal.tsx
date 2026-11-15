@@ -54,6 +54,7 @@ import { JuniorQuizCard } from './JuniorQuizCard';
 import { ScienceCardModal } from './ScienceCardModal';
 import { soundEngine } from '../utils/soundEngine';
 import { narrativeVoice } from '../utils/narrativeVoice';
+import { celebrate, CelebrationMissionId } from '../utils/celebration';
 
 interface CommandModeModalProps {
   open: boolean;
@@ -165,6 +166,7 @@ export function CommandModeModal({
   const [m5DoseStage, setM5DoseStage] = useState<'idle' | 'rising' | 'falling' | 'all-clear'>('idle');
 
   const badgeChimePlayedRef = useRef<string | null>(null);
+  const badgeIconRef = useRef<HTMLDivElement | null>(null);
 
   const displayRover = state.roverName.trim() || 'Rusty';
   const juniorMission = JUNIOR_MISSIONS[mission.id];
@@ -179,7 +181,13 @@ export function CommandModeModal({
 
   useEffect(() => {
     if (open) {
-      setActiveTab(initialTab);
+      const gatedTab: MissionStepTab =
+        initialTab === 'compare' && !activityDone
+          ? 'activity'
+          : initialTab === 'compare' && !quizDone
+            ? 'quiz'
+            : initialTab;
+      setActiveTab(gatedTab);
       setMoreChoicesOpen(false);
       setPendingOptionId(null);
       setSentRoverInStorm(false);
@@ -189,7 +197,7 @@ export function CommandModeModal({
       setM5HatchProgress(0);
       setM5HoldingHatch(false);
       setM5DoseStage('idle');
-      if (initialTab === 'look' && state.phase === 'active-mission') {
+      if (gatedTab === 'look' && state.phase === 'active-mission') {
         onMarkInspected();
       }
     }
@@ -329,18 +337,40 @@ export function CommandModeModal({
     };
   }, [open, activeTab, mission.id, pendingOptionId, m5CrewInsideCount]);
 
-  // Play celebratory chime when mission review opens for the first time on a mission
+  // Play celebratory chime + Mars confetti burst when mission review opens for the first time on a mission
   useEffect(() => {
+    if (!open || state.phase !== 'mission-review') {
+      badgeChimePlayedRef.current = null;
+      return;
+    }
     if (
-      open &&
-      state.phase === 'mission-review' &&
       state.lastOutcome &&
       badgeChimePlayedRef.current !== `${mission.id}-${state.sol}`
     ) {
       badgeChimePlayedRef.current = `${mission.id}-${state.sol}`;
       soundEngine.playBadgeUnlock();
+
+      const rawId = Number(mission.id.replace('m', ''));
+      const missionNum: CelebrationMissionId =
+        rawId >= 1 && rawId <= 5 ? (rawId as CelebrationMissionId) : 1;
+
+      const rafId = window.requestAnimationFrame(() => {
+        const rect = badgeIconRef.current?.getBoundingClientRect();
+        const origin =
+          rect && rect.width > 0
+            ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+            : undefined;
+        celebrate({
+          kind: 'mission',
+          missionId: missionNum,
+          origin,
+          reducedMotion,
+        });
+      });
+
+      return () => window.cancelAnimationFrame(rafId);
     }
-  }, [open, state.phase, state.lastOutcome, mission.id, state.sol]);
+  }, [open, state.phase, state.lastOutcome, mission.id, state.sol, reducedMotion]);
 
   // Read mission decisions aloud when opening the compare choices tab
   useEffect(() => {
@@ -503,8 +533,12 @@ export function CommandModeModal({
   return (
     <AnimatePresence>
       <div
-        className="pointer-events-auto fixed inset-0 z-40 flex items-end justify-center bg-gradient-to-t from-[#040B16]/82 via-[#040B16]/35 to-transparent p-2.5 sm:p-4 overflow-y-auto"
+        aria-hidden="true"
+        className="pointer-events-auto fixed inset-0 z-30 bg-gradient-to-t from-[#040B16]/82 via-[#040B16]/35 to-transparent"
         onClick={state.phase === 'active-mission' ? onClose : undefined}
+      />
+      <div
+        className="pointer-events-none fixed inset-0 z-40 flex items-end justify-center p-2.5 sm:p-4 overflow-y-auto"
       >
         <motion.section
           role="dialog"
@@ -515,7 +549,7 @@ export function CommandModeModal({
           exit={{ opacity: 0, y: 20 }}
           transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
           onClick={(e) => e.stopPropagation()}
-          className="my-auto sm:my-0 w-full max-w-5xl max-h-[88vh] flex flex-col overflow-hidden rounded-2xl border border-[#E85D04]/60 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_38px_rgba(232,93,4,0.28)] font-[family-name:var(--font-game)]"
+          className="pointer-events-auto my-auto sm:my-0 w-full max-w-5xl max-h-[88vh] flex flex-col overflow-hidden rounded-2xl border border-[#E85D04]/60 bg-[#071324]/96 text-[#F8F9FA] shadow-[0_0_38px_rgba(232,93,4,0.28)] font-[family-name:var(--font-game)]"
         >
           {/* Warm Rim Accent */}
           <div className="h-1 w-full shrink-0 bg-gradient-to-r from-[#E85D04] via-[#FFB703] to-[#22C55E]" />
@@ -590,11 +624,15 @@ export function CommandModeModal({
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleOpenTab('quiz')}
-                    className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs font-extrabold transition-colors cursor-pointer ${
-                      activeTab === 'quiz'
-                        ? 'bg-[#22C55E] text-[#071324]'
-                        : 'text-[#F8F9FA]/85 hover:text-[#22C55E]'
+                    disabled={!activityDone}
+                    title={!activityDone ? 'Complete 2. Activity first' : undefined}
+                    onClick={() => activityDone && handleOpenTab('quiz')}
+                    className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs font-extrabold transition-colors ${
+                      !activityDone
+                        ? 'opacity-45 cursor-not-allowed text-[#F8F9FA]/45'
+                        : activeTab === 'quiz'
+                          ? 'bg-[#22C55E] text-[#071324] cursor-pointer'
+                          : 'text-[#F8F9FA]/85 hover:text-[#22C55E] cursor-pointer'
                     }`}
                   >
                     <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
@@ -603,11 +641,15 @@ export function CommandModeModal({
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleOpenTab('compare')}
-                    className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs font-extrabold transition-colors cursor-pointer ${
-                      activeTab === 'compare'
-                        ? 'bg-[#E85D04] text-[#F8F9FA]'
-                        : 'text-[#F8F9FA]/85 hover:text-[#FFB703]'
+                    disabled={!activityDone || !quizDone}
+                    title={!activityDone || !quizDone ? 'Complete 2. Activity and 3. Quiz first' : undefined}
+                    onClick={() => activityDone && quizDone && handleOpenTab('compare')}
+                    className={`inline-flex h-8 items-center gap-1 rounded-lg px-2.5 text-xs font-extrabold transition-colors ${
+                      !activityDone || !quizDone
+                        ? 'opacity-45 cursor-not-allowed text-[#F8F9FA]/45'
+                        : activeTab === 'compare'
+                          ? 'bg-[#E85D04] text-[#F8F9FA] cursor-pointer'
+                          : 'text-[#F8F9FA]/85 hover:text-[#FFB703] cursor-pointer'
                     }`}
                   >
                     <Scale className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1504,7 +1546,10 @@ export function CommandModeModal({
                       </span>
 
                       <div className="mt-4 flex items-center gap-3.5">
-                        <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#FFB703] to-[#E85D04] text-[#071324] shadow-[0_0_24px_rgba(255,183,3,0.35)]">
+                        <div
+                          ref={badgeIconRef}
+                          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#FFB703] to-[#E85D04] text-[#071324] shadow-[0_0_24px_rgba(255,183,3,0.35)]"
+                        >
                           <BadgeIcon icon={juniorMission.badge.icon} />
                         </div>
                         <div>

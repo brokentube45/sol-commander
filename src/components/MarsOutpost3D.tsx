@@ -68,6 +68,7 @@ import {
 import { SelfTestReport, computeModuleAABBs, measurePairwiseSeamGaps } from '../debug/outpostAudit';
 
 export type GraphicsQuality = 'high' | 'low';
+export type CursorUnlockKey = 'Alt' | 'KeyK' | 'Backquote';
 
 export interface GameplayInputState {
   forward: boolean;
@@ -132,6 +133,8 @@ interface MarsOutpost3DProps {
   paused?: boolean;
   quickMode?: boolean;
   mouseSensitivity?: number;
+  cursorUnlockKey?: CursorUnlockKey;
+  onCursorUnlockedChange?: (unlocked: boolean) => void;
   canvasElRef?: MutableRefObject<HTMLCanvasElement | null>;
   onPointerLockChange?: (locked: boolean) => void;
   onPauseRequested?: () => void;
@@ -301,6 +304,8 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
   paused = false,
   quickMode = false,
   mouseSensitivity = 1.0,
+  cursorUnlockKey = 'Alt',
+  onCursorUnlockedChange,
   canvasElRef,
   onPointerLockChange,
   onPauseRequested,
@@ -372,6 +377,12 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
 
   const sensitivityRef = useRef<number>(mouseSensitivity);
   sensitivityRef.current = mouseSensitivity;
+
+  const cursorUnlockKeyRef = useRef<CursorUnlockKey>(cursorUnlockKey);
+  cursorUnlockKeyRef.current = cursorUnlockKey;
+
+  const onCursorUnlockedRef = useRef(onCursorUnlockedChange);
+  onCursorUnlockedRef.current = onCursorUnlockedChange;
 
   const onPointerLockRef = useRef(onPointerLockChange);
   onPointerLockRef.current = onPointerLockChange;
@@ -1223,6 +1234,40 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
       const simState = simVisualsRef.current;
       if (simState?.commandModeOpen || pausedRef.current) return;
 
+      // In-game Free Mouse Cursor key (Alt / K / `) unlocks pointer without opening Pause Menu;
+      // pressing it again or left-clicking anywhere on the 3D world re-locks cursor.
+      const unlockKeySetting = cursorUnlockKeyRef.current;
+      const isCursorUnlockKey =
+        (unlockKeySetting === 'Alt' && (ev.code === 'AltLeft' || ev.code === 'AltRight')) ||
+        (unlockKeySetting === 'KeyK' && ev.code === 'KeyK') ||
+        (unlockKeySetting === 'Backquote' && ev.code === 'Backquote');
+
+      if (isCursorUnlockKey) {
+        ev.preventDefault();
+        if (ev.repeat || simState?.mapOpen || simState?.quickMenuOpen) return;
+        if (!manualCursorUnlock) {
+          manualCursorUnlock = true;
+          isDraggingFallback = false;
+          keysDown.clear();
+          if (document.pointerLockElement === renderer.domElement) {
+            try {
+              document.exitPointerLock?.();
+            } catch {
+              // ignore exit errors
+            }
+          }
+          renderer.domElement.style.cursor = 'default';
+          onCursorUnlockedRef.current?.(true);
+        } else {
+          manualCursorUnlock = false;
+          onCursorUnlockedRef.current?.(false);
+          if (!pointerLockBlocked) {
+            tryLockPointer();
+          }
+        }
+        return;
+      }
+
       if (ev.code === 'KeyM' && !ev.repeat && !simState?.quickMenuOpen) {
         onToggleMapRef.current?.();
         return;
@@ -1293,6 +1338,7 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
 
     let pointerLocked = document.pointerLockElement === renderer.domElement;
     let pointerLockBlocked = false;
+    let manualCursorUnlock = false;
     let isDraggingFallback = false;
     let dragStartX = 0;
     let dragStartY = 0;
@@ -1328,10 +1374,15 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
     const handlePointerLockChange = () => {
       const wasLocked = pointerLocked;
       pointerLocked = document.pointerLockElement === renderer.domElement;
+      if (pointerLocked) {
+        manualCursorUnlock = false;
+        onCursorUnlockedRef.current?.(false);
+      }
       onPointerLockRef.current?.(pointerLocked);
       if (
         wasLocked &&
         !pointerLocked &&
+        !manualCursorUnlock &&
         gamePhaseRef.current === 'gameplay' &&
         !simVisualsRef.current?.commandModeOpen &&
         !simVisualsRef.current?.mapOpen &&
@@ -1351,6 +1402,10 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
     const handleBlur = () => {
       keysDown.clear();
       isDraggingFallback = false;
+      if (manualCursorUnlock) {
+        manualCursorUnlock = false;
+        onCursorUnlockedRef.current?.(false);
+      }
       if (
         gamePhaseRef.current === 'gameplay' &&
         !simVisualsRef.current?.commandModeOpen &&
@@ -1460,6 +1515,10 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           renderer.domElement.style.cursor = 'grabbing';
           return;
         }
+        if (manualCursorUnlock) {
+          renderer.domElement.style.cursor = 'default';
+          return;
+        }
         renderer.domElement.style.cursor = pointerLockBlocked ? 'grab' : 'crosshair';
         return;
       }
@@ -1498,6 +1557,16 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
 
         if (tutorialStepRef.current === 'take-control') {
           onLookDoneRef.current();
+        }
+
+        // Left-clicking any spot on the 3D game world re-locks/hides a manually freed cursor
+        if (manualCursorUnlock && ev.button === 0) {
+          manualCursorUnlock = false;
+          onCursorUnlockedRef.current?.(false);
+          if (!pointerLockBlocked) {
+            tryLockPointer();
+            return;
+          }
         }
 
         // If already pointer-locked, a click interacts via centered reticle (0, 0)
@@ -1891,7 +1960,7 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
         }
       }
 
-      // Single Source of Truth: ONE 3D Diamond Marker + ONE Ground Ring + Ground Chevron Path Guide
+      // Single Source of Truth: ONE 3D Diamond Marker + ONE Ground Ring + Floating Prompt Label + Ground Chevron Path Guide
       const activeObj = phase === 'gameplay' ? sim?.activeObjective : undefined;
       if (activeObj && activeObj.showMarkerAndRing) {
         const objY = gAt(activeObj.x, activeObj.z);
@@ -1903,8 +1972,16 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
         if (ringMat && ringMat.color) {
           ringMat.color.set(activeObj.colorHex);
         }
-        outpost.zoneBeaconDiamond.position.y =
-          2.35 + (isStatic ? 0 : Math.sin(elapsed * 3.0) * 0.14);
+        const bobOffset = isStatic ? 0 : Math.sin(elapsed * 3.0) * 0.14;
+        outpost.zoneBeaconDiamond.position.y = 2.35 + bobOffset;
+        outpost.zoneBeaconLabelSprite.position.y = 3.08 + bobOffset;
+        const beaconPromptText =
+          activeObj.id === 'weather-shelter'
+            ? '(E) Enter Shelter'
+            : activeObj.id === 'act1-yellow-light'
+              ? 'Walk Here'
+              : '(E) Open Panel';
+        outpost.updateZoneBeaconLabel(beaconPromptText, activeObj.colorHex);
         if (!isStatic) {
           outpost.zoneBeaconDiamond.rotation.y += delta * 1.8;
         }
@@ -2381,8 +2458,14 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
           Boolean(simState?.mapOpen) ||
           Boolean(simState?.quickMenuOpen) ||
           pausedRef.current;
-        if (isFrozenInCommandMode && document.pointerLockElement === renderer.domElement) {
-          document.exitPointerLock?.();
+        if (isFrozenInCommandMode) {
+          if (manualCursorUnlock) {
+            manualCursorUnlock = false;
+            onCursorUnlockedRef.current?.(false);
+          }
+          if (document.pointerLockElement === renderer.domElement) {
+            document.exitPointerLock?.();
+          }
         }
         const uiInput = moveInputRef?.current;
 
@@ -2842,7 +2925,7 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
 
         // Camera Mode: First-Person (1P default) vs Third-Person (3P via V).
         // Zero camera takeover during gameplay (no fly-over after crystals or when modals open).
-        const isFirstPerson = (simState?.cameraMode ?? '1p') === '1p';
+        const isFirstPerson = (simState?.cameraMode ?? '3p') === '1p';
         outpost.astroGroup.visible = !isFirstPerson;
         if (fpRenderPass) fpRenderPass.enabled = isFirstPerson;
 
@@ -3327,16 +3410,39 @@ export const MarsOutpost3D = memo(function MarsOutpost3D({
             roverController.isDriving,
           );
 
-          // Aim Rover camera head & guide beam toward Habitat Shelter during weather alert, else active zone
+          // Aim Rover camera head & guide beam strictly toward the current activeObjective
+          // (matches the exact final destination and color of the walking path arrows).
           const activeTarget = sim.weatherEvent?.active
             ? outpost.stationInteractPoints.habitat
-            : outpost.zonePositions[sim.activeZoneId];
-          outpost.roverGuideBeamMat.color.set(sim.weatherEvent?.active ? '#22C55E' : '#FFB703');
-          const toZoneAngle =
-            Math.atan2(activeTarget.x - roverController.x, activeTarget.z - roverController.z) -
-            roverController.yaw;
-          outpost.roverHead.rotation.y = shortestAngleDiff(0, toZoneAngle) * 0.85;
-          outpost.roverHead.rotation.x = 0.05;
+            : sim.activeObjective
+              ? { x: sim.activeObjective.x, z: sim.activeObjective.z }
+              : outpost.zonePositions[sim.activeZoneId];
+          const beamHex = sim.weatherEvent?.active
+            ? '#22C55E'
+            : (sim.activeObjective?.colorHex ?? '#FFB703');
+          outpost.roverGuideBeamMat.color.set(beamHex);
+          const dxTarget = activeTarget.x - roverController.x;
+          const dzTarget = activeTarget.z - roverController.z;
+          const targetWorldYaw = Math.atan2(dxTarget, dzTarget);
+          const targetRelYaw = shortestAngleDiff(roverController.yaw, targetWorldYaw);
+          const yawErr = shortestAngleDiff(outpost.roverHead.rotation.y, targetRelYaw);
+          outpost.roverHead.rotation.y = isStatic
+            ? targetRelYaw
+            : outpost.roverHead.rotation.y + yawErr * Math.min(1, delta * 9.0);
+          const distToTargetXZ = Math.max(1.2, Math.hypot(dxTarget, dzTarget));
+          const targetGroundY = gAt(activeTarget.x, activeTarget.z);
+          const headWorldY = roverVisY + 1.5;
+          const desiredPitch = THREE.MathUtils.clamp(
+            Math.atan2(headWorldY - (targetGroundY + 0.9), distToTargetXZ),
+            -0.12,
+            0.26,
+          );
+          outpost.roverHead.rotation.x = THREE.MathUtils.damp(
+            outpost.roverHead.rotation.x,
+            desiredPitch,
+            8.0,
+            delta,
+          );
           outpost.roverGuideBeam.visible = !sim.commandModeOpen;
         } else {
           roverController = createInitialRoverController(

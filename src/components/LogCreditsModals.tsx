@@ -95,6 +95,19 @@ export function CommandersLogModal({
   const [drawerTab, setDrawerTab] = useState<'journal' | 'log'>('journal');
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
 
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
   const activeRipples = [
     ripples.m1LeakUnsealed && 'M1: Tank 2 left open — extra O₂ lost.',
     ripples.m2GreenhouseShed && 'M2: Greenhouse dimmed — −30% crop growth.',
@@ -477,6 +490,19 @@ export function DataCreditsModal({
   const [galleryLoaded, setGalleryLoaded] = useState(false);
 
   useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
+  useEffect(() => {
     if (!open || galleryLoaded) return;
     let active = true;
     fetchNasaMarsGallery().then((items) => {
@@ -585,7 +611,7 @@ export function DataCreditsModal({
                       <a
                         href={d.url}
                         target="_blank"
-                        rel="noreferrer"
+                        rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 text-[11px] font-bold text-[#38BDF8] hover:underline"
                       >
                         <span>{d.provider}</span>
@@ -619,7 +645,7 @@ export function DataCreditsModal({
                       key={item.id}
                       href={item.sourceUrl}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       className="flex items-center gap-2 rounded-lg border border-white/10 bg-[#071324]/85 p-2 hover:border-[#FFB703]"
                     >
                       {item.imageUrl ? (

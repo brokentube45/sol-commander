@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  CursorUnlockKey,
   GameplayInputState,
   GraphicsQuality,
   LandingTelemetrySummary,
@@ -66,7 +67,6 @@ import {
   enterFreeRoam,
   getActiveMission,
   getResourceDaysSummary,
-  jumpToMission,
   markDataInspected,
   markMissionControlAsked,
   proceedToNextCriticalSol,
@@ -88,6 +88,8 @@ import {
 } from './sim/marsPhysics';
 import { OutpostAudioZone, soundEngine } from './utils/soundEngine';
 import { narrativeVoice } from './utils/narrativeVoice';
+import { stopCelebration } from './utils/celebration';
+import { CelebrationLayer } from './components/CelebrationLayer';
 import { isDebugModeEnabled } from './debug/diagnostics';
 import { DebugPanel } from './components/DebugPanel';
 
@@ -97,8 +99,7 @@ export default function App() {
   const [engineReady, setEngineReady] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(false);
   const soundTouchedRef = useRef(false);
-  const [quality, setQuality] = useState<GraphicsQuality>('high');
-  const [hudHidden, setHudHidden] = useState(false);
+  const [quality] = useState<GraphicsQuality>('high');
   const [selectedLandmark, setSelectedLandmark] = useState<OutpostLandmarkId | null>(null);
   const [activeModal, setActiveModal] = useState<ActiveModalType>(null);
   const [missionInfoFocus, setMissionInfoFocus] = useState<
@@ -123,7 +124,7 @@ export default function App() {
   );
   const simStateRef = useRef(simState);
   simStateRef.current = simState;
-  const [cameraMode, setCameraMode] = useState<'3p' | '1p'>('1p');
+  const [cameraMode, setCameraMode] = useState<'3p' | '1p'>('3p');
   const [guideEnabled, setGuideEnabled] = useState<boolean>(true);
   const [lensOpen, setLensOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
@@ -167,6 +168,8 @@ export default function App() {
   const [paused, setPaused] = useState(false);
   const [quickMode, setQuickMode] = useState(false);
   const [mouseSensitivity, setMouseSensitivity] = useState(1.0);
+  const [cursorUnlockKey, setCursorUnlockKey] = useState<CursorUnlockKey>('Alt');
+  const [cursorUnlockedInGame, setCursorUnlockedInGame] = useState(false);
   const [pointerLocked, setPointerLocked] = useState(false);
   const canvasElRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -414,16 +417,6 @@ export default function App() {
     }
   };
 
-  const handleToggleQuality = () => {
-    soundEngine.playClick();
-    setQuality((prev) => (prev === 'high' ? 'low' : 'high'));
-  };
-
-  const handleToggleHud = () => {
-    soundEngine.playClick();
-    setHudHidden((prev) => !prev);
-  };
-
   const handleSelectLandmark = (id: OutpostLandmarkId | null) => {
     if (id) soundEngine.playInspect();
     else soundEngine.playClick();
@@ -439,7 +432,6 @@ export default function App() {
     soundEngine.playMissionStart();
     setActiveModal(null);
     setSelectedLandmark(null);
-    setHudHidden(false);
     setProloguePaused(false);
     setPrologueElapsed(0);
     setPrologueReplayToken((t) => t + 1);
@@ -486,7 +478,7 @@ export default function App() {
       setWeatherSecondsLeft(0);
       setM5ShelterSecondsLeft(180);
       setSimState(createInitialCampaignState(nextSeed, callsign, roverName, donkiWeather));
-      setCameraMode('1p');
+      setCameraMode('3p');
       setGuideEnabled(true);
       setLensOpen(false);
       setMapOpen(false);
@@ -501,6 +493,7 @@ export default function App() {
       setLogOpen(false);
       setCreditsOpen(false);
       setPaused(false);
+      setCursorUnlockedInGame(false);
       setNearbyStation(null);
       setNearbyZone(null);
       setNearbyCrewId(null);
@@ -514,6 +507,7 @@ export default function App() {
   };
 
   const handleReturnTitle = () => {
+    stopCelebration();
     soundEngine.stopWeatherLoop();
     soundEngine.playClick();
     setInspectedStation(null);
@@ -1331,6 +1325,8 @@ export default function App() {
           paused={paused}
           quickMode={quickMode}
           mouseSensitivity={mouseSensitivity}
+          cursorUnlockKey={cursorUnlockKey}
+          onCursorUnlockedChange={setCursorUnlockedInGame}
           canvasElRef={canvasElRef}
           onPointerLockChange={setPointerLocked}
           onPauseRequested={handlePauseRequested}
@@ -1396,10 +1392,6 @@ export default function App() {
             }}
             soundEnabled={soundEnabled}
             onToggleSound={handleToggleSound}
-            quality={quality}
-            onToggleQuality={handleToggleQuality}
-            hudHidden={hudHidden}
-            onToggleHud={handleToggleHud}
             reducedMotion={reducedMotion}
           />
 
@@ -1562,9 +1554,12 @@ export default function App() {
             onReturnTitle={handleReturnTitle}
             onOpenPauseMenu={() => {
               soundEngine.playClick();
+              setCursorUnlockedInGame(false);
               setPaused(true);
             }}
             pointerLocked={pointerLocked}
+            cursorUnlockKey={cursorUnlockKey}
+            cursorUnlockedInGame={cursorUnlockedInGame}
             quickMode={quickMode}
             m5ShelterSecondsLeft={m5ShelterSecondsLeft}
             onOpenDebrief={() => setSimState((prev) => reopenDebrief(prev))}
@@ -1721,19 +1716,15 @@ export default function App() {
             }}
             mouseSensitivity={mouseSensitivity}
             onChangeSensitivity={setMouseSensitivity}
+            cursorUnlockKey={cursorUnlockKey}
+            onChangeCursorUnlockKey={setCursorUnlockKey}
             soundEnabled={soundEnabled}
             onToggleSound={handleToggleSound}
-            quality={quality}
-            onToggleQuality={handleToggleQuality}
             tutorialActive={simState.tutorialStep !== 'complete'}
             onSkipTutorial={handleSkipTutorial}
-            onJumpToMission={(idx) => {
-              setSimState((prev) => jumpToMission(prev, idx));
-              setCommandModeOpen(false);
-              setLogOpen(false);
-            }}
             onResume={() => {
               soundEngine.playClick();
+              setCursorUnlockedInGame(false);
               setPaused(false);
               try {
                 canvasElRef.current?.requestPointerLock?.();
@@ -1786,6 +1777,9 @@ export default function App() {
           />
         </>
       )}
+
+      {/* Fullscreen 2D celebratory particles (above scene/HUD/scrims, below z-40 modal cards) */}
+      <CelebrationLayer reducedMotion={reducedMotion} />
 
       {debugMode && <DebugPanel gamePhase={gamePhase} onStartGameplayDirect={handleStartExploration} />}
     </main>

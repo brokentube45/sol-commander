@@ -1042,4 +1042,85 @@ export function createLandingPadDecalTexture(maxAniso: number): THREE.CanvasText
   return tex;
 }
 
+export function drawBeaconPromptLabel(
+  canvas: HTMLCanvasElement,
+  labelText: string,
+  accentHex = '#FFB703',
+): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+
+  const match = /^\(([^)]+)\)\s+(.+)$/.exec(labelText.trim());
+  const keyBadge = match ? match[1] : null;
+  const bodyText = match ? match[2] : labelText.trim();
+
+  // Outer card pill
+  const pad = 10;
+  const cardW = w - pad * 2;
+  const cardH = h - pad * 2;
+  const rad = 24;
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(pad, pad, cardW, cardH, rad);
+  ctx.fillStyle = 'rgba(7, 19, 36, 0.94)';
+  ctx.fill();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = accentHex;
+  ctx.stroke();
+  ctx.restore();
+
+  if (keyBadge) {
+    const keySize = 62;
+    const keyX = pad + 18;
+    const keyY = (h - keySize) * 0.5;
+    ctx.beginPath();
+    ctx.roundRect(keyX, keyY, keySize, keySize, 14);
+    ctx.fillStyle = accentHex;
+    ctx.fill();
+
+    ctx.fillStyle = '#071324';
+    ctx.font = '900 34px "Plus Jakarta Sans", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(keyBadge, keyX + keySize * 0.5, h * 0.5 + 1);
+
+    ctx.fillStyle = '#F8F9FA';
+    ctx.font = '800 34px "Plus Jakarta Sans", Arial, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(bodyText, keyX + keySize + 20, h * 0.5 + 1);
+  } else {
+    ctx.fillStyle = '#F8F9FA';
+    ctx.font = '800 36px "Plus Jakarta Sans", Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(bodyText, w * 0.5, h * 0.5 + 1);
+  }
+}
+
+export function createBeaconPromptTexture(
+  maxAniso: number,
+  initialText = '(E) Open Panel',
+  accentHex = '#FFB703',
+): {
+  canvas: HTMLCanvasElement;
+  texture: THREE.CanvasTexture;
+} {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 128;
+  drawBeaconPromptLabel(canvas, initialText, accentHex);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = maxAniso;
+  texture.needsUpdate = true;
+  return { canvas, texture };
+}
+
+
 

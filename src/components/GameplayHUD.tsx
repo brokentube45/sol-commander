@@ -4,8 +4,6 @@ import {
   Compass,
   RotateCcw,
   Volume2,
-  VolumeX,
-  Home,
   Zap,
   Sparkles,
   X,
@@ -15,7 +13,6 @@ import {
   ArrowRight,
   RotateCw,
   BookOpen,
-  Database,
   Eye,
   Radiation,
   Wrench,
@@ -60,7 +57,7 @@ import {
   computeRoverMood,
   getResourceDaysSummary,
 } from '../sim/simEngine';
-import { GameplayInputState } from './MarsOutpost3D';
+import { CursorUnlockKey, GameplayInputState } from './MarsOutpost3D';
 import { RoverAssistant } from './RoverAssistant';
 import { GameplayPoseTelemetry } from './WristMapModal';
 import { OutpostAudioZone, soundEngine } from '../utils/soundEngine';
@@ -122,6 +119,8 @@ interface GameplayHUDProps {
   onReturnTitle: () => void;
   onOpenPauseMenu?: () => void;
   pointerLocked?: boolean;
+  cursorUnlockKey?: CursorUnlockKey;
+  cursorUnlockedInGame?: boolean;
   quickMode?: boolean;
   m5ShelterSecondsLeft?: number;
   onOpenDebrief?: () => void;
@@ -425,6 +424,8 @@ export function GameplayHUD({
   onReturnTitle,
   onOpenPauseMenu,
   pointerLocked = false,
+  cursorUnlockKey = 'Alt',
+  cursorUnlockedInGame = false,
   quickMode = false,
   m5ShelterSecondsLeft,
   onOpenDebrief,
@@ -760,7 +761,7 @@ export function GameplayHUD({
             </AnimatePresence>
           </div>
 
-          {/* Slim Game Utility Strip */}
+          {/* Slim Single-Row Utility Strip */}
           <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
@@ -778,58 +779,6 @@ export function GameplayHUD({
               )}
             </button>
 
-            <button
-              type="button"
-              onClick={onOpenCredits}
-              className="inline-flex min-h-[32px] items-center gap-1.5 rounded-lg border border-[#E85D04]/35 bg-[#071324]/88 px-2.5 text-[11px] font-bold text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
-            >
-              <Database className="h-3.5 w-3.5 text-[#38BDF8]" aria-hidden="true" />
-              <span>NASA</span>
-            </button>
-
-            {simState.phase === 'active-mission' && !simState.activeWeatherEvent && (
-              <button
-                type="button"
-                onClick={onTriggerWeatherTest}
-                title="Test a Mars Dust Devil alert"
-                className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[#E85D04]/45 bg-[#071324]/88 px-2.5 text-[11px] font-bold text-[#FFB703] hover:border-[#FFB703] cursor-pointer"
-              >
-                <Wind className="h-3.5 w-3.5 text-[#E85D04]" aria-hidden="true" />
-                <span>Storm</span>
-              </button>
-            )}
-
-            <button
-              type="button"
-              onClick={onToggleSound}
-              aria-pressed={soundEnabled}
-              title={soundEnabled ? 'Mute sound' : 'Turn sound on'}
-              className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[#E85D04]/35 bg-[#071324]/88 px-2 text-[11px] font-bold text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
-            >
-              {soundEnabled ? (
-                <Volume2 className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
-              ) : (
-                <VolumeX className="h-3.5 w-3.5 text-[#F8F9FA]/70" aria-hidden="true" />
-              )}
-            </button>
-
-            <button
-              type="button"
-              onClick={onReplayPrologue}
-              title="Replay story intro"
-              className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[#E85D04]/35 bg-[#071324]/88 px-2 text-[11px] font-bold text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
-            >
-              <RotateCcw className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
-            </button>
-
-            <button
-              type="button"
-              onClick={onReturnTitle}
-              title="Back to Title"
-              className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[#E85D04]/35 bg-[#071324]/88 px-2 text-[11px] font-bold text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
-            >
-              <Home className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
-            </button>
             {onToggleMap && (
               <button
                 type="button"
@@ -847,46 +796,12 @@ export function GameplayHUD({
               </button>
             )}
 
-            {onToggleQuickMenu && (
-              <button
-                type="button"
-                onClick={onToggleQuickMenu}
-                aria-pressed={quickMenuOpen}
-                title="Commander's Quick Actions [C]"
-                className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg border px-2.5 text-[11px] font-bold transition-colors cursor-pointer ${
-                  quickMenuOpen
-                    ? 'border-[#22C55E] bg-[#22C55E] text-[#071324]'
-                    : 'border-[#E85D04]/35 bg-[#071324]/88 text-[#22C55E] hover:border-[#22C55E]'
-                }`}
-              >
-                <Zap className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Quick [C]</span>
-              </button>
-            )}
-
-            {onToggleLens && (
-              <button
-                type="button"
-                onClick={onToggleLens}
-                aria-pressed={lensOpen}
-                title="Toggle Mars Science Lens [F]"
-                className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg border px-2.5 text-[11px] font-bold transition-colors cursor-pointer ${
-                  lensOpen
-                    ? 'border-[#38BDF8] bg-[#38BDF8] text-[#071324]'
-                    : 'border-[#E85D04]/35 bg-[#071324]/88 text-[#38BDF8] hover:border-[#38BDF8]'
-                }`}
-              >
-                <ScanEye className="h-3.5 w-3.5" aria-hidden="true" />
-                <span>Lens [F]</span>
-              </button>
-            )}
-
             {onToggleGuide && (
               <button
                 type="button"
                 onClick={onToggleGuide}
                 aria-pressed={guideEnabled}
-                title="Toggle Ground Chevron Path Guide [G]"
+                title="Toggle Ground Path Guide [G]"
                 className={`inline-flex min-h-[32px] items-center gap-1 rounded-lg border px-2.5 text-[11px] font-bold transition-colors cursor-pointer ${
                   guideEnabled
                     ? 'border-[#FFB703] bg-[#FFB703]/20 text-[#FFB703]'
@@ -905,7 +820,7 @@ export function GameplayHUD({
                 title="Pause & Settings (Esc)"
                 className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[#E85D04]/35 bg-[#071324]/88 px-2.5 text-[11px] font-bold text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
               >
-                <span>Esc · Pause</span>
+                <span>Pause</span>
               </button>
             )}
           </div>
@@ -1201,7 +1116,12 @@ export function GameplayHUD({
                     className="inline-flex min-h-[34px] flex-1 items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-2.5 text-xs font-extrabold text-[#071324] hover:brightness-110 transition-all cursor-pointer whitespace-nowrap"
                   >
                     <Zap className="h-3.5 w-3.5" aria-hidden="true" />
-                    <span>Decide</span>
+                    <span>
+                      {simState.missionMiniActivityDone[activeMission.id] &&
+                      simState.missionQuizDone[activeMission.id]
+                        ? 'Decide'
+                        : 'Continue'}
+                    </span>
                   </button>
                 </div>
               </section>
@@ -1335,8 +1255,13 @@ export function GameplayHUD({
         />
       </div>
 
-      {/* ZONE 5 (BOTTOM-CENTER): Contextual Interaction Keycap */}
-      <div className="pointer-events-none flex items-end justify-center pb-1 md:col-start-2 md:row-start-3 md:self-end">
+      {/* ZONE 5 (BOTTOM-CENTER): Cursor Free Chip + Contextual Interaction Keycap */}
+      <div className="pointer-events-none flex flex-col items-center justify-end gap-1.5 pb-1 md:col-start-2 md:row-start-3 md:self-end">
+        {cursorUnlockedInGame && !pointerLocked && (
+          <div className="rounded-lg border border-[#38BDF8]/65 bg-[#071324]/92 px-3 py-1 text-[11px] font-bold text-[#38BDF8] shadow-[0_0_16px_rgba(56,189,248,0.28)]">
+            Cursor Free · Left-click 3D world to look around
+          </div>
+        )}
           <AnimatePresence>
             {simState.activeWeatherEvent && nearbyStation === 'habitat' ? (
               <motion.button
@@ -1582,21 +1507,20 @@ export function GameplayHUD({
               <span className="text-white/25">·</span>
               <span><strong className="text-[#FFB703]">WASD</strong> Move</span>
               <span className="text-white/25">·</span>
-              <span><strong className="text-[#FFB703]">Shift</strong> Lope</span>
+              <span><strong className="text-[#FFB703]">Shift</strong> Run</span>
               <span className="text-white/25">·</span>
               <span><strong className="text-[#FFB703]">Space</strong> Jump</span>
               <span className="text-white/25">·</span>
-              <span><strong className="text-[#FFB703]">E</strong> Inspect</span>
+              <span><strong className="text-[#FFB703]">E</strong> Open</span>
               <span className="text-white/25">·</span>
-              <span><strong className="text-[#FFB703]">R</strong> Yield</span>
-              <span className="text-white/25">·</span>
-              <span><strong className="text-[#22C55E]">C</strong> Quick</span>
+              <span>
+                <strong className="text-[#38BDF8]">
+                  {cursorUnlockKey === 'Alt' ? 'Alt' : cursorUnlockKey === 'KeyK' ? 'K' : '`'}
+                </strong>{' '}
+                Cursor
+              </span>
               <span className="text-white/25">·</span>
               <span><strong className="text-[#FFB703]">M</strong> Map</span>
-              <span className="text-white/25">·</span>
-              <span><strong className="text-[#FFB703]">G</strong> Guide</span>
-              <span className="text-white/25">·</span>
-              <span><strong className="text-[#38BDF8]">F</strong> Lens</span>
               <span className="text-white/25">·</span>
               <span><strong className="text-[#FFB703]">Esc</strong> Pause</span>
               {onToggleControlsStrip && (

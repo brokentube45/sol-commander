@@ -32,6 +32,8 @@ import {
   createSolarWaferTextures,
   createSuitFabricTextures,
   createThermalFoilTextures,
+  createBeaconPromptTexture,
+  drawBeaconPromptLabel,
 } from './proceduralTextures';
 
 export interface CrewAvatarRig {
@@ -98,6 +100,8 @@ export interface OutpostRig {
   zoneBeaconRing: THREE.Mesh;
   zoneBeaconDiamond: THREE.Mesh;
   zoneBeaconMat: THREE.MeshStandardMaterial;
+  zoneBeaconLabelSprite: THREE.Sprite;
+  updateZoneBeaconLabel: (text: string, accentHex?: string) => void;
   dustDevilGroup: THREE.Group;
   dustDevilFunnel: THREE.Mesh;
   dustDevilPoints: THREE.Points;
@@ -2850,6 +2854,37 @@ export function buildOutpostAssets(
   zoneBeaconDiamond.position.set(0, 2.35, 0);
   zoneBeaconDiamond.userData.nonPhysicalMarker = true;
   zoneBeaconGroup.add(zoneBeaconDiamond);
+
+  const beaconPromptTexObj = createBeaconPromptTexture(
+    renderer.capabilities.getMaxAnisotropy(),
+    '(E) Open Panel',
+    '#FFB703',
+  );
+  trackTex(beaconPromptTexObj.texture);
+  const zoneBeaconLabelMat = trackMat(
+    new THREE.SpriteMaterial({
+      map: beaconPromptTexObj.texture,
+      transparent: true,
+      depthWrite: false,
+      sizeAttenuation: true,
+    }),
+  );
+  const zoneBeaconLabelSprite = new THREE.Sprite(zoneBeaconLabelMat);
+  zoneBeaconLabelSprite.position.set(0, 3.06, 0);
+  zoneBeaconLabelSprite.scale.set(2.35, 0.59, 1);
+  zoneBeaconLabelSprite.renderOrder = 18;
+  zoneBeaconLabelSprite.userData.nonPhysicalMarker = true;
+  zoneBeaconGroup.add(zoneBeaconLabelSprite);
+
+  let lastBeaconLabelKey = '(E) Open Panel|#FFB703';
+  const updateZoneBeaconLabel = (text: string, accentHex = '#FFB703') => {
+    const key = `${text}|${accentHex}`;
+    if (key === lastBeaconLabelKey) return;
+    lastBeaconLabelKey = key;
+    drawBeaconPromptLabel(beaconPromptTexObj.canvas, text, accentHex);
+    beaconPromptTexObj.texture.needsUpdate = true;
+  };
+
   zoneBeaconGroup.visible = false;
   scene.add(zoneBeaconGroup);
 
@@ -3732,6 +3767,8 @@ export function buildOutpostAssets(
     zoneBeaconRing,
     zoneBeaconDiamond,
     zoneBeaconMat,
+    zoneBeaconLabelSprite,
+    updateZoneBeaconLabel,
     dustDevilGroup,
     dustDevilFunnel,
     dustDevilPoints,

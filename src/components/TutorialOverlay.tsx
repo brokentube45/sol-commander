@@ -68,7 +68,6 @@ export function TutorialOverlay({
   const [postcardIdx, setPostcardIdx] = useState(0);
   const [bannerVisible, setBannerVisible] = useState(true);
   const firstStepRef = useRef(true);
-  const prevCrystalsRef = useRef(crystalsCollected);
 
   const displayRover = roverName.trim() || 'Rusty';
 
@@ -76,15 +75,6 @@ export function TutorialOverlay({
   useEffect(() => {
     narrativeVoice.setRoverName(displayRover);
   }, [displayRover]);
-
-  // Crystal callouts: "One!" · "Two!" · "Three! Wow, look how high you went!"
-  useEffect(() => {
-    if (renderMode === 'modals-only') return;
-    if (crystalsCollected > prevCrystalsRef.current && crystalsCollected >= 1 && crystalsCollected <= 3) {
-      narrativeVoice.speakCrystalCaught(crystalsCollected);
-    }
-    prevCrystalsRef.current = crystalsCollected;
-  }, [crystalsCollected, renderMode]);
 
   // Time-lapse Sols 2-20: 4 seconds each per Story Bible S1.8, with Next/Skip
   useEffect(() => {
@@ -320,7 +310,6 @@ export function TutorialOverlay({
                       type="button"
                       onClick={() => {
                         soundEngine.playClick();
-                        narrativeVoice.speakChoreSpot(chore.id);
                         onVisitChore?.(chore.id);
                       }}
                       className={`flex cursor-pointer items-center justify-between gap-1.5 rounded-lg border px-2 py-1.5 text-left text-[10px] font-bold transition-all ${

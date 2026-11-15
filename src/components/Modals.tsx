@@ -96,23 +96,30 @@ export function Modals({
 
             <div className="p-6 sm:p-8">
               <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="font-[family-name:var(--font-indicator)] text-xs font-bold tracking-[0.2em] text-[#FFB703]">
-                    {activeModal === 'briefing' && 'MISSION 01 · COMMANDER BRIEFING'}
-                    {activeModal === 'how-to-play' && 'JUNIOR ASTRONAUT CONTROLS'}
-                    {activeModal === 'mission-info' && 'OUTPOST FIELD GUIDE'}
-                    {activeModal === 'about' && 'EDUCATIONAL PROJECT'}
-                  </p>
-                  <h2
-                    id="modal-title"
-                    className="mt-1 font-[family-name:var(--font-display)] text-2xl font-extrabold text-[#F8F9FA] sm:text-3xl"
-                  >
-                    {activeModal === 'briefing' &&
-                      (launchConfirmed ? 'Cleared for Mars!' : 'Welcome, Commander')}
-                    {activeModal === 'how-to-play' && 'How to Play'}
-                    {activeModal === 'mission-info' && 'Mission 01: Mars Outpost'}
-                    {activeModal === 'about' && 'About SOL COMMANDER'}
-                  </h2>
+                <div className="flex items-center gap-3.5">
+                  <img
+                    src="/assets/sol-commander-icon.png"
+                    alt="Sol Commander icon"
+                    className="h-11 w-11 shrink-0 rounded-full object-cover ring-2 ring-[#FFB703]/60 shadow-md"
+                  />
+                  <div>
+                    <p className="font-[family-name:var(--font-indicator)] text-xs font-bold tracking-[0.2em] text-[#FFB703]">
+                      {activeModal === 'briefing' && 'MISSION 01 · COMMANDER BRIEFING'}
+                      {activeModal === 'how-to-play' && 'JUNIOR EXPLORER CONTROLS'}
+                      {activeModal === 'mission-info' && '88-SOL CAMPAIGN GUIDE'}
+                      {activeModal === 'about' && 'EDUCATIONAL MARS PROJECT'}
+                    </p>
+                    <h2
+                      id="modal-title"
+                      className="mt-1 font-[family-name:var(--font-display)] text-2xl font-extrabold text-[#F8F9FA] sm:text-3xl"
+                    >
+                      {activeModal === 'briefing' &&
+                        (launchConfirmed ? 'Cleared for Mars!' : 'Welcome, Commander')}
+                      {activeModal === 'how-to-play' && 'How to Play'}
+                      {activeModal === 'mission-info' && 'Mission Info'}
+                      {activeModal === 'about' && 'About SOL COMMANDER'}
+                    </h2>
+                  </div>
                 </div>
 
                 <button
@@ -243,8 +250,7 @@ export function Modals({
                     </div>
                     <p className="mt-3 text-sm leading-relaxed text-[#F8F9FA]/90">
                       Your spacesuit seals are locked, ROVER-7 is powered up, and Mars Outpost 01 is
-                      awaiting your arrival. Outpost exploration gameplay launches in the next
-                      mission phase!
+                      awaiting your arrival outside the airlock!
                     </p>
                   </div>
 
@@ -271,7 +277,7 @@ export function Modals({
               {activeModal === 'how-to-play' && (
                 <div className="mt-6 space-y-5">
                   <p className="text-base leading-relaxed text-[#F8F9FA]/90">
-                    Easy controls designed for new Mars explorers:
+                    Simple controls built for young Mars Commanders:
                   </p>
 
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -279,7 +285,7 @@ export function Modals({
                       <div className="flex items-center gap-2.5 text-[#FFB703]">
                         <Keyboard className="h-5 w-5" aria-hidden="true" />
                         <h3 className="font-[family-name:var(--font-display)] text-base font-bold text-[#F8F9FA]">
-                          Move Around
+                          Move &amp; Jump
                         </h3>
                       </div>
                       <div className="mt-3 flex items-center gap-1.5 font-[family-name:var(--font-display)] text-xs font-bold">
@@ -292,11 +298,12 @@ export function Modals({
                           </span>
                         ))}
                         <span className="ml-2 font-[family-name:var(--font-body)] text-xs text-[#F8F9FA]/80">
-                          or Arrow Keys
+                          or Arrows
                         </span>
                       </div>
-                      <p className="mt-2 text-sm text-[#F8F9FA]/80">
-                        Walk between the Mars Habitat, Greenhouse, and Solar Array.
+                      <p className="mt-2.5 text-sm text-[#F8F9FA]/85">
+                        Hold <strong>Shift</strong> to run and press <strong>Space</strong> to jump
+                        in real Mars gravity (3.73 m/s² — 2.6× higher than Earth!).
                       </p>
                     </div>
 
@@ -304,15 +311,16 @@ export function Modals({
                       <div className="flex items-center gap-2.5 text-[#FFB703]">
                         <MousePointerClick className="h-5 w-5" aria-hidden="true" />
                         <h3 className="font-[family-name:var(--font-display)] text-base font-bold text-[#F8F9FA]">
-                          Inspect & Interact
+                          Look &amp; Free Cursor
                         </h3>
                       </div>
                       <p className="mt-3 text-sm font-bold text-[#F8F9FA]">
-                        Click or Tap any Station (or press E)
+                        Click the 3D world to look around
                       </p>
-                      <p className="mt-1.5 text-sm text-[#F8F9FA]/80">
-                        Try clicking ROVER-7, the Habitat, or the Astronaut right on the main
-                        screen!
+                      <p className="mt-1.5 text-sm text-[#F8F9FA]/85">
+                        Press <strong>Alt</strong> anytime to show your mouse cursor so you can click
+                        HUD buttons (change this key in <strong>Pause</strong>). Left-click the 3D
+                        world again to lock look mode.
                       </p>
                     </div>
                   </div>
@@ -320,12 +328,24 @@ export function Modals({
                   <div className="rounded-2xl border border-[#FFB703]/30 bg-[#1B3A5F]/45 p-4">
                     <h3 className="flex items-center gap-2 font-[family-name:var(--font-display)] text-sm font-bold text-[#FFB703]">
                       <Sparkles className="h-4 w-4" aria-hidden="true" />
-                      COMMANDER TIPS
+                      QUICK COMMANDER GUIDE
                     </h3>
                     <ul className="mt-2 space-y-1.5 text-sm text-[#F8F9FA]/90">
-                      <li>• Press <strong>Space</strong> to jump in real Mars gravity (3.73 m/s²) and <strong>V</strong> to switch 1st/3rd person!</li>
-                      <li>• Follow the <strong>Look → Compare → Choose → Review</strong> loop on all 5 Critical Sols.</li>
-                      <li>• Press <strong>Q</strong> anytime for a free Socratic question from your Rover, or <strong>Tab</strong> for your Commander&apos;s Log.</li>
+                      <li>
+                        • Follow the <strong>glowing road arrows</strong>,{' '}
+                        <strong>Rover&apos;s eye beam</strong>, and{' '}
+                        <strong>floating diamond crystal</strong> labeled{' '}
+                        <strong>(E) Open Panel</strong>.
+                      </li>
+                      <li>
+                        • Walk near tanks, terminals, or crewmates and press <strong>E</strong> to
+                        open mission panels and fix problems.
+                      </li>
+                      <li>
+                        • Press <strong>M</strong> for your Outpost Map, <strong>V</strong> for
+                        1st/3rd person camera, <strong>Q</strong> for a Rover tip, and{' '}
+                        <strong>Esc</strong> to Pause.
+                      </li>
                     </ul>
                   </div>
 
@@ -348,10 +368,8 @@ export function Modals({
               {activeModal === 'mission-info' && (
                 <div className="mt-6 space-y-4">
                   <p className="text-base leading-relaxed text-[#F8F9FA]/90">
-                    In <strong className="text-[#FFB703]">SOL COMMANDER</strong>, you take charge of
-                    a brand-new research station on Mars. Every Martian day (called a{' '}
-                    <strong className="text-[#F8F9FA]">Sol</strong>) brings new choices and real
-                    space science discoveries.
+                    Your journey spans <strong className="text-[#FFB703]">88 Martian Sols</strong>{' '}
+                    (days on Mars) starting from your very first footsteps outside the airlock.
                   </p>
 
                   <div className="space-y-3">
@@ -363,11 +381,12 @@ export function Modals({
                       }`}
                     >
                       <h3 className="font-[family-name:var(--font-display)] text-sm font-bold text-[#FFB703]">
-                        EXPLORE THE RED PLANET
+                        1. ACT 1 · SOL 01 TRAINING
                       </h3>
                       <p className="mt-1 text-sm text-[#F8F9FA]/85">
-                        Walk the Martian soil alongside ROVER-7, inspect crater rocks, and check on
-                        every building in your outpost.
+                        Meet your rover buddy <strong>Rusty</strong>, collect 3 energy crystals,
+                        check on all <strong>4 crewmates</strong> (Amara, Kenji, Lucia, Rafi),
+                        inspect the Greenhouse &amp; Oxygen Tank 2, and unlock your first badge.
                       </p>
                     </div>
 
@@ -379,11 +398,14 @@ export function Modals({
                       }`}
                     >
                       <h3 className="font-[family-name:var(--font-display)] text-sm font-bold text-[#22C55E]">
-                        SURVIVE WITH SMART DECISIONS
+                        2. FIVE CRITICAL SOL MISSIONS (SOLS 21–88)
                       </h3>
                       <p className="mt-1 text-sm text-[#F8F9FA]/85">
-                        Mars has thin air and freezing nights. Commanders decide how to spend
-                        limited battery power, water, and greenhouse energy.
+                        Solve five outpost emergencies: <strong>Sol 21 Oxygen Leak</strong>,{' '}
+                        <strong>Sol 34 Dust Storm Power Drop</strong>,{' '}
+                        <strong>Sol 52 Water Machine Filter</strong>,{' '}
+                        <strong>Sol 67 Cold Greenhouse</strong>, and{' '}
+                        <strong>Sol 88 Solar Storm Shelter Alert</strong>.
                       </p>
                     </div>
 
@@ -395,11 +417,13 @@ export function Modals({
                       }`}
                     >
                       <h3 className="font-[family-name:var(--font-display)] text-sm font-bold text-[#E85D04]">
-                        DISCOVER HOW THE SUN AFFECTS MARS
+                        3. REAL MARS BASE &amp; SCIENCE
                       </h3>
                       <p className="mt-1 text-sm text-[#F8F9FA]/85">
-                        Learn how solar flares, Martian dust, and sunlight angle shape daily life for
-                        astronauts millions of kilometers from Earth.
+                        Balance <strong>Air</strong>, <strong>Water</strong>, <strong>Food</strong>,
+                        and <strong>Power</strong> across your Habitat Dome, Skybridge, Windmills,
+                        Solar Array, SWIM Ice Drill, and Hydroponic Greenhouse while learning real
+                        Mars weather and gravity!
                       </p>
                     </div>
                   </div>
@@ -413,7 +437,7 @@ export function Modals({
                       }}
                       className="min-h-[48px] rounded-xl bg-[#FFB703] px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-extrabold text-[#0B1D36] transition-transform hover:scale-[1.02] focus-visible:outline-2 focus-visible:outline-[#FFB703] cursor-pointer"
                     >
-                      CLOSE FIELD GUIDE
+                      CLOSE MISSION INFO
                     </button>
                   </div>
                 </div>
@@ -422,29 +446,43 @@ export function Modals({
               {/* 4. ABOUT MODAL */}
               {activeModal === 'about' && (
                 <div className="mt-6 space-y-4">
+                  <div className="flex justify-center rounded-2xl border border-[#FFB703]/35 bg-[#F8F9FA] px-6 py-3 shadow-inner">
+                    <img
+                      src="/assets/sol-commander-logo.png"
+                      alt="SOL COMMANDER logo"
+                      className="h-20 w-auto object-contain"
+                    />
+                  </div>
+
                   <p className="text-base leading-relaxed text-[#F8F9FA]/90">
-                    <strong className="text-[#FFB703]">SOL COMMANDER</strong> is an educational
-                    Mars exploration adventure built for curious explorers aged 7–12. It blends
-                    playful discovery with real space science about living on Mars and understanding
-                    our Sun.
+                    <strong className="text-[#FFB703]">SOL COMMANDER</strong> is an interactive 3D
+                    Mars survival and science adventure built for young explorers aged 7–12. Walk an
+                    authentic Martian outpost, work alongside autonomous crewmates and your rover,
+                    and see how real physics shapes life on Mars.
                   </p>
 
                   <div className="rounded-2xl border border-white/10 bg-[#1B3A5F]/55 p-4 text-sm leading-relaxed text-[#F8F9FA]/85 space-y-2">
-                    <p className="font-bold text-[#F8F9FA]">NASA International Space Apps Challenge</p>
-                    <p>
-                      Built around real NASA datasets (NSSDC Mars Fact Sheet, Curiosity RAD,
-                      Opportunity dust-storm power curves, Perseverance MOXIE &amp; MEDA, SWIM ice
-                      maps, BVAD life-support baselines, and live/archived NASA DONKI space weather).
+                    <p className="font-bold text-[#F8F9FA]">
+                      NASA International Space Apps Challenge 2026
                     </p>
                     <p>
-                      <strong className="text-[#F8F9FA]">Audio &amp; Voice Policy:</strong> Character
-                      dialogues use subtitles accompanied by procedural Web Audio synthesized chimes
-                      and beeps by default (one voice at a time, with a Voice / Rover Beeps On/Off
-                      toggle). Zero AI-generated voice or TTS is used in the runtime game.
+                      Powered by real NASA science constants &amp; datasets: NSSDC Mars Fact Sheet
+                      (3.73 m/s² gravity, 6.36 mb CO₂ air), Perseverance MEDA, MOXIE &amp; SuperCam
+                      acoustics, Opportunity dust-storm curves, Curiosity RAD, SWIM subsurface ice,
+                      and live/archived DONKI solar weather.
+                    </p>
+                    <p>
+                      <strong className="text-[#F8F9FA]">Audio &amp; Visual Disclosure:</strong>{' '}
+                      All dialogue uses kid-friendly subtitles with procedural Web Audio chimes and
+                      Mars wind acoustics (zero TTS / AI voice). The 3D base and terrain are built
+                      procedurally in Three.js &amp; Rapier physics, while the{' '}
+                      <strong className="text-[#FFB703]">
+                        SOL COMMANDER logo and emblem icon are AI-generated branding art
+                      </strong>{' '}
+                      stored locally in the game.
                     </p>
                     <p className="text-xs text-[#FFB703]">
-                      Every number in-game is transparently tagged REAL, DERIVED, or SIMULATION
-                      VALUE. This is an independent educational project; NASA does not endorse it.
+                      Independent educational project; NASA does not endorse this project.
                     </p>
                   </div>
 

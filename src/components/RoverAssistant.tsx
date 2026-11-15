@@ -10,7 +10,6 @@ import {
   Wrench,
   ChevronDown,
   ChevronUp,
-  Mic,
   Volume1,
 } from 'lucide-react';
 import { RoverMood } from '../sim/roverData';
@@ -159,15 +158,6 @@ export function RoverAssistant({
     };
   }, [activeHint, lastLine, hushed, showHintButtons]);
 
-  const handleSpeakAgain = () => {
-    const textToSpeak = activeHint ?? lastLine;
-    if (textToSpeak) {
-      soundEngine.playClick();
-      setIsSpeaking(true);
-      soundEngine.speakRover(textToSpeak, () => setIsSpeaking(false));
-    }
-  };
-
   const moodConfig =
     mood === 'critical'
       ? {
@@ -234,17 +224,8 @@ export function RoverAssistant({
           </div>
         </div>
 
-        {/* Action Controls (Voice read-aloud, Hush, Expand/Collapse) */}
+        {/* Action Controls (Voice/Quiet toggle, Expand/Collapse) */}
         <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={handleSpeakAgain}
-            title="Read message aloud (Voice)"
-            className="inline-flex h-8 w-8 items-center justify-center rounded-xl border border-white/15 bg-[#0E2038] text-[#38BDF8] hover:border-[#38BDF8] hover:bg-[#38BDF8]/20 transition-colors cursor-pointer"
-          >
-            <Mic className="h-3.5 w-3.5" aria-hidden="true" />
-          </button>
-
           <button
             type="button"
             onClick={() => {

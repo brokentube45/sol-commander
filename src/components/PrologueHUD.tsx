@@ -1,12 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { FastForward, Rocket } from 'lucide-react';
+import { FastForward } from 'lucide-react';
 import { BIBLE_S02_CAPTIONS, formatWithRoverName } from '../sim/storyBeats';
 import { soundEngine } from '../utils/soundEngine';
 
 export const PROLOGUE_DURATION_SEC = 28;
-
-export const INTRO_VIDEO_SRC = '/assets/aistudio/sol-commandor-intro_721a1330.mp4';
 
 interface PrologueHUDProps {
   paused: boolean;
@@ -26,39 +24,18 @@ export function PrologueHUD({
   paused,
   replayToken,
   onComplete,
-  soundEnabled,
   reducedMotion,
   roverName = 'Rusty',
   onElapsedTick,
 }: PrologueHUDProps) {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [videoError, setVideoError] = useState(false);
-  const [fallbackElapsedSec, setFallbackElapsedSec] = useState(0);
+  const [elapsedSec, setElapsedSec] = useState(0);
   const [closingCard, setClosingCard] = useState(false);
   const hasCompletedRef = useRef(false);
   const onElapsedTickRef = useRef(onElapsedTick);
   onElapsedTickRef.current = onElapsedTick;
-  const soundEnabledRef = useRef(soundEnabled);
-  soundEnabledRef.current = soundEnabled;
-
-  const tryPlayVideo = useCallback((vid: HTMLVideoElement) => {
-    vid.muted = !soundEnabledRef.current;
-    const playPromise = vid.play();
-    if (playPromise !== undefined) {
-      playPromise.catch(() => {
-        // Fallback to muted playback if browser blocks unmuted autoplay
-        vid.muted = true;
-        vid.play().catch(() => {});
-      });
-    }
-  }, []);
 
   const triggerMissionBeginsBanner = useCallback(() => {
     if (closingCard || hasCompletedRef.current) return;
-    const vid = videoRef.current;
-    if (vid) {
-      vid.pause();
-    }
     soundEngine.playMissionStart();
     setClosingCard(true);
   }, [closingCard]);
@@ -81,43 +58,19 @@ export function PrologueHUD({
     return () => window.clearTimeout(tid);
   }, [closingCard, finishPrologue, reducedMotion]);
 
-  // Reset and play on mount or replayToken change
+  // Reset and start on mount or replayToken change
   useEffect(() => {
     hasCompletedRef.current = false;
-    setVideoError(false);
-    setFallbackElapsedSec(0);
+    setElapsedSec(0);
     setClosingCard(false);
-    const vid = videoRef.current;
-    if (vid) {
-      vid.currentTime = 0;
-      tryPlayVideo(vid);
-    }
     onElapsedTickRef.current?.(0);
-  }, [replayToken, tryPlayVideo]);
+  }, [replayToken]);
 
-  // Sync mute state dynamically if soundEnabled changes
+  // Real-time 28 s in-engine Three.js cinematic timer
   useEffect(() => {
-    const vid = videoRef.current;
-    if (!vid) return;
-    vid.muted = !soundEnabled;
-  }, [soundEnabled]);
-
-  // Pause / resume sync
-  useEffect(() => {
-    const vid = videoRef.current;
-    if (!vid || closingCard || videoError) return;
-    if (paused) {
-      vid.pause();
-    } else {
-      tryPlayVideo(vid);
-    }
-  }, [paused, closingCard, videoError, tryPlayVideo]);
-
-  // Fallback 28 s in-engine cinematic timer if the MP4 fails to load
-  useEffect(() => {
-    if (!videoError || closingCard || paused) return;
+    if (closingCard || paused) return;
     const interval = window.setInterval(() => {
-      setFallbackElapsedSec((prev) => {
+      setElapsedSec((prev) => {
         const next = Math.min(PROLOGUE_DURATION_SEC, prev + 0.1);
         onElapsedTickRef.current?.(next);
         if (next >= PROLOGUE_DURATION_SEC) {
@@ -128,7 +81,7 @@ export function PrologueHUD({
       });
     }, 100);
     return () => window.clearInterval(interval);
-  }, [videoError, closingCard, paused, triggerMissionBeginsBanner]);
+  }, [closingCard, paused, triggerMissionBeginsBanner]);
 
   // Keyboard: Escape or Enter triggers the closing mission banner (or finishes immediately if already in banner)
   useEffect(() => {
@@ -146,67 +99,22 @@ export function PrologueHUD({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [closingCard, finishPrologue, triggerMissionBeginsBanner]);
 
-  const handleVideoEnded = () => {
-    triggerMissionBeginsBanner();
-  };
-
-  const handleTimeUpdate = () => {
-    const vid = videoRef.current;
-    if (!vid) return;
-    onElapsedTickRef.current?.(vid.currentTime);
-  };
-
-  const handleLoadedMetadata = () => {
-    const vid = videoRef.current;
-    if (!vid) return;
-    if (!paused && !closingCard) {
-      tryPlayVideo(vid);
-    }
-  };
-
-  const handleError = () => {
-    // Fall back to the in-engine 28 s Three.js camera sweep with Bible S0.2 captions
-    setVideoError(true);
-    setFallbackElapsedSec(0);
-    onElapsedTickRef.current?.(0);
-  };
-
-  const currentFallbackShot =
+  const currentShot =
     BIBLE_S02_CAPTIONS.find(
-      (shot) => fallbackElapsedSec >= shot.startSec && fallbackElapsedSec < shot.endSec,
+      (shot) => elapsedSec >= shot.startSec && elapsedSec < shot.endSec,
     ) ?? BIBLE_S02_CAPTIONS[BIBLE_S02_CAPTIONS.length - 1];
 
   return (
-    <div
-      className={`fixed inset-0 z-30 h-screen w-screen overflow-hidden font-[family-name:var(--font-game)] select-none ${
-        videoError ? 'pointer-events-none bg-transparent' : 'bg-black'
-      }`}
-    >
-      {!videoError && (
-        <video
-          ref={videoRef}
-          src={INTRO_VIDEO_SRC}
-          className="absolute inset-0 h-full w-full object-cover"
-          autoPlay
-          playsInline
-          preload="auto"
-          muted={!soundEnabled}
-          onEnded={handleVideoEnded}
-          onTimeUpdate={handleTimeUpdate}
-          onLoadedMetadata={handleLoadedMetadata}
-          onError={handleError}
-        />
-      )}
-
-      {/* In-engine 28 s Cinematic Fallback Captions (Bible S0.2) if video fails to load */}
-      {videoError && !closingCard && currentFallbackShot && (
+    <div className="pointer-events-none fixed inset-0 z-30 h-screen w-screen overflow-hidden bg-transparent font-[family-name:var(--font-game)] select-none">
+      {/* In-engine 28 s Three.js Cinematic Captions (Bible S0.2) */}
+      {!closingCard && currentShot && (
         <div className="pointer-events-none fixed inset-x-0 bottom-8 z-40 flex flex-col items-center px-6">
           <div className="rounded-2xl border border-[#FFB703]/45 bg-[#040A15]/82 px-6 py-3 text-center shadow-2xl backdrop-blur-md">
             <p className="font-[family-name:var(--font-indicator)] text-[10px] font-extrabold uppercase tracking-[0.26em] text-[#FFB703]">
-              SHOT {currentFallbackShot.shot} OF 7 · {Math.floor(fallbackElapsedSec)}s / 28s
+              SHOT {currentShot.shot} OF 7 · {Math.floor(elapsedSec)}s / 28s
             </p>
             <p className="mt-1 font-[family-name:var(--font-display)] text-lg font-extrabold tracking-wide text-[#F8F9FA] sm:text-2xl">
-              {formatWithRoverName(currentFallbackShot.caption, roverName)}
+              {formatWithRoverName(currentShot.caption, roverName)}
             </p>
           </div>
         </div>
@@ -270,9 +178,11 @@ export function PrologueHUD({
               }}
               className="relative z-10 flex flex-col items-center px-6 text-center"
             >
-              <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl border border-[#FFB703]/50 bg-gradient-to-br from-[#FFB703]/20 to-[#E85D04]/20 text-[#FFB703] shadow-[0_0_30px_rgba(255,183,3,0.3)]">
-                <Rocket className="h-6 w-6" aria-hidden="true" />
-              </div>
+              <img
+                src="/assets/sol-commander-icon.png"
+                alt="Sol Commander icon"
+                className="mb-3 h-14 w-14 rounded-full object-cover ring-2 ring-[#FFB703]/70 shadow-[0_0_30px_rgba(255,183,3,0.35)]"
+              />
 
               <p className="font-[family-name:var(--font-indicator)] text-xs font-extrabold uppercase tracking-[0.32em] text-[#FFB703] sm:text-sm">
                 YOUR MISSION BEGINS NOW
