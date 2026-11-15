@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { motion } from 'motion/react';
 import { X, Zap, Home, Sprout, Compass, CheckCircle2, Minus, Plus } from 'lucide-react';
 import { PowerAllocation, TOTAL_POWER_UNITS } from '../data/missionData';
+import { soundEngine } from '../utils/soundEngine';
 
 interface PowerConsoleModalProps {
   initialAllocation: PowerAllocation;
@@ -28,6 +29,7 @@ export function PowerConsoleModal({
       if (nextVal < 1 || nextVal > 6) return prev;
       const nextUsed = usedUnits - current + nextVal;
       if (nextUsed > TOTAL_POWER_UNITS) return prev;
+      soundEngine.playClickSoft();
       return { ...prev, [key]: nextVal };
     });
   };
@@ -36,6 +38,7 @@ export function PowerConsoleModal({
     key: keyof PowerAllocation;
     label: string;
     subtitle: string;
+    emoji: string;
     icon: typeof Home;
     accent: string;
   }[] = [
@@ -43,6 +46,7 @@ export function PowerConsoleModal({
       key: 'habitat',
       label: 'Mars Habitat Life Support',
       subtitle: 'Keeps crew air pressure & heaters steady',
+      emoji: '🏠',
       icon: Home,
       accent: 'from-[#FFB703] to-[#E85D04]',
     },
@@ -50,6 +54,7 @@ export function PowerConsoleModal({
       key: 'greenhouse',
       label: 'Bio-Dome Greenhouse',
       subtitle: 'Powers grow lights for food & oxygen crops',
+      emoji: '🌱',
       icon: Sprout,
       accent: 'from-[#22C55E] to-[#16A34A]',
     },
@@ -57,6 +62,7 @@ export function PowerConsoleModal({
       key: 'rover',
       label: 'ROVER-7 & Communications',
       subtitle: 'Charges rover batteries & Earth telemetry',
+      emoji: '🚜',
       icon: Compass,
       accent: 'from-[#38BDF8] to-[#0284C7]',
     },
@@ -134,11 +140,11 @@ export function PowerConsoleModal({
                 >
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#0B1D36] text-[#FFB703]">
-                        <Icon className="h-5 w-5" aria-hidden="true" />
+                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-[#0B1D36] text-xl shadow-inner border border-white/10">
+                        {sys.emoji}
                       </span>
                       <div>
-                        <h3 className="font-[family-name:var(--font-display)] text-sm font-bold text-[#F8F9FA]">
+                        <h3 className="font-[family-name:var(--font-display)] text-sm font-black text-[#F8F9FA]">
                           {sys.label}
                         </h3>
                         <p className="text-xs text-[#F8F9FA]/75">{sys.subtitle}</p>
@@ -197,15 +203,21 @@ export function PowerConsoleModal({
           <div className="mt-5 flex justify-end gap-3">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => {
+                soundEngine.playClickBack();
+                onClose();
+              }}
               className="min-h-[48px] rounded-xl border border-white/20 px-4 py-2 text-sm font-bold text-[#F8F9FA] hover:bg-[#1B3A5F] cursor-pointer"
             >
               Cancel
             </button>
             <button
               type="button"
-              onClick={() => onApply(alloc)}
-              className="inline-flex min-h-[48px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-extrabold text-[#0B1D36] shadow-lg transition-transform hover:scale-[1.02] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer"
+              onClick={() => {
+                soundEngine.playClickConfirm();
+                onApply(alloc);
+              }}
+              className="inline-flex min-h-[48px] items-center gap-2 rounded-xl bg-gradient-to-r from-[#FFB703] to-[#E85D04] px-6 py-2.5 font-[family-name:var(--font-display)] text-sm font-extrabold text-[#0B1D36] shadow-lg transition-transform hover:scale-[1.02] focus-visible:outline-2 focus-visible:outline-[#FFB703] whitespace-nowrap cursor-pointer active:scale-95"
             >
               <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
               <span>Apply Power Allocation</span>

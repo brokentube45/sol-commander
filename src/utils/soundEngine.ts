@@ -54,6 +54,12 @@ class SoundEngine {
   private outsideEvaActive = false;
   private currentZone: OutpostAudioZone = 'outdoors';
 
+  private roverVoiceEnabled = true;
+  private roverHushed = false;
+  private speechSpeaking = false;
+  private cachedVoice: SpeechSynthesisVoice | null = null;
+  private speechListenersBound = false;
+
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
     const AudioCtx =
@@ -1105,6 +1111,157 @@ class SoundEngine {
     this.playTone(783.99, 0.09, 'triangle', 0.075, 0);
     this.playTone(1046.5, 0.11, 'sine', 0.075, 0.11);
     this.playTone(783.99, 0.09, 'triangle', 0.065, 0.24);
+  }
+
+  /** Play decision verdict feedback sound */
+  public playDecisionMade(verdict: 'safe' | 'risky' | 'ineffective' = 'safe'): void {
+    if (!this.enabled) return;
+    if (verdict === 'safe') {
+      // Cheerful rising major triad (G4 -> B4 -> D5)
+      this.playTone(392.0, 0.12, 'sine', 0.08, 0);
+      this.playTone(493.88, 0.14, 'sine', 0.085, 0.09);
+      this.playTone(587.33, 0.28, 'triangle', 0.09, 0.18);
+    } else if (verdict === 'risky') {
+      // Cautionary two-tone pulse (A4 -> F#4)
+      this.playTone(440.0, 0.14, 'triangle', 0.08, 0);
+      this.playTone(369.99, 0.24, 'sine', 0.085, 0.12);
+    } else {
+      // Low blunt thud
+      this.playTone(130.81, 0.22, 'sine', 0.09, 0);
+    }
+  }
+
+  /** Soft click for regular buttons and cards */
+  public playClickSoft(): void {
+    this.playClick();
+  }
+
+  /** Bright two-tone confirmation click for mission actions and primary buttons */
+  public playClickConfirm(): void {
+    if (!this.enabled) return;
+    this.playTone(523.25, 0.08, 'sine', 0.07, 0);
+    this.playTone(783.99, 0.14, 'sine', 0.075, 0.07);
+  }
+
+  /** Descending tone for cancel / close / back actions */
+  public playClickBack(): void {
+    if (!this.enabled) return;
+    this.playTone(493.88, 0.07, 'sine', 0.06, 0);
+    this.playTone(392.0, 0.11, 'sine', 0.055, 0.06);
+  }
+
+  /** Subtle hover tick when mouse enters an interactive button or card */
+  public playHoverSound(): void {
+    if (!this.enabled) return;
+    this.playTone(880, 0.025, 'sine', 0.02, 0);
+  }
+
+  // --- Web Speech API TTS for Rover Voice ---
+
+  public isRoverVoiceEnabled(): boolean {
+    return this.roverVoiceEnabled;
+  }
+
+  public setRoverVoiceEnabled(enabled: boolean): void {
+    this.roverVoiceEnabled = enabled;
+    if (!enabled && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      this.speechSpeaking = false;
+    }
+  }
+
+  public isRoverSpeaking(): boolean {
+    return this.speechSpeaking;
+  }
+
+  public setRoverHushed(hushed: boolean): void {
+    this.roverHushed = hushed;
+    if (hushed && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      this.speechSpeaking = false;
+    }
+  }
+
+  public isRoverHushed(): boolean {
+    return this.roverHushed;
+  }
+
+  public speakRover(text: string, onEnd?: () => void): void {
+    if (!this.roverVoiceEnabled || this.roverHushed || typeof window === 'undefined') return;
+    if (!('speechSynthesis' in window)) return;
+
+    try {
+      window.speechSynthesis.cancel();
+
+      // Strip markdown and clean text
+      const cleaned = text
+        .replace(/[*_#`[\]()]/g, '')
+        .replace(/["“”«»]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (!cleaned) return;
+
+      // Limit to 2 sentences for kids
+      const sentences = cleaned.match(/[^.!?]+[.!?]+/g) ?? [cleaned];
+      const speechText = sentences.slice(0, 2).join(' ').trim();
+
+      const utterance = new SpeechSynthesisUtterance(speechText);
+      utterance.rate = 0.95;   // Clear, friendly pace for kids
+      utterance.pitch = 1.15;  // Friendly, slightly bright robotic companion pitch
+      utterance.volume = Math.max(0.15, this.mixer.master * this.mixer.effects);
+
+      const selectVoice = () => {
+        if (this.cachedVoice) return this.cachedVoice;
+        const voices = window.speechSynthesis.getVoices();
+        if (!voices || voices.length === 0) return null;
+        const preferred = voices.find(
+          (v) =>
+            v.lang.startsWith('en') &&
+            (v.name.includes('Natural') ||
+              v.name.includes('Zira') ||
+              v.name.includes('Samantha') ||
+              v.name.includes('Google UK English Female') ||
+              v.name.includes('Female')),
+        );
+        this.cachedVoice = preferred ?? voices.find((v) => v.lang.startsWith('en')) ?? voices[0];
+        return this.cachedVoice;
+      };
+
+      const voice = selectVoice();
+      if (voice) utterance.voice = voice;
+
+      if (!this.speechListenersBound && window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = () => {
+          this.cachedVoice = null;
+          selectVoice();
+        };
+        this.speechListenersBound = true;
+      }
+
+      this.speechSpeaking = true;
+      utterance.onstart = () => {
+        this.speechSpeaking = true;
+      };
+      utterance.onend = () => {
+        this.speechSpeaking = false;
+        onEnd?.();
+      };
+      utterance.onerror = () => {
+        this.speechSpeaking = false;
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      this.speechSpeaking = false;
+    }
+  }
+
+  public stopSpeaking(): void {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      this.speechSpeaking = false;
+    }
   }
 }
 

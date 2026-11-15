@@ -63,7 +63,7 @@ import {
 import { GameplayInputState } from './MarsOutpost3D';
 import { RoverAssistant } from './RoverAssistant';
 import { GameplayPoseTelemetry } from './WristMapModal';
-import { OutpostAudioZone } from '../utils/soundEngine';
+import { OutpostAudioZone, soundEngine } from '../utils/soundEngine';
 import { getAudioZoneMeta } from './QuickActionMenuModal';
 import { HudToastItem } from './hudPopupQueue';
 
@@ -399,52 +399,66 @@ export function GameplayHUD({
     moveInputRef.current[key] = val;
   };
 
-  // Minecraft-style color-coded resource bars: O2 = Cyan, Water = Blue, Food = Green, Power = Yellow/Gold
+  // Kid-friendly color-coded resource bars with fun emojis and high-contrast pills
   const resourceBars = [
     {
-      label: 'O₂',
+      label: 'Air',
+      shortLabel: 'O₂',
+      emoji: '💨',
       daysText: `${days.o2Days}d`,
       amountText: `${simState.oxygenKg} kg`,
-      pct: Math.max(4, Math.min(100, (simState.oxygenKg / 75) * 100)),
+      pct: Math.max(6, Math.min(100, (simState.oxygenKg / 75) * 100)),
       barHex: '#06B6D4',
+      gradient: 'from-[#22D3EE] to-[#0284C7]',
       trackBg: 'bg-[#06B6D4]/15',
       Icon: Wind,
       status: getResourceStatus('oxygen', simState.oxygenKg),
     },
     {
       label: 'Water',
+      shortLabel: 'H₂O',
+      emoji: '💧',
       daysText: `${days.waterDays}d`,
       amountText: `${simState.waterKg} kg`,
-      pct: Math.max(4, Math.min(100, (simState.waterKg / 240) * 100)),
+      pct: Math.max(6, Math.min(100, (simState.waterKg / 240) * 100)),
       barHex: '#3B82F6',
+      gradient: 'from-[#60A5FA] to-[#2563EB]',
       trackBg: 'bg-[#3B82F6]/15',
       Icon: Droplets,
       status: getResourceStatus('water', simState.waterKg),
     },
     {
       label: 'Food',
+      shortLabel: 'Food',
+      emoji: '🌱',
       daysText: `${days.foodDays}d`,
       amountText: `${simState.foodKg} kg`,
-      pct: Math.max(4, Math.min(100, (simState.foodKg / 100) * 100)),
+      pct: Math.max(6, Math.min(100, (simState.foodKg / 100) * 100)),
       barHex: '#22C55E',
+      gradient: 'from-[#4ADE80] to-[#16A34A]',
       trackBg: 'bg-[#22C55E]/15',
       Icon: Sprout,
       status: getResourceStatus('food', simState.foodKg),
     },
     {
       label: 'Power',
+      shortLabel: 'Power',
+      emoji: '⚡',
       daysText: `${days.batteryHours}h`,
       amountText: `${simState.batteryKwh} kWh`,
       pct: Math.max(
-        4,
+        6,
         Math.min(100, (simState.batteryKwh / SIM_CONSTANTS.BATTERY_CAPACITY_KWH) * 100),
       ),
       barHex: '#FACC15',
+      gradient: 'from-[#FDE047] to-[#EAB308]',
       trackBg: 'bg-[#FACC15]/15',
       Icon: Zap,
       status: getResourceStatus('battery', simState.batteryKwh),
     },
   ];
+
+  const hasCriticalResource = resourceBars.some((r) => r.status === 'CRITICAL');
 
   const zoneTitleMap: Record<MissionZoneId, string> = {
     tank2: 'O₂ Tank 2',
@@ -498,74 +512,84 @@ export function GameplayHUD({
         </div>
       )}
 
-      {/* ZONE 1 (TOP-LEFT): Compact Resource Bars + Slim Utility Strip + Optional Science Lens */}
-      <div className="pointer-events-auto flex w-full max-w-[324px] flex-col gap-1.5 md:col-start-1 md:row-start-1 md:self-start">
-          <div className="rounded-xl border border-[#E85D04]/50 bg-[#071324]/88 p-2.5 shadow-[0_0_24px_rgba(232,93,4,0.22)]">
-            {/* Compact Header Telemetry Strip (Unboxed clean metadata) */}
-            <div className="flex items-center justify-between gap-2 text-[11px] font-bold tabular-nums">
+      {/* ZONE 1 (TOP-LEFT): Chunky Kid-Friendly Resource Bars + Mission Telemetry */}
+      <div className="pointer-events-auto flex w-full max-w-[336px] flex-col gap-1.5 md:col-start-1 md:row-start-1 md:self-start">
+          <div
+            className={`rounded-2xl border-2 p-3 transition-all duration-300 backdrop-blur-md ${
+              hasCriticalResource
+                ? 'border-[#EF4444] bg-[#160B12]/92 shadow-[0_0_32px_rgba(239,68,68,0.45)] animate-pulse'
+                : 'border-[#FFB703]/35 bg-[#071324]/92 shadow-[0_8px_32px_rgba(232,93,4,0.25)]'
+            }`}
+          >
+            {/* Header Telemetry Strip */}
+            <div className="flex items-center justify-between gap-2 text-xs font-black tabular-nums">
               <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-[#FFB703] shrink-0">Sol {simState.sol}</span>
-                <span className="text-white/25" aria-hidden="true">·</span>
-                <span className="text-[#F8F9FA]/85 truncate">{simState.callsign}</span>
+                <span className="rounded-full bg-[#FFB703]/20 px-2 py-0.5 text-[#FFB703] shrink-0 font-[family-name:var(--font-display)]">
+                  Sol {simState.sol}
+                </span>
+                <span className="text-[#F8F9FA]/90 truncate font-extrabold">{simState.callsign}</span>
               </div>
               <span
                 title={`NASA DONKI Space Weather (${simState.donki.dateLabel})`}
-                className={`text-[10px] font-extrabold shrink-0 ${
-                  simState.donki.status === 'LIVE' ? 'text-[#22C55E]' : 'text-[#FFB703]'
+                className={`text-[10px] font-black shrink-0 px-2 py-0.5 rounded-full ${
+                  simState.donki.status === 'LIVE'
+                    ? 'bg-[#22C55E]/20 text-[#22C55E]'
+                    : 'bg-[#FFB703]/20 text-[#FFB703]'
                 }`}
               >
-                {simState.donki.status === 'LIVE'
-                  ? 'Space Weather: LIVE'
-                  : 'Space Weather: ARCHIVED'}
+                {simState.donki.status === 'LIVE' ? '📡 LIVE' : '📡 ARCHIVED'}
               </span>
             </div>
 
-            {/* 4 Minecraft-Style Horizontal Resource Bars */}
-            <div className="mt-2 space-y-1.5">
+            {/* 4 Chunky Kid-Friendly Horizontal Resource Bars */}
+            <div className="mt-2.5 space-y-2">
               {resourceBars.map((res) => {
-                const IconComp = res.Icon;
-                const fillColor = res.status === 'CRITICAL' ? '#EF4444' : res.barHex;
+                const isCrit = res.status === 'CRITICAL';
                 return (
                   <div
                     key={res.label}
-                    title={`${res.label}: ${res.amountText} (${res.daysText} left)`}
+                    title={`${res.label}: ${res.amountText} (${res.daysText} remaining)`}
                     className="flex items-center gap-2"
                   >
-                    <div className="flex w-[64px] shrink-0 items-center gap-1.5">
-                      <IconComp
-                        className="h-3.5 w-3.5 shrink-0"
-                        style={{ color: res.barHex }}
-                        aria-hidden="true"
-                      />
-                      <span className="text-[11px] font-bold text-[#F8F9FA]/95">{res.label}</span>
+                    {/* Emoji + Label */}
+                    <div className="flex w-[70px] shrink-0 items-center gap-1.5">
+                      <span className="text-sm select-none" aria-hidden="true">
+                        {res.emoji}
+                      </span>
+                      <span className="text-xs font-black text-[#F8F9FA]">
+                        {res.label}
+                      </span>
                     </div>
 
-                    {/* Horizontal Segmented/Smooth Game Fill Bar */}
+                    {/* Big Rounded-Full Pill Bar */}
                     <div
-                      className={`relative h-2.5 flex-1 overflow-hidden rounded-sm border border-white/10 ${res.trackBg}`}
+                      className={`relative h-4 flex-1 overflow-hidden rounded-full border border-white/20 bg-black/40 shadow-inner`}
                     >
                       <div
-                        className="h-full transition-all duration-300"
+                        className={`h-full rounded-full transition-all duration-300 bg-gradient-to-r ${
+                          isCrit ? 'from-[#EF4444] to-[#DC2626]' : res.gradient
+                        }`}
                         style={{
                           width: `${res.pct}%`,
-                          backgroundColor: fillColor,
-                          boxShadow: `0 0 8px ${fillColor}80`,
+                          boxShadow: `0 0 10px ${isCrit ? '#EF4444' : res.barHex}90`,
                         }}
                       />
-                      {/* Subtle Minecraft-style 4-segment tick marks */}
+                      {/* Subtle glossy sheen line across top of pill */}
                       <div
                         aria-hidden="true"
-                        className="pointer-events-none absolute inset-0 grid grid-cols-4"
-                      >
-                        <span className="border-r border-[#071324]/45" />
-                        <span className="border-r border-[#071324]/45" />
-                        <span className="border-r border-[#071324]/45" />
-                        <span />
-                      </div>
+                        className="pointer-events-none absolute inset-x-0 top-0 h-[30%] bg-white/25 rounded-t-full"
+                      />
                     </div>
 
-                    <div className="flex w-[60px] shrink-0 items-center justify-end gap-1 tabular-nums">
-                      <span className="text-xs font-extrabold text-[#F8F9FA]">{res.daysText}</span>
+                    {/* Numeric Value + Alert */}
+                    <div className="flex w-[52px] shrink-0 items-center justify-end gap-1 tabular-nums">
+                      <span
+                        className={`text-xs font-black ${
+                          isCrit ? 'text-[#EF4444] animate-bounce' : 'text-[#F8F9FA]'
+                        }`}
+                      >
+                        {res.daysText}
+                      </span>
                       <ResourceAlertIcon status={res.status} />
                     </div>
                   </div>
@@ -925,47 +949,65 @@ export function GameplayHUD({
                 key={simState.activeWeatherEvent.id}
                 role="status"
                 aria-live="assertive"
-                initial={reducedMotion ? false : { opacity: 0, y: -8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -8 }}
-                transition={{ duration: 0.18 }}
-                className="pointer-events-auto flex w-full max-w-[440px] flex-wrap items-center justify-between gap-2.5 rounded-xl border border-[#E85D04] bg-[#240F13]/92 px-3.5 py-2 shadow-[0_0_28px_rgba(232,93,4,0.45)]"
+                initial={reducedMotion ? false : { opacity: 0, y: -16, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -16, scale: 0.95 }}
+                transition={{ duration: 0.22 }}
+                className="pointer-events-auto flex w-full max-w-[480px] flex-col gap-2 rounded-2xl border-2 border-[#E85D04] bg-gradient-to-br from-[#380E14]/95 via-[#1D060B]/95 to-[#380E14]/95 p-3.5 text-[#F8F9FA] shadow-[0_0_36px_rgba(232,93,4,0.65)] backdrop-blur-md"
               >
-                <div className="flex items-center gap-2.5">
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#E85D04] text-[#F8F9FA]">
-                    <Wind className="h-4 w-4" aria-hidden="true" />
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-[#E85D04] to-[#DC2626] text-white shadow-lg animate-pulse">
+                      <Wind className="h-6 w-6" aria-hidden="true" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-black uppercase tracking-wider text-[#FFB703]">
+                          ⚠️ MARTIAN STORM ALERT
+                        </span>
+                        <span className="text-white/30">·</span>
+                        <span className="text-[11px] font-bold text-[#F8F9FA]/80">
+                          {simState.activeWeatherEvent.lastGustWindMs} m/s Wind
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-black text-white font-[family-name:var(--font-display)] tracking-wide">
+                        SEEK HABITAT SHELTER!
+                      </h3>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-[11px] font-bold text-[#FFB703] tabular-nums">
-                      {simState.activeWeatherEvent.title} · {simState.activeWeatherEvent.lastGustWindMs} m/s
-                    </p>
-                    <p className="text-xs font-bold text-[#F8F9FA]">
-                      Seek Habitat Airlock (
-                      <span className="text-[#22C55E] tabular-nums">{habitatDistMeters} m</span>)
-                    </p>
+
+                  {/* Countdown Badge */}
+                  <div className="flex items-center gap-2 shrink-0">
+                    <div
+                      className={`flex h-11 min-w-[52px] items-center justify-center rounded-2xl px-2.5 text-base font-black tabular-nums shadow-lg ${
+                        weatherSecondsLeft <= 6
+                          ? 'bg-[#DC2626] text-white animate-bounce'
+                          : 'bg-[#FFB703] text-[#071324]'
+                      }`}
+                    >
+                      {weatherSecondsLeft}s
+                    </div>
+                    {!soundEnabled && (
+                      <button
+                        type="button"
+                        onClick={onToggleSound}
+                        className="inline-flex h-9 items-center gap-1 rounded-xl border border-[#FFB703]/60 bg-[#0E2038] px-2 text-xs font-bold text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] cursor-pointer"
+                      >
+                        <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        <span>Sound</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`rounded-lg px-2.5 py-1 text-sm font-extrabold tabular-nums ${
-                      weatherSecondsLeft <= 6
-                        ? 'bg-[#DC2626] text-[#F8F9FA]'
-                        : 'bg-[#FFB703] text-[#071324]'
-                    }`}
-                  >
-                    {weatherSecondsLeft}s
+                {/* Running Distance to Habitat Airlock */}
+                <div className="flex items-center justify-between rounded-xl bg-black/40 px-3 py-1.5 text-xs font-black">
+                  <span className="flex items-center gap-1.5 text-[#FFB703]">
+                    <span>🏃 Run to Habitat Airlock:</span>
                   </span>
-                  {!soundEnabled && (
-                    <button
-                      type="button"
-                      onClick={onToggleSound}
-                      className="inline-flex min-h-[32px] items-center gap-1 rounded-lg border border-[#FFB703]/60 bg-[#0E2038] px-2 text-xs font-bold text-[#FFB703] cursor-pointer"
-                    >
-                      <Volume2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>Audio</span>
-                    </button>
-                  )}
+                  <span className="rounded-md bg-[#22C55E]/20 px-2 py-0.5 text-sm font-black text-[#22C55E] tabular-nums">
+                    {habitatDistMeters} meters away
+                  </span>
                 </div>
               </motion.div>
             )}
@@ -1259,18 +1301,19 @@ export function GameplayHUD({
         </div>
 
         {/* ZONE 6 (BOTTOM-RIGHT): View/Jump/Pad Quick Controls + H-Toggleable Control Hints */}
-        <div className="pointer-events-auto flex flex-col items-end gap-1.5 md:col-start-3 md:row-start-3 md:justify-self-end md:self-end">
+        <div className="pointer-events-auto flex flex-col items-end gap-2 md:col-start-3 md:row-start-3 md:justify-self-end md:self-end">
           <AnimatePresence>
             {touchPadOpen && (
               <motion.div
-                initial={reducedMotion ? false : { opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 8 }}
-                transition={{ duration: 0.15 }}
+                initial={reducedMotion ? false : { opacity: 0, y: 12, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 12, scale: 0.95 }}
+                transition={{ duration: 0.18 }}
                 aria-label="On-screen movement pad"
-                className="flex items-center gap-2 rounded-xl border border-[#E85D04]/50 bg-[#071324]/92 p-2 shadow-[0_0_22px_rgba(232,93,4,0.22)]"
+                className="flex items-center gap-3 rounded-2xl border-2 border-[#FFB703]/40 bg-[#071324]/95 p-3 shadow-[0_8px_32px_rgba(232,93,4,0.3)] backdrop-blur-md"
               >
-                <div className="grid grid-cols-3 gap-1">
+                {/* Cross D-Pad */}
+                <div className="grid grid-cols-3 gap-1.5">
                   <div />
                   <button
                     type="button"
@@ -1278,9 +1321,9 @@ export function GameplayHUD({
                     onPointerDown={() => setMoveFlag('forward', true)}
                     onPointerUp={() => setMoveFlag('forward', false)}
                     onPointerLeave={() => setMoveFlag('forward', false)}
-                    className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0E2038] text-[#F8F9FA] hover:bg-[#FFB703] hover:text-[#071324] cursor-pointer"
+                    className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white hover:bg-[#FFB703] hover:text-[#071324] active:scale-90 transition-all cursor-pointer shadow-md"
                   >
-                    <ArrowUp className="h-4 w-4" aria-hidden="true" />
+                    <ArrowUp className="h-5 w-5" aria-hidden="true" />
                   </button>
                   <div />
                   <button
@@ -1289,9 +1332,9 @@ export function GameplayHUD({
                     onPointerDown={() => setMoveFlag('left', true)}
                     onPointerUp={() => setMoveFlag('left', false)}
                     onPointerLeave={() => setMoveFlag('left', false)}
-                    className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0E2038] text-[#F8F9FA] hover:bg-[#FFB703] hover:text-[#071324] cursor-pointer"
+                    className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white hover:bg-[#FFB703] hover:text-[#071324] active:scale-90 transition-all cursor-pointer shadow-md"
                   >
-                    <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+                    <ArrowLeft className="h-5 w-5" aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -1299,9 +1342,9 @@ export function GameplayHUD({
                     onPointerDown={() => setMoveFlag('back', true)}
                     onPointerUp={() => setMoveFlag('back', false)}
                     onPointerLeave={() => setMoveFlag('back', false)}
-                    className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0E2038] text-[#F8F9FA] hover:bg-[#FFB703] hover:text-[#071324] cursor-pointer"
+                    className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white hover:bg-[#FFB703] hover:text-[#071324] active:scale-90 transition-all cursor-pointer shadow-md"
                   >
-                    <ArrowDown className="h-4 w-4" aria-hidden="true" />
+                    <ArrowDown className="h-5 w-5" aria-hidden="true" />
                   </button>
                   <button
                     type="button"
@@ -1309,14 +1352,15 @@ export function GameplayHUD({
                     onPointerDown={() => setMoveFlag('right', true)}
                     onPointerUp={() => setMoveFlag('right', false)}
                     onPointerLeave={() => setMoveFlag('right', false)}
-                    className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0E2038] text-[#F8F9FA] hover:bg-[#FFB703] hover:text-[#071324] cursor-pointer"
+                    className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-white hover:bg-[#FFB703] hover:text-[#071324] active:scale-90 transition-all cursor-pointer shadow-md"
                   >
-                    <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                    <ArrowRight className="h-5 w-5" aria-hidden="true" />
                   </button>
                 </div>
 
-                <div className="flex flex-col gap-1">
-                  <div className="flex gap-1">
+                {/* Camera & Sprint Actions */}
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex gap-1.5">
                     <button
                       type="button"
                       aria-label="Turn camera left"
@@ -1329,7 +1373,7 @@ export function GameplayHUD({
                       onPointerLeave={() => {
                         moveInputRef.current.lookX = 0;
                       }}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0E2038] text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] cursor-pointer"
+                      className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] active:scale-90 transition-all cursor-pointer shadow-md"
                     >
                       <RotateCcw className="h-4 w-4" aria-hidden="true" />
                     </button>
@@ -1345,7 +1389,7 @@ export function GameplayHUD({
                       onPointerLeave={() => {
                         moveInputRef.current.lookX = 0;
                       }}
-                      className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#0E2038] text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] cursor-pointer"
+                      className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/20 bg-white/10 text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] active:scale-90 transition-all cursor-pointer shadow-md"
                     >
                       <RotateCw className="h-4 w-4" aria-hidden="true" />
                     </button>
@@ -1355,9 +1399,9 @@ export function GameplayHUD({
                     onPointerDown={() => setMoveFlag('sprint', true)}
                     onPointerUp={() => setMoveFlag('sprint', false)}
                     onPointerLeave={() => setMoveFlag('sprint', false)}
-                    className="h-9 rounded-lg border border-[#38BDF8]/40 bg-[#0E2038] px-2 text-[11px] font-bold text-[#38BDF8] hover:bg-[#38BDF8] hover:text-[#071324] cursor-pointer"
+                    className="h-11 rounded-xl border-2 border-[#38BDF8]/60 bg-gradient-to-r from-[#38BDF8]/20 to-[#0284C7]/20 px-3 text-xs font-black text-[#38BDF8] hover:bg-[#38BDF8] hover:text-[#071324] active:scale-95 transition-all cursor-pointer shadow-md flex items-center justify-center gap-1"
                   >
-                    Hold Run
+                    <span>🏃 RUN</span>
                   </button>
                 </div>
               </motion.div>
@@ -1365,40 +1409,47 @@ export function GameplayHUD({
           </AnimatePresence>
 
           {/* View / Jump / Pad Quick Controls */}
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <button
               type="button"
-              onClick={onToggleCameraMode}
-              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[#E85D04]/40 bg-[#071324]/88 px-2.5 text-[11px] font-bold text-[#F8F9FA] hover:border-[#FFB703] cursor-pointer"
+              onClick={() => {
+                soundEngine.playClickSoft();
+                onToggleCameraMode();
+              }}
+              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border-2 border-[#FFB703]/40 bg-[#071324]/92 px-3 text-xs font-extrabold text-[#F8F9FA] hover:border-[#FFB703] hover:bg-[#0E2038] transition-colors cursor-pointer shadow-md"
             >
-              <Compass className="h-3.5 w-3.5 text-[#FFB703]" aria-hidden="true" />
-              <span>{cameraMode === '3p' ? '3rd [V]' : '1st [V]'}</span>
+              <Compass className="h-4 w-4 text-[#FFB703]" aria-hidden="true" />
+              <span>{cameraMode === '3p' ? '3rd View [V]' : '1st View [V]'}</span>
             </button>
 
             <button
               type="button"
               onClick={() => {
+                soundEngine.playClickConfirm();
                 moveInputRef.current.jumpRequested = true;
               }}
               title={`Jump in ${marsPhysics.gravity.gravityMs2} m/s² Mars gravity`}
-              className="inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border border-[#E85D04]/50 bg-[#071324]/88 px-2.5 text-[11px] font-bold text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] cursor-pointer tabular-nums"
+              className="inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border-2 border-[#E85D04]/60 bg-gradient-to-r from-[#FFB703]/20 to-[#E85D04]/20 px-3 text-xs font-black text-[#FFB703] hover:bg-[#FFB703] hover:text-[#071324] active:scale-95 transition-all cursor-pointer tabular-nums shadow-md"
             >
-              <ArrowUpFromLine className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Jump</span>
+              <ArrowUpFromLine className="h-4 w-4" aria-hidden="true" />
+              <span>Jump [Space]</span>
             </button>
 
             <button
               type="button"
-              onClick={() => setTouchPadOpen((v) => !v)}
+              onClick={() => {
+                soundEngine.playClickSoft();
+                setTouchPadOpen((v) => !v);
+              }}
               aria-expanded={touchPadOpen}
-              className={`inline-flex min-h-[34px] items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-bold cursor-pointer ${
+              className={`inline-flex min-h-[38px] items-center gap-1.5 rounded-xl border-2 px-3 text-xs font-black transition-colors cursor-pointer shadow-md ${
                 touchPadOpen
                   ? 'border-[#FFB703] bg-[#FFB703] text-[#071324]'
-                  : 'border-[#E85D04]/40 bg-[#071324]/88 text-[#F8F9FA] hover:border-[#FFB703]'
+                  : 'border-[#FFB703]/40 bg-[#071324]/92 text-[#F8F9FA] hover:border-[#FFB703]'
               }`}
             >
-              <Gamepad2 className="h-3.5 w-3.5" aria-hidden="true" />
-              <span>Pad</span>
+              <Gamepad2 className="h-4 w-4" aria-hidden="true" />
+              <span>D-Pad</span>
             </button>
           </div>
 

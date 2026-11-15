@@ -630,8 +630,12 @@ export function CommandModeModal({
                             key={jOpt.engineOptionId}
                             type="button"
                             disabled={notEnoughSlots}
-                            onClick={() => onSelectOption(jOpt.engineOptionId)}
-                            className="group flex flex-col justify-between rounded-2xl border-2 border-[#FFB703]/45 bg-[#0D213B]/85 p-4 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-[#FFB703] hover:bg-[#132C4E] hover:shadow-[0_0_26px_rgba(255,183,3,0.24)] disabled:opacity-45 cursor-pointer"
+                            onMouseEnter={() => soundEngine.playHoverSound()}
+                            onClick={() => {
+                              soundEngine.playDecisionMade('safe');
+                              onSelectOption(jOpt.engineOptionId);
+                            }}
+                            className="group flex flex-col justify-between rounded-2xl border-2 border-[#FFB703]/45 bg-[#0D213B]/85 p-4 text-left transition-all duration-150 hover:-translate-y-0.5 hover:border-[#FFB703] hover:bg-[#132C4E] hover:shadow-[0_0_26px_rgba(255,183,3,0.24)] disabled:opacity-45 cursor-pointer active:scale-[0.99]"
                           >
                             <div>
                               <div className="flex items-start gap-3.5">
@@ -705,8 +709,12 @@ export function CommandModeModal({
                                 key={opt.id}
                                 type="button"
                                 disabled={notEnoughSlots}
-                                onClick={() => onSelectOption(opt.id)}
-                                className="flex flex-col justify-between rounded-xl border border-white/15 bg-[#0D213B]/65 p-3 text-left hover:border-[#38BDF8] disabled:opacity-45 cursor-pointer"
+                                onMouseEnter={() => soundEngine.playHoverSound()}
+                                onClick={() => {
+                                  soundEngine.playDecisionMade('safe');
+                                  onSelectOption(opt.id);
+                                }}
+                                className="flex flex-col justify-between rounded-xl border border-white/15 bg-[#0D213B]/65 p-3 text-left hover:border-[#38BDF8] hover:bg-[#132C4E] disabled:opacity-45 cursor-pointer transition-colors active:scale-[0.99]"
                               >
                                 <div>
                                   <p className="text-xs font-extrabold text-[#F8F9FA]">
