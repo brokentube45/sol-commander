@@ -1314,9 +1314,11 @@ export function GameplayHUD({
                     ? 'Check Oxygen Tank 2'
                     : simState.tutorialStep === 'inspect-rover'
                       ? `Explore ${zoneTitleMap[nearbyZone]}`
-                      : nearbyZone === activeMission.zoneId
-                        ? `Mission: ${zoneTitleMap[nearbyZone]}`
-                        : `Inspect ${zoneTitleMap[nearbyZone]}`}
+                      : simState.phase === 'free-roam'
+                        ? `Inspect ${zoneTitleMap[nearbyZone]}`
+                        : nearbyZone === activeMission.zoneId
+                          ? `Mission: ${zoneTitleMap[nearbyZone]}`
+                          : `Inspect ${zoneTitleMap[nearbyZone]}`}
                 </span>
               </motion.button>
             ) : (

@@ -980,6 +980,13 @@ export default function App() {
         else if (zoneId === 'greenhouse') setInspectedStation('greenhouse');
         return;
       }
+      if (simStateRef.current.phase === 'free-roam') {
+        soundEngine.playInspect();
+        narrativeVoice.speakLandmark(zoneId);
+        if (zoneId === 'solar') setInspectedStation('solar');
+        else if (zoneId === 'greenhouse') setInspectedStation('greenhouse');
+        return;
+      }
       if (zoneId === activeMission.zoneId) {
         handleOpenCommandMode('look');
         return;
@@ -1647,6 +1654,9 @@ export default function App() {
             }}
             onAdvanceRoutineSols={() => {
               soundEngine.playClick();
+              if (simState.missionIndex >= 4 || simState.campaignFailedReason) {
+                setCommandModeOpen(false);
+              }
               setSimState((prev) => advanceRoutineSols(prev));
             }}
             onProceedNextCriticalSol={() => {
@@ -1697,6 +1707,7 @@ export default function App() {
               onReturnTitle={handleReturnTitle}
               onEnterFreeRoam={() => {
                 soundEngine.playMissionStart();
+                setCommandModeOpen(false);
                 setSimState((prev) => enterFreeRoam(prev));
               }}
               onCompleteDebriefQuiz={() => {

@@ -277,7 +277,7 @@ export function getActiveObjective(
     z: coords.z,
     ownerScene: `${activeMission.id.toUpperCase()}-sol-${state.sol}`,
     colorHex: '#FFB703',
-    showMarkerAndRing: isMissionActive || state.phase === 'free-roam',
+    showMarkerAndRing: isMissionActive,
     isTank2: zId === 'tank2' && isMissionActive,
     zoneId: zId,
   };

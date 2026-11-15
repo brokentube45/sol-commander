@@ -530,6 +530,10 @@ export function CommandModeModal({
     ? juniorMission.resultLines.optionA
     : juniorMission.resultLines.optionB;
 
+  if (!open || state.phase === 'free-roam' || state.phase === 'debrief') {
+    return null;
+  }
+
   return (
     <AnimatePresence>
       <div
