@@ -268,13 +268,6 @@ export default function App() {
     }
   }, [simState.tutorialStep, enqueueToast]);
 
-  // Ensure the initial welcome guidance is spoken cleanly when entering gameplay
-  useEffect(() => {
-    if (gamePhase === 'gameplay' && simState.tutorialStep === 'move') {
-      narrativeVoice.speakTutorialStep('move');
-    }
-  }, [gamePhase, simState.tutorialStep]);
-
   // Global Gameplay Shortcuts: Esc, C (Quick Actions), H (Toggle Controls Strip), Hold X (Skip Training), Tab (Log), Q (Rover Hint)
   useEffect(() => {
     if (gamePhase !== 'gameplay') return;
@@ -467,7 +460,6 @@ export default function App() {
 
   const handleStartExploration = () => {
     startNewCampaignWithSeed(seed);
-    narrativeVoice.speakTutorialStep('move');
   };
 
   const handleReturnTitle = () => {

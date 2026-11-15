@@ -275,11 +275,9 @@ class NarrativeVoiceManager {
       case 'move':
         this.speakAs(
           'rusty',
-          "Welcome to Mars, Commander! Use your W, A, S, D keys or touch D-pad to take your first steps on the red planet!",
+          "Welcome to Mars, Commander! Walk around to take your first steps on the red planet!",
           'tut-move',
-          1000,
-          undefined,
-          true,
+          5000,
         );
         break;
       case 'inspect-rover':

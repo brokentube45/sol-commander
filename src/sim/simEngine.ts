@@ -277,7 +277,7 @@ export function createInitialCampaignState(
 
     roverHushed: false,
     roverLastLine:
-      'Welcome to Mars, Commander! Use your WASD keys or touch D-Pad to take your first steps on the red planet!',
+      'Welcome to Mars, Commander! Walk around to take your first steps on the red planet!',
     roverUsedLines: firstLine.nextUsedIds,
     roverHintLevelUsed: { m1: 0, m2: 0, m3: 0, m4: 0, m5: 0 },
     roverActiveHint: null,
